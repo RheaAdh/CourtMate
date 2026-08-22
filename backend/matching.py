@@ -62,7 +62,7 @@ def _profile_availability_fit(session: Session, player: Player | None) -> float:
     return 1.0 if f"{day_type} {day_part}" in player.availability else 0.25
 
 
-def search_sessions(sessions: list[Session], query: SearchIntent, players: list[Player] | None = None, player: Player | None = None) -> list[SessionRecommendation]:
+def search_sessions(sessions: list[Session], query: SearchIntent, players: list[Player] | None = None, player: Player | None = None, exact: bool = False) -> list[SessionRecommendation]:
     results: list[SessionRecommendation] = []
     for session in sessions:
         if session.sport != query.sport:
@@ -81,6 +81,8 @@ def search_sessions(sessions: list[Session], query: SearchIntent, players: list[
         skill_max = query.skill_max if query.skill_max is not None else session.skill_max
         skill_fit = 1.0 if session.skill_min <= skill_max and session.skill_max >= skill_min else 0.25
         if skill_fit < 1.0:
+            continue
+        if exact and query.style != "any" and session.style != query.style:
             continue
         # An explicit level in the search describes this game; otherwise only a
         # computed or externally verified rating should constrain the player.

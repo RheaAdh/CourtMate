@@ -328,7 +328,7 @@ def search(request: ParseRequest, player: Player = Depends(get_current_player)) 
     _refresh_all_session_statuses()
     intent = _parse_intent(request.query, request.sport, player)
     sessions = repository.list_sessions()
-    recommendations = search_sessions(sessions, intent, repository.list_players(), player)
+    recommendations = search_sessions(sessions, intent, repository.list_players(), player, exact=request.mode == "exact")
     decision = intent_parser.decide(request.query, intent, sessions, recommendations, player)
     proposal = _group_proposal(intent, player.id, decision.proposed_group_name, request.query) if not recommendations else None
     return SearchResponse(intent=intent, recommendations=recommendations, action=decision.action, message=decision.summary, group_proposal=proposal)

@@ -201,6 +201,7 @@ class ParseRequest(BaseModel):
     query: str
     player_id: str | None = None
     sport: Sport | None = None
+    mode: Literal["exact", "profile"] = "exact"
 
 
 class JoinRequestRequest(BaseModel):

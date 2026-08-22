@@ -26,6 +26,14 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(payload["action"], "join_existing")
         self.assertEqual(payload["recommendations"][0]["session"]["id"], "s1")
 
+    def test_exact_search_filters_requested_game_style(self):
+        response = self.client.post(
+            "/v1/sessions/search",
+            json={"query": "Find a social game near Whitefield", "mode": "exact"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual({item["session"]["id"] for item in response.json()["recommendations"]}, {"s2"})
+
     def test_group_view_returns_public_member_profiles(self):
         response = self.client.get("/v1/sessions/s1/group")
         self.assertEqual(response.status_code, 200)
