@@ -45,6 +45,7 @@ class ProfileUpdateRequest(BaseModel):
     area: str | None = None
     dupr_rating: float | None = Field(default=None, ge=1, le=8)
     style: Literal["casual", "social", "competitive"] | None = None
+    availability: list[str] | None = None
 
 
 class Session(BaseModel):

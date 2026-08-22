@@ -29,6 +29,17 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(members[0]["dupr_rating"], 3.2)
         self.assertNotIn("friends", members[0])
 
+    def test_profile_preferences_update_includes_availability(self):
+        response = self.client.post(
+            "/v1/me/profile",
+            json={"area": "Brookefield", "dupr_rating": 3.6, "style": "social", "availability": ["weekend mornings"]},
+            headers={"X-CourtMate-Player-ID": "profile-test-player"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["area"], "Brookefield")
+        self.assertEqual(payload["availability"], ["weekend mornings"])
+
     def test_no_match_proposes_group_and_join_request_is_explicit(self):
         response = self.client.post("/v1/sessions/search", json={"query": "Find an advanced game near Indiranagar this Sunday evening", "player_id": "p1"})
         self.assertEqual(response.json()["action"], "create_group")
