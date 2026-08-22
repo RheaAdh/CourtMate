@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, User } from "firebase/auth";
 
-import { auth, isFirebaseConfigured } from "../lib/firebase";
+import { auth, isFirebaseConfigured } from "../firebase";
 
 type Session = {
   id: string;
@@ -77,10 +77,35 @@ type PlayerProfile = {
 
 type JoinRequest = {
   id: string;
+  session_id: string;
   player_id: string;
   player_display_name?: string;
+  status: "pending" | "approved" | "declined";
+  created_at?: string;
+};
+
+type ActivityGroup = {
+  id: string;
+  group_name: string;
+  area: string;
+  session_date: string;
+  start_time: string;
+  end_time: string;
+  skill_min: number;
+  skill_max: number;
+  style: string;
+  capacity: number;
+  confirmed_player_ids: string[];
+  external_booking_url?: string;
   status: string;
 };
+
+type ActivityRequest = {
+  request: JoinRequest;
+  session: ActivityGroup;
+};
+
+type ActivityTab = "requests" | "groups";
 
 type GroupMember = {
   id: string;
@@ -123,12 +148,16 @@ export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
   const [authReady, setAuthReady] = useState(false);
-  const [createdGroupId, setCreatedGroupId] = useState<string | null>(null);
+  const [managedGroupId, setManagedGroupId] = useState<string | null>(null);
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
   const [requestsLoading, setRequestsLoading] = useState(false);
   const [viewedGroup, setViewedGroup] = useState<GroupView | null>(null);
   const [groupLoading, setGroupLoading] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [activityTab, setActivityTab] = useState<ActivityTab>("requests");
+  const [myRequests, setMyRequests] = useState<ActivityRequest[]>([]);
+  const [myGroups, setMyGroups] = useState<ActivityGroup[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
   const [toast, setToast] = useState("");
 
   useEffect(() => {
@@ -144,7 +173,10 @@ export default function Home() {
     return onAuthStateChanged(auth, (nextUser) => {
       setUser(nextUser);
       setAuthReady(true);
-      if (nextUser) void loadProfile(nextUser);
+      if (nextUser) {
+        void loadProfile(nextUser);
+        void loadActivity("requests", nextUser);
+      }
     });
   }, []);
 
@@ -181,8 +213,10 @@ export default function Home() {
   async function signOutUser() {
     if (auth) await signOut(auth);
     setProfile(null);
-    setCreatedGroupId(null);
+    setManagedGroupId(null);
     setJoinRequests([]);
+    setMyRequests([]);
+    setMyGroups([]);
   }
 
   async function setDUPRRating() {
@@ -260,7 +294,8 @@ export default function Home() {
       };
       setSessions([createdSession]);
       setGroupProposal(null);
-      setCreatedGroupId(createdSession.id);
+      setManagedGroupId(createdSession.id);
+      void loadActivity("groups");
       setToast(payload.message);
     } catch {
       setToast("Could not create the group. Check that the API is running.");
@@ -321,6 +356,7 @@ export default function Home() {
         headers: { "content-type": "application/json" },
       });
       if (!response.ok) throw new Error("Unable to join");
+      void loadActivity("requests");
       setToast(`Join request sent to ${name}`);
     } catch {
       setToast(`Could not request to join ${name}`);
@@ -347,11 +383,11 @@ export default function Home() {
     }
   }
 
-  async function loadJoinRequests() {
-    if (!createdGroupId) return;
+  async function loadJoinRequests(groupId: string | null = managedGroupId) {
+    if (!groupId) return;
     setRequestsLoading(true);
     try {
-      const response = await authorizedFetch(`${apiUrl}/v1/sessions/${createdGroupId}/join-requests`);
+      const response = await authorizedFetch(`${apiUrl}/v1/sessions/${groupId}/join-requests`);
       if (!response.ok) throw new Error("Requests unavailable");
       const payload = await response.json() as { requests: JoinRequest[] };
       setJoinRequests(payload.requests);
@@ -360,6 +396,47 @@ export default function Home() {
       setToast("Only the group organizer can view these requests");
     } finally {
       setRequestsLoading(false);
+      window.setTimeout(() => setToast(""), 2600);
+    }
+  }
+
+  async function loadActivity(tab: ActivityTab, authUser: User | null = user) {
+    if (!authUser) return;
+    setActivityTab(tab);
+    setActivityLoading(true);
+    try {
+      const endpoint = tab === "requests" ? "/v1/me/requests" : "/v1/me/groups";
+      const response = await authorizedFetch(`${apiUrl}${endpoint}`, {}, authUser);
+      if (!response.ok) throw new Error("Activity unavailable");
+      if (tab === "requests") {
+        const payload = await response.json() as { requests: ActivityRequest[] };
+        setMyRequests(payload.requests);
+      } else {
+        const payload = await response.json() as { groups: ActivityGroup[] };
+        setMyGroups(payload.groups);
+      }
+    } catch {
+      setToast("Could not load your CourtMate activity");
+    } finally {
+      setActivityLoading(false);
+    }
+  }
+
+  async function decideJoinRequest(requestId: string, status: "approved" | "declined") {
+    if (!managedGroupId) return;
+    try {
+      const response = await authorizedFetch(`${apiUrl}/v1/sessions/${managedGroupId}/join-requests/${requestId}/decision`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      if (!response.ok) throw new Error("Decision failed");
+      await loadJoinRequests(managedGroupId);
+      await loadActivity("groups");
+      setToast(status === "approved" ? "Player approved for the group" : "Request declined");
+    } catch {
+      setToast("Could not update this join request");
+    } finally {
       window.setTimeout(() => setToast(""), 2600);
     }
   }
@@ -408,7 +485,8 @@ export default function Home() {
         <aside className="side-column">
           <div className="side-card rescue-card"><div className="side-card-header"><span className="icon-box orange">↗</span><span className="kicker">ORGANIZER VIEW</span></div><h3>Keep the game alive.</h3><p>Someone dropped from <strong>Sunday Rally Crew</strong>. CourtMate found {replacements.length} players who fit the session.</p><button className="dark-button" onClick={() => showReplacement ? setShowReplacement(false) : void loadReplacements()}>{showReplacement ? "Hide suggestions" : replacementLoading ? "Finding players" : "See replacements"}<span>→</span></button>{showReplacement && <div className="replacement-list">{replacements.map((candidate) => <div className="replacement" key={candidate.id}><div className="candidate-avatar">{candidate.display_name[0]}</div><div><strong>{candidate.display_name}</strong><small>{candidate.rating} · {Math.round(candidate.reliability * 100)}% reliable</small></div><button onClick={() => inviteCandidate(candidate.display_name)}>Invite</button></div>)}</div>}</div>
           <div className="side-card trust-card"><div className="side-card-header"><span className="icon-box green-bg">✦</span><span className="kicker">WHY COURTMATE</span></div><h3>Built around the group, not the booking.</h3><div className="trust-row"><span>01</span><p><strong>DUPR-aware</strong><br />Skill is a signal, not a guess.</p></div><div className="trust-row"><span>02</span><p><strong>Group memory</strong><br />It remembers who you enjoy.</p></div><div className="trust-row"><span>03</span><p><strong>Always filling</strong><br />Dropouts become invitations.</p></div></div>
-          {createdGroupId && <div className="side-card request-card"><div className="side-card-header"><span className="icon-box green-bg">✓</span><span className="kicker">YOUR GROUP</span></div><h3>Join requests</h3><p>Other signed-in players can request to join your new group. Refresh here to see them.</p><button className="dark-button" onClick={() => void loadJoinRequests()}>{requestsLoading ? "Loading requests" : "View requests"}<span>→</span></button>{joinRequests.length > 0 && <div className="request-list">{joinRequests.map((request) => <div className="request-row" key={request.id}><strong>{request.player_display_name ?? request.player_id.slice(0, 10)}</strong><small>{request.status}</small></div>)}</div>}</div>}
+          <div className="side-card activity-card"><div className="side-card-header"><span className="icon-box green-bg">◎</span><span className="kicker">MY ACTIVITY</span></div><div className="activity-tabs"><button className={activityTab === "requests" ? "active" : ""} onClick={() => void loadActivity("requests")}>My requests</button><button className={activityTab === "groups" ? "active" : ""} onClick={() => void loadActivity("groups")}>Groups created</button></div>{activityLoading ? <p className="activity-empty">Loading your activity...</p> : activityTab === "requests" ? <div className="activity-list">{myRequests.length ? myRequests.map(({ request, session }) => <div className="activity-item" key={request.id}><div><strong>{session.group_name}</strong><small>{session.session_date} · {session.area}</small></div><span className={`status-badge ${request.status}`}>{request.status}</span></div>) : <p className="activity-empty">Your join requests will appear here.</p>}</div> : <div className="activity-list">{myGroups.length ? myGroups.map((group) => <div className="activity-item organizer-activity-item" key={group.id}><div><strong>{group.group_name}</strong><small>{group.session_date} · {group.area} · {group.confirmed_player_ids.length}/{group.capacity} players</small></div><button className="manage-group-button" onClick={() => { setManagedGroupId(group.id); void loadJoinRequests(group.id); }}>Manage requests</button></div>) : <p className="activity-empty">Groups you create will appear here.</p>}</div>}</div>
+          {managedGroupId && <div className="side-card request-card"><div className="side-card-header"><span className="icon-box green-bg">✓</span><span className="kicker">ORGANIZER REVIEW</span></div><h3>Join requests</h3><p>Review requests for <strong>{myGroups.find((group) => group.id === managedGroupId)?.group_name ?? "your group"}</strong>. A player joins only after you approve them.</p><button className="dark-button" onClick={() => void loadJoinRequests()}>{requestsLoading ? "Loading requests" : "Refresh requests"}<span>→</span></button>{!requestsLoading && joinRequests.length === 0 && <p className="request-empty">No one is waiting for approval yet.</p>}{joinRequests.length > 0 && <div className="request-list">{joinRequests.map((request) => <div className="request-row" key={request.id}><div><strong>{request.player_display_name ?? request.player_id.slice(0, 10)}</strong><small className={`status-badge ${request.status}`}>{request.status}</small></div>{request.status === "pending" && <div className="request-actions"><button onClick={() => void decideJoinRequest(request.id, "approved")}>Approve</button><button onClick={() => void decideJoinRequest(request.id, "declined")}>Decline</button></div>}</div>)}</div>}</div>}
         </aside>
       </section>
 

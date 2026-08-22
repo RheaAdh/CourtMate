@@ -39,6 +39,27 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(join.status_code, 200)
         self.assertEqual(join.json()["status"], "pending")
 
+        organizer_view = self.client.get(f"/v1/me/groups", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(organizer_view.status_code, 200)
+        self.assertIn(session_id, {group["id"] for group in organizer_view.json()["groups"]})
+
+        decision = self.client.post(
+            f"/v1/sessions/{session_id}/join-requests/{join.json()['id']}/decision",
+            json={"status": "approved"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(decision.status_code, 200)
+        self.assertEqual(decision.json()["status"], "approved")
+
+        requester_view = self.client.get("/v1/me/requests", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(requester_view.status_code, 200)
+        request_views = requester_view.json()["requests"]
+        self.assertEqual(request_views[-1]["request"]["status"], "approved")
+
+        games_view = self.client.get("/v1/me/games", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(games_view.status_code, 200)
+        self.assertIn(session_id, {game["id"] for game in games_view.json()["games"]})
+
 
 if __name__ == "__main__":
     unittest.main()

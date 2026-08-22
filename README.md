@@ -57,7 +57,7 @@ npm install
 npm run dev
 ```
 
-To test two people, sign in with Google using two separate browser profiles. One user creates a group; the other searches for it and requests to join. The creator can click `View requests` in the organizer panel. The API also exposes `GET /v1/me` and `GET /v1/sessions/{session_id}/join-requests` for the authenticated user.
+To test two people, sign in with Google using two separate browser profiles. One user creates a group; the other searches for it and requests to join. The creator can click `View requests` in the organizer panel and approve or decline the request. The `My activity` panel shows `pending`, `approved`, or `declined` requests and all groups created by the signed-in organizer. The API also exposes `GET /v1/me`, `GET /v1/me/requests`, `GET /v1/me/groups`, and `GET /v1/sessions/{session_id}/join-requests` for the authenticated user.
 
 ## Test the Firestore flow
 

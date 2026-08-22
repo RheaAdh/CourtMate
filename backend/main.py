@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
 from .matching import search_sessions, suggest_replacements
-from .models import CreateGroupRequest, CreatedGroupResponse, Feedback, FeedbackRequest, GroupProposal, GroupViewResponse, JoinRequest, JoinRequestRequest, JoinRequestsResponse, ParseRequest, Player, ProfileUpdateRequest, PublicPlayerProfile, ReplacementResponse, SearchIntent, SearchResponse, Session
+from .models import CreateGroupRequest, CreatedGroupResponse, Feedback, FeedbackRequest, GroupProposal, GroupViewResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, ParseRequest, Player, ProfileUpdateRequest, PublicPlayerProfile, ReplacementResponse, SearchIntent, SearchResponse, Session
 from .repository import create_repository
 
 
@@ -120,6 +120,57 @@ def join_requests(session_id: str, player: Player = Depends(get_current_player))
     if session.organizer_id != player.id:
         raise HTTPException(status_code=403, detail="Only the group organizer can view join requests")
     return JoinRequestsResponse(session=session, requests=repository.list_join_requests(session_id))
+
+
+@app.post("/v1/sessions/{session_id}/join-requests/{request_id}/decision", response_model=JoinRequest)
+def decide_join_request(session_id: str, request_id: str, request: JoinRequestDecisionRequest, player: Player = Depends(get_current_player)) -> JoinRequest:
+    session = repository.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.organizer_id != player.id:
+        raise HTTPException(status_code=403, detail="Only the group organizer can decide join requests")
+    join_request = next((candidate for candidate in repository.list_join_requests(session_id) if candidate.id == request_id), None)
+    if not join_request:
+        raise HTTPException(status_code=404, detail="Join request not found")
+    if join_request.status != "pending":
+        raise HTTPException(status_code=409, detail="Join request has already been decided")
+    if request.status == "approved":
+        if session.open_slots < 1:
+            raise HTTPException(status_code=409, detail="Session is full")
+        if join_request.player_id not in session.confirmed_player_ids:
+            session.confirmed_player_ids.append(join_request.player_id)
+            repository.save_session(session)
+    join_request.status = request.status
+    return repository.save_join_request(join_request)
+
+
+@app.get("/v1/me/requests", response_model=MyRequestsResponse)
+def my_requests(player: Player = Depends(get_current_player)) -> MyRequestsResponse:
+    request_views = []
+    for join_request in repository.list_join_requests_for_player(player.id):
+        session = repository.get_session(join_request.session_id)
+        if session:
+            request_views.append(JoinRequestView(request=join_request, session=session))
+    request_views.sort(key=lambda item: item.request.created_at, reverse=True)
+    return MyRequestsResponse(requests=request_views)
+
+
+@app.get("/v1/me/groups", response_model=MyGroupsResponse)
+def my_groups(player: Player = Depends(get_current_player)) -> MyGroupsResponse:
+    groups = repository.list_sessions_by_organizer(player.id)
+    groups.sort(key=lambda session: (session.session_date, session.start_time))
+    return MyGroupsResponse(groups=groups)
+
+
+@app.get("/v1/me/games", response_model=MyGamesResponse)
+def my_games(player: Player = Depends(get_current_player)) -> MyGamesResponse:
+    games = [
+        session
+        for session in repository.list_sessions_for_player(player.id)
+        if session.session_date >= date.today() and session.status not in {"completed", "cancelled"}
+    ]
+    games.sort(key=lambda session: (session.session_date, session.start_time))
+    return MyGamesResponse(games=games)
 
 
 @app.get("/v1/sessions/{session_id}/group", response_model=GroupViewResponse)

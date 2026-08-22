@@ -14,6 +14,9 @@ class Repository(Protocol):
     def save_feedback(self, feedback: Feedback) -> Feedback: ...
     def save_join_request(self, join_request: JoinRequest) -> JoinRequest: ...
     def list_join_requests(self, session_id: str) -> list[JoinRequest]: ...
+    def list_join_requests_for_player(self, player_id: str) -> list[JoinRequest]: ...
+    def list_sessions_by_organizer(self, organizer_id: str) -> list[Session]: ...
+    def list_sessions_for_player(self, player_id: str) -> list[Session]: ...
     def save_session(self, session: Session) -> Session: ...
 
 
@@ -87,6 +90,15 @@ class InMemoryRepository:
     def list_join_requests(self, session_id: str) -> list[JoinRequest]:
         return [request for request in self.join_requests.values() if request.session_id == session_id]
 
+    def list_join_requests_for_player(self, player_id: str) -> list[JoinRequest]:
+        return [request for request in self.join_requests.values() if request.player_id == player_id]
+
+    def list_sessions_by_organizer(self, organizer_id: str) -> list[Session]:
+        return [session for session in self.sessions.values() if session.organizer_id == organizer_id]
+
+    def list_sessions_for_player(self, player_id: str) -> list[Session]:
+        return [session for session in self.sessions.values() if player_id in session.confirmed_player_ids]
+
     def save_session(self, session: Session) -> Session:
         self.sessions[session.id] = session
         return session
@@ -157,6 +169,18 @@ class FirestoreRepository:
     def list_join_requests(self, session_id: str) -> list[JoinRequest]:
         documents = self.client.collection("join_requests").where("session_id", "==", session_id).limit(100).stream()
         return [JoinRequest.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
+
+    def list_join_requests_for_player(self, player_id: str) -> list[JoinRequest]:
+        documents = self.client.collection("join_requests").where("player_id", "==", player_id).limit(100).stream()
+        return [JoinRequest.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
+
+    def list_sessions_by_organizer(self, organizer_id: str) -> list[Session]:
+        documents = self.client.collection("sessions").where("organizer_id", "==", organizer_id).limit(self.max_session_reads).stream()
+        return [self._as_session(document) for document in documents]
+
+    def list_sessions_for_player(self, player_id: str) -> list[Session]:
+        documents = self.client.collection("sessions").where("confirmed_player_ids", "array_contains", player_id).limit(self.max_session_reads).stream()
+        return [self._as_session(document) for document in documents]
 
     def save_session(self, session: Session) -> Session:
         reference = self.client.collection("sessions").document(session.id)

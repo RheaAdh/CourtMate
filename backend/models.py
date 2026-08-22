@@ -132,6 +132,10 @@ class JoinRequestRequest(BaseModel):
     pass
 
 
+class JoinRequestDecisionRequest(BaseModel):
+    status: Literal["approved", "declined"]
+
+
 class JoinRequest(BaseModel):
     id: str
     session_id: str
@@ -144,6 +148,23 @@ class JoinRequest(BaseModel):
 class JoinRequestsResponse(BaseModel):
     session: Session
     requests: list[JoinRequest]
+
+
+class JoinRequestView(BaseModel):
+    request: JoinRequest
+    session: Session
+
+
+class MyRequestsResponse(BaseModel):
+    requests: list[JoinRequestView]
+
+
+class MyGroupsResponse(BaseModel):
+    groups: list[Session]
+
+
+class MyGamesResponse(BaseModel):
+    games: list[Session]
 
 
 class GroupViewResponse(BaseModel):
