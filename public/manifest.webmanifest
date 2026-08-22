@@ -1,0 +1,10 @@
+{
+  "name": "CourtMate",
+  "short_name": "CourtMate",
+  "description": "Find your people. Fill the court.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8f7f2",
+  "theme_color": "#192321",
+  "icons": []
+}
