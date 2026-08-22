@@ -26,6 +26,7 @@ const sportFromText = (text: string): Sport | null => {
 
 type Session = {
   id: string;
+  organizer_id: string;
   group_name: string;
   sport: Sport;
   area: string;
@@ -64,6 +65,16 @@ type GroupProposal = {
   explanation: string;
 };
 
+type CreateGroupDraft = {
+  area: string;
+  session_date: string;
+  start_time: string;
+  end_time: string;
+  skill_min: string;
+  skill_max: string;
+  style: "casual" | "social" | "competitive";
+};
+
 type SearchResponse = {
   action: "join_existing" | "create_group";
   message: string;
@@ -100,6 +111,7 @@ type JoinRequest = {
 
 type ActivityGroup = {
   id: string;
+  organizer_id: string;
   group_name: string;
   sport: Sport;
   area: string;
@@ -198,13 +210,6 @@ type GroupView = {
   members: GroupMember[];
 };
 
-const demoSessions: Session[] = [
-  { id: "s1", sport: "pickleball", group_name: "Sunday Rally Crew", area: "Whitefield", session_date: "2026-08-30", start_time: "08:00", end_time: "10:00", skill_min: 3, skill_max: 3.5, style: "casual", capacity: 8, confirmed_player_ids: ["p1", "p2", "p3", "p6"], open_slots: 4, score: .925, explanation: "Matches your area, Sunday morning, casual style, and intermediate skill band. 4 open slots." },
-  { id: "s2", sport: "pickleball", group_name: "East Bengaluru Social", area: "Brookefield", session_date: "2026-08-30", start_time: "09:00", end_time: "11:00", skill_min: 2.8, skill_max: 3.4, style: "social", capacity: 8, confirmed_player_ids: ["p3", "p5"], open_slots: 6, score: .748, explanation: "A nearby social group with a wider skill range and plenty of room to join." },
-  { id: "s9", sport: "badminton", group_name: "Whitefield Evening Badminton", area: "Whitefield", session_date: "2026-09-02", start_time: "19:00", end_time: "21:00", skill_min: 3.2, skill_max: 4, style: "casual", capacity: 8, confirmed_player_ids: ["p1", "p2", "p6", "p11"], open_slots: 4, score: .84, explanation: "A compatible badminton group with open spots near your locality." },
-  { id: "s10", sport: "padel", group_name: "Brookefield Padel Social", area: "Brookefield", session_date: "2026-09-05", start_time: "17:00", end_time: "19:00", skill_min: 3, skill_max: 3.8, style: "social", capacity: 8, confirmed_player_ids: ["p4", "p8", "p14"], open_slots: 5, score: .81, explanation: "A social padel session with a broad skill band and space to join." },
-];
-
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const availabilityOptions = ["weekday mornings", "weekday evenings", "weekend mornings", "weekend evenings"];
 
@@ -224,6 +229,12 @@ function cmrGraphPoints(history: CMRHistoryPoint[]): string {
   }).join(" ");
 }
 
+function localDateInput(): string {
+  const now = new Date();
+  const offset = now.getTimezoneOffset() * 60000;
+  return new Date(now.getTime() - offset).toISOString().slice(0, 10);
+}
+
 function MicrophoneIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="12" rx="4" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" /></svg>;
 }
@@ -233,13 +244,14 @@ function SearchGlyph() {
 }
 
 export default function Home() {
-  const [query, setQuery] = useState("Find me a casual intermediate game near Whitefield this Sunday morning");
+  const [query, setQuery] = useState("");
   const [selectedSport, setSelectedSport] = useState<Sport>("pickleball");
-  const [sessions, setSessions] = useState(demoSessions);
+  const [sessions, setSessions] = useState<Session[]>([]);
   const [isListening, setIsListening] = useState(false);
   const [loading, setLoading] = useState(false);
   const [groupProposal, setGroupProposal] = useState<GroupProposal | null>(null);
   const [groupNameDraft, setGroupNameDraft] = useState("");
+  const [createGroupDraft, setCreateGroupDraft] = useState<CreateGroupDraft>({ area: "", session_date: localDateInput(), start_time: "19:00", end_time: "21:00", skill_min: "3.0", skill_max: "3.5", style: "casual" });
   const [createGroupLoading, setCreateGroupLoading] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
@@ -260,6 +272,7 @@ export default function Home() {
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [chatPosts, setChatPosts] = useState<ChatPost[]>([]);
   const [chatDraft, setChatDraft] = useState("");
+  const [groupMembers, setGroupMembers] = useState<GroupMember[]>([]);
   const [groupLeaderboard, setGroupLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [localLeaderboard, setLocalLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [feedbackFun, setFeedbackFun] = useState("5");
@@ -331,6 +344,7 @@ export default function Home() {
     setManagedGroupId(null);
     setWorkspaceGroup(null);
     setChatPosts([]);
+    setGroupMembers([]);
     setGroupLeaderboard([]);
     setLocalLeaderboard([]);
     setJoinRequests([]);
@@ -429,12 +443,23 @@ export default function Home() {
       })));
       setGroupProposal(payload.group_proposal ?? null);
       setGroupNameDraft(payload.group_proposal?.group_name ?? "");
+      if (payload.group_proposal) {
+        setCreateGroupDraft({
+          area: payload.group_proposal.area,
+          session_date: payload.group_proposal.session_date ?? localDateInput(),
+          start_time: payload.group_proposal.start_time ?? "19:00",
+          end_time: payload.group_proposal.end_time ?? "21:00",
+          skill_min: payload.group_proposal.skill_min.toString(),
+          skill_max: payload.group_proposal.skill_max.toString(),
+          style: payload.group_proposal.style as CreateGroupDraft["style"],
+        });
+      }
       setToast(payload.message || "Gemini searched live session data");
     } catch {
-      setSessions(demoSessions.filter((session) => session.sport === requestSport));
+      setSessions([]);
       setGroupProposal(null);
       setGroupNameDraft("");
-      setToast(`Demo mode: showing seeded ${sportLabel(requestSport)} groups`);
+      setToast("Could not search live groups. Check that the API is running.");
     } finally {
       setLoading(false);
       window.setTimeout(() => setToast(""), 2600);
@@ -451,7 +476,18 @@ export default function Home() {
       const response = await authorizedFetch(`${apiUrl}/v1/groups`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ query, sport: selectedSport, group_name: groupNameDraft.trim() || undefined }),
+        body: JSON.stringify({
+          query,
+          sport: selectedSport,
+          group_name: groupNameDraft.trim() || undefined,
+          area: createGroupDraft.area.trim() || undefined,
+          session_date: createGroupDraft.session_date || undefined,
+          start_time: createGroupDraft.start_time || undefined,
+          end_time: createGroupDraft.end_time || undefined,
+          skill_min: Number(createGroupDraft.skill_min),
+          skill_max: Number(createGroupDraft.skill_max),
+          style: createGroupDraft.style,
+        }),
       });
       if (!response.ok) throw new Error("Unable to create group");
       const payload = await response.json() as { session: Omit<Session, "open_slots" | "score" | "explanation">; message: string };
@@ -500,7 +536,12 @@ export default function Home() {
     recognition.start();
   }
 
-  async function joinSession(sessionId: string, name: string) {
+  async function joinSession(sessionId: string, name: string, organizerId?: string) {
+    if ((organizerId ?? sessions.find((session) => session.id === sessionId)?.organizer_id) === user?.uid) {
+      setToast("You created this group");
+      window.setTimeout(() => setToast(""), 2600);
+      return;
+    }
     try {
       const response = await authorizedFetch(`${apiUrl}/v1/sessions/${sessionId}/join`, {
         method: "POST",
@@ -565,6 +606,7 @@ export default function Home() {
   function toActivityGroup(group: ActivityGroup | Session): ActivityGroup {
     return {
       id: group.id,
+      organizer_id: group.organizer_id,
       group_name: group.group_name,
       sport: group.sport,
       area: group.area,
@@ -592,16 +634,19 @@ export default function Home() {
     setChatDraft("");
     setPlayerRatings({});
     try {
-      const [chatResponse, groupResponse, localResponse] = await Promise.all([
+      const [chatResponse, membersResponse, groupResponse, localResponse] = await Promise.all([
         authorizedFetch(`${apiUrl}/v1/sessions/${normalizedGroup.id}/chat`),
+        authorizedFetch(`${apiUrl}/v1/sessions/${normalizedGroup.id}/group`),
         authorizedFetch(`${apiUrl}/v1/sessions/${normalizedGroup.id}/leaderboard`),
         authorizedFetch(`${apiUrl}/v1/leaderboards/local?area=${encodeURIComponent(normalizedGroup.area)}&sport=${encodeURIComponent(normalizedGroup.sport)}`),
       ]);
-      if (!chatResponse.ok || !groupResponse.ok || !localResponse.ok) throw new Error("Group space unavailable");
+      if (!chatResponse.ok || !membersResponse.ok || !groupResponse.ok || !localResponse.ok) throw new Error("Group space unavailable");
       const chatPayload = await chatResponse.json() as { posts: ChatPost[] };
+      const membersPayload = await membersResponse.json() as GroupView;
       const groupPayload = await groupResponse.json() as { entries: LeaderboardEntry[] };
       const localPayload = await localResponse.json() as { entries: LeaderboardEntry[] };
       setChatPosts(chatPayload.posts);
+      setGroupMembers(membersPayload.members);
       setGroupLeaderboard(groupPayload.entries);
       setLocalLeaderboard(localPayload.entries);
     } catch {
@@ -780,12 +825,12 @@ export default function Home() {
       <section className="content-grid search-layout">
         <div className="results-column">
           <div className="section-heading"><div><span className="kicker">{activeTab === "search" ? "GROUP DISCOVERY" : "AROUND YOU"}</span><h2>{sessions.length ? activeTab === "search" ? "Groups that fit your ask" : "Games around you" : "No exact match yet"}</h2></div><span className="result-count">{sessions.length} good fits</span></div>
-          {!sessions.length && groupProposal && <div className="empty-state"><span className="empty-icon">+</span><span className="kicker">START THE NEXT GROUP</span><label className="group-name-editor"><span>Group name</span><input value={groupNameDraft} onChange={(event) => setGroupNameDraft(event.target.value)} aria-label="Group name" /></label><p>{groupProposal.explanation}</p><div className="tags"><span className="tag rating">{sportLabel(groupProposal.sport)} {groupProposal.skill_min.toFixed(1)}–{groupProposal.skill_max.toFixed(1)}</span><span className="tag">{groupProposal.style}</span><span className="tag open">{groupProposal.area}</span></div><button className="join-button create-button" disabled={!groupNameDraft.trim() || createGroupLoading} onClick={() => void createGroup()}>{createGroupLoading ? "Creating group" : "Create this group"}<span>↗</span></button></div>}
+          {!sessions.length && groupProposal && <div className="empty-state"><span className="empty-icon">+</span><span className="kicker">START THE NEXT GROUP</span><label className="group-name-editor"><span>Group name</span><input value={groupNameDraft} onChange={(event) => setGroupNameDraft(event.target.value)} aria-label="Group name" /></label><div className="create-details-grid"><label><span>Area</span><input value={createGroupDraft.area} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, area: event.target.value })} placeholder="e.g. Whitefield" /></label><label><span>Date</span><input type="date" value={createGroupDraft.session_date} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, session_date: event.target.value })} /></label><label><span>Starts</span><input type="time" value={createGroupDraft.start_time} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, start_time: event.target.value })} /></label><label><span>Ends</span><input type="time" value={createGroupDraft.end_time} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, end_time: event.target.value })} /></label><label><span>Skill from</span><input type="number" min="1" max="8" step="0.1" value={createGroupDraft.skill_min} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, skill_min: event.target.value })} /></label><label><span>Skill to</span><input type="number" min="1" max="8" step="0.1" value={createGroupDraft.skill_max} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, skill_max: event.target.value })} /></label><label><span>Game mood</span><select value={createGroupDraft.style} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, style: event.target.value as CreateGroupDraft["style"] })}><option value="casual">Casual</option><option value="social">Social</option><option value="competitive">Competitive</option></select></label></div><p>{groupProposal.explanation}</p><div className="tags"><span className="tag rating">{sportLabel(groupProposal.sport)} {createGroupDraft.skill_min}–{createGroupDraft.skill_max}</span><span className="tag">{createGroupDraft.style}</span><span className="tag open">{createGroupDraft.area}</span></div><button className="join-button create-button" disabled={!groupNameDraft.trim() || createGroupLoading} onClick={() => void createGroup()}>{createGroupLoading ? "Creating group" : "Create this group"}<span>↗</span></button></div>}
           <div className="session-list">
             {sessions.map((session, index) => <article className={`session-card ${index === 0 ? "featured" : ""}`} key={session.id}>
               <div className="card-top"><span className="date-badge"><strong>{new Date(session.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><small>{new Date(session.session_date).getDate()}</small></span><div className="session-meta"><div className="session-title-row"><h3>{session.group_name}</h3><span className="fit-score">{Math.round(session.score * 100)}% fit</span></div><p>{sportLabel(session.sport)} · {session.start_time} – {session.end_time} · {session.area}</p></div><button className="more">•••</button></div>
               <div className="tags"><span className="tag rating">{sportLabel(session.sport)} {session.skill_min.toFixed(1)}–{session.skill_max.toFixed(1)}</span><span className="tag">{session.style}</span><span className="tag open">{session.open_slots} spots open</span></div>
-              <div className="card-bottom"><div className="member-stack"><span className="member coral">A</span><span className="member green">K</span><span className="member blue">R</span><span className="member-count">+{session.confirmed_player_ids.length + 2}</span></div><div className="card-actions"><button className="join-button secondary-button" onClick={() => void viewGroup(session.id)}>{groupLoading ? "Loading" : "View group"}</button><button className="join-button" onClick={() => void joinSession(session.id, session.group_name)}>{session.open_slots > 0 ? "Request to join" : "Join waitlist"} <span>↗</span></button></div></div>
+              <div className="card-bottom"><div className="member-stack"><span className="member coral">A</span><span className="member green">K</span><span className="member blue">R</span><span className="member-count">+{session.confirmed_player_ids.length + 2}</span></div><div className="card-actions"><button className="join-button secondary-button" onClick={() => void viewGroup(session.id)}>{groupLoading ? "Loading" : "View group"}</button>{session.organizer_id === user?.uid ? <span className="status-badge approved">Your group</span> : <button className="join-button" onClick={() => void joinSession(session.id, session.group_name, session.organizer_id)}>{session.open_slots > 0 ? "Request to join" : "Join waitlist"} <span>↗</span></button>}</div></div>
             </article>)}
           </div>
         </div>
@@ -821,8 +866,8 @@ export default function Home() {
       </section>}
 
       <footer className="footer"><span>CourtMate finds the people. Your venue handles the court.</span><button className="about-footer-link" onClick={() => selectTab("about")}>How it works <span>→</span></button></footer>
-      {workspaceGroup && <div className="group-modal-backdrop" onClick={() => setWorkspaceGroup(null)}><section className="workspace-modal" onClick={(event) => event.stopPropagation()}><div className="group-modal-header"><div><span className="kicker">{sportLabel(workspaceGroup.sport).toUpperCase()} GROUP SPACE</span><h2>{workspaceGroup.group_name}</h2><p>{workspaceGroup.session_date} · {workspaceGroup.start_time}–{workspaceGroup.end_time} · {workspaceGroup.area}</p></div><button className="close-button" onClick={() => setWorkspaceGroup(null)}>×</button></div>{workspaceLoading ? <p className="page-loading">Loading group space...</p> : <div className="workspace-grid"><section className="workspace-panel chat-panel"><div className="workspace-panel-heading"><div><span className="kicker">LIVE POSTING CHAT</span><h3>Coordinate the session</h3></div><button className="workspace-refresh" onClick={() => void openGroupSpace(workspaceGroup)}>Refresh</button></div><div className="chat-feed">{chatPosts.length ? chatPosts.map((post) => <article className={`chat-post ${post.player_id === user?.uid ? "mine" : ""}`} key={post.id}><div className="chat-avatar">{post.player_display_name[0]}</div><div><strong>{post.player_display_name}</strong><p>{post.message}</p><small>{new Date(post.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</small></div></article>) : <p className="activity-empty">No posts yet. Start coordinating the game.</p>}</div><form className="chat-composer" onSubmit={postChat}><input value={chatDraft} onChange={(event) => setChatDraft(event.target.value)} maxLength={500} placeholder="Post an update to the group..." aria-label="Group chat message" /><button className="dark-button" type="submit" disabled={!chatDraft.trim()}>Post</button></form></section><section className="workspace-panel leaderboard-panel"><div className="workspace-panel-heading"><div><span className="kicker">{sportLabel(workspaceGroup.sport).toUpperCase()} LEADERBOARD</span><h3>Local legends in this group</h3></div></div><div className="leaderboard-list">{groupLeaderboard.length ? groupLeaderboard.map((entry) => <div className="leaderboard-row" key={entry.player.id}><span className="rank">{entry.rank}</span><div><strong>{entry.player.display_name}</strong><small>{entry.ratings_count ? `${entry.ratings_count} community rating(s)` : `${sportLabel(workspaceGroup.sport)} skill rating ${entry.score.toFixed(1)}`}</small></div><b>{entry.score.toFixed(1)}</b></div>) : <p className="activity-empty">Leaderboard scores appear after players have ratings.</p>}</div><div className="local-leaderboard"><span className="kicker">{workspaceGroup.area.toUpperCase()} · {sportLabel(workspaceGroup.sport).toUpperCase()} LEADERBOARD</span>{localLeaderboard.slice(0, 5).map((entry) => <div className="local-row" key={entry.player.id}><span>#{entry.rank}</span><strong>{entry.player.display_name}</strong><b>{entry.score.toFixed(1)}</b></div>)}</div></section><form className="workspace-panel feedback-panel" onSubmit={submitGroupFeedback}><div className="workspace-panel-heading"><div><span className="kicker">POST-GAME FEEDBACK</span><h3>Was this a fun, fair group?</h3></div></div><div className="feedback-fields"><label><span>Fun</span><select value={feedbackFun} onChange={(event) => setFeedbackFun(event.target.value)}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}/5</option>)}</select></label><label><span>Fairness</span><select value={feedbackFairness} onChange={(event) => setFeedbackFairness(event.target.value)}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}/5</option>)}</select></label></div><label className="return-check"><input type="checkbox" checked={feedbackWouldReturn} onChange={(event) => setFeedbackWouldReturn(event.target.checked)} /><span>Would you play with this group again?</span></label><fieldset className="player-rating-fields"><legend>Rate other players</legend>{groupLeaderboard.filter((entry) => entry.player.id !== user?.uid).map((entry) => <label key={entry.player.id}><span>{entry.player.display_name}</span><select value={playerRatings[entry.player.id] ?? ""} onChange={(event) => setPlayerRatings({ ...playerRatings, [entry.player.id]: event.target.value })}><option value="">Skip</option>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}/5</option>)}</select></label>)}</fieldset><button className="dark-button" type="submit">Save feedback <span>→</span></button></form></div>}</section></div>}
-      {viewedGroup && <div className="group-modal-backdrop" onClick={() => setViewedGroup(null)}><section className="group-modal" onClick={(event) => event.stopPropagation()}><div className="group-modal-header"><div><span className="kicker">{sportLabel(viewedGroup.session.sport).toUpperCase()} GROUP PREVIEW</span><h2>{viewedGroup.session.group_name}</h2><p>{viewedGroup.session.start_time} – {viewedGroup.session.end_time} · {viewedGroup.session.area}</p></div><button className="close-button" onClick={() => setViewedGroup(null)}>×</button></div><div className="group-summary"><span><strong>{viewedGroup.members.length}/{viewedGroup.session.capacity}</strong><small>PLAYERS</small></span><span><strong>{viewedGroup.session.skill_min.toFixed(1)}–{viewedGroup.session.skill_max.toFixed(1)}</strong><small>SKILL BAND</small></span><span><strong>{viewedGroup.session.style}</strong><small>INTENSITY</small></span></div><div className="member-grid">{viewedGroup.members.map((member) => { const memberRating = member.sport_ratings?.[viewedGroup.session.sport] ?? (viewedGroup.session.sport === "pickleball" ? member.dupr_rating : undefined); return <article className="member-profile" key={member.id}><div className="member-profile-avatar">{member.display_name[0]}</div><div className="member-profile-copy"><h3>{member.display_name}</h3><p>{member.area} · {member.style}</p><div className="member-profile-meta"><strong>{memberRating ? `${sportLabel(viewedGroup.session.sport)} ${memberRating.toFixed(1)}` : "Rating not set"}</strong><span>{Math.round(member.reliability * 100)}% reliable</span></div></div></article>; })}</div><button className="dark-button modal-join" onClick={() => void joinSession(viewedGroup.session.id, viewedGroup.session.group_name)}>Request to join <span>→</span></button></section></div>}
+      {workspaceGroup && <div className="group-modal-backdrop" onClick={() => setWorkspaceGroup(null)}><section className="workspace-modal" onClick={(event) => event.stopPropagation()}><div className="group-modal-header"><div><span className="kicker">{sportLabel(workspaceGroup.sport).toUpperCase()} GROUP SPACE</span><h2>{workspaceGroup.group_name}</h2><p>{workspaceGroup.session_date} · {workspaceGroup.start_time}–{workspaceGroup.end_time} · {workspaceGroup.area}</p></div><button className="close-button" onClick={() => setWorkspaceGroup(null)}>×</button></div>{workspaceLoading ? <p className="page-loading">Loading group space...</p> : <div className="workspace-grid"><section className="workspace-panel chat-panel"><div className="workspace-panel-heading"><div><span className="kicker">LIVE POSTING CHAT</span><h3>Coordinate the session</h3></div><button className="workspace-refresh" onClick={() => void openGroupSpace(workspaceGroup)}>Refresh</button></div><div className="chat-feed">{chatPosts.length ? chatPosts.map((post) => <article className={`chat-post ${post.player_id === user?.uid ? "mine" : ""}`} key={post.id}><div className="chat-avatar">{post.player_display_name[0]}</div><div><strong>{post.player_display_name}</strong><p>{post.message}</p><small>{new Date(post.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</small></div></article>) : <p className="activity-empty">No posts yet. Start coordinating the game.</p>}</div><form className="chat-composer" onSubmit={postChat}><input value={chatDraft} onChange={(event) => setChatDraft(event.target.value)} maxLength={500} placeholder="Post an update to the group..." aria-label="Group chat message" /><button className="dark-button" type="submit" disabled={!chatDraft.trim()}>Post</button></form></section><section className="workspace-panel leaderboard-panel"><div className="workspace-panel-heading"><div><span className="kicker">{sportLabel(workspaceGroup.sport).toUpperCase()} LEADERBOARD</span><h3>Local legends in this group</h3></div></div><div className="leaderboard-list">{groupLeaderboard.length ? groupLeaderboard.map((entry) => <div className="leaderboard-row" key={entry.player.id}><span className="rank">{entry.rank}</span><div><strong>{entry.player.display_name}</strong><small>{entry.ratings_count ? `${entry.ratings_count} community rating(s)` : `${sportLabel(workspaceGroup.sport)} skill rating ${entry.score.toFixed(1)}`}</small></div><b>{entry.score.toFixed(1)}</b></div>) : <p className="activity-empty">Leaderboard scores appear after players have ratings.</p>}</div><div className="local-leaderboard"><span className="kicker">{workspaceGroup.area.toUpperCase()} · {sportLabel(workspaceGroup.sport).toUpperCase()} LEADERBOARD</span>{localLeaderboard.slice(0, 5).map((entry) => <div className="local-row" key={entry.player.id}><span>#{entry.rank}</span><strong>{entry.player.display_name}</strong><b>{entry.score.toFixed(1)}</b></div>)}</div></section><form className="workspace-panel feedback-panel" onSubmit={submitGroupFeedback}><div className="workspace-panel-heading"><div><span className="kicker">POST-GAME FEEDBACK</span><h3>Was this a fun, fair group?</h3></div></div><div className="feedback-fields"><label><span>Fun</span><select value={feedbackFun} onChange={(event) => setFeedbackFun(event.target.value)}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}/5</option>)}</select></label><label><span>Fairness</span><select value={feedbackFairness} onChange={(event) => setFeedbackFairness(event.target.value)}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}/5</option>)}</select></label></div><label className="return-check"><input type="checkbox" checked={feedbackWouldReturn} onChange={(event) => setFeedbackWouldReturn(event.target.checked)} /><span>Would you play with this group again?</span></label><fieldset className="player-rating-fields"><legend>Rate other players</legend>{groupMembers.filter((member) => member.id !== user?.uid).map((member) => <label key={member.id}><span>{member.display_name}</span><select value={playerRatings[member.id] ?? ""} onChange={(event) => setPlayerRatings({ ...playerRatings, [member.id]: event.target.value })}><option value="">Skip</option>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}/5</option>)}</select></label>)}</fieldset><button className="dark-button" type="submit">Save feedback <span>→</span></button></form></div>}</section></div>}
+      {viewedGroup && <div className="group-modal-backdrop" onClick={() => setViewedGroup(null)}><section className="group-modal" onClick={(event) => event.stopPropagation()}><div className="group-modal-header"><div><span className="kicker">{sportLabel(viewedGroup.session.sport).toUpperCase()} GROUP PREVIEW</span><h2>{viewedGroup.session.group_name}</h2><p>{viewedGroup.session.start_time} – {viewedGroup.session.end_time} · {viewedGroup.session.area}</p></div><button className="close-button" onClick={() => setViewedGroup(null)}>×</button></div><div className="group-summary"><span><strong>{viewedGroup.members.length}/{viewedGroup.session.capacity}</strong><small>PLAYERS</small></span><span><strong>{viewedGroup.session.skill_min.toFixed(1)}–{viewedGroup.session.skill_max.toFixed(1)}</strong><small>SKILL BAND</small></span><span><strong>{viewedGroup.session.style}</strong><small>INTENSITY</small></span></div><div className="member-grid">{viewedGroup.members.map((member) => { const memberRating = member.sport_ratings?.[viewedGroup.session.sport] ?? (viewedGroup.session.sport === "pickleball" ? member.dupr_rating : undefined); return <article className="member-profile" key={member.id}><div className="member-profile-avatar">{member.display_name[0]}</div><div className="member-profile-copy"><h3>{member.display_name}</h3><p>{member.area} · {member.style}</p><div className="member-profile-meta"><strong>{memberRating ? `${sportLabel(viewedGroup.session.sport)} ${memberRating.toFixed(1)}` : "Rating not set"}</strong><span>{Math.round(member.reliability * 100)}% reliable</span></div></div></article>; })}</div>{viewedGroup.session.organizer_id === user?.uid ? <span className="status-badge approved modal-join">You created this group</span> : <button className="dark-button modal-join" onClick={() => void joinSession(viewedGroup.session.id, viewedGroup.session.group_name, viewedGroup.session.organizer_id)}>Request to join <span>→</span></button>}</section></div>}
       {toast && <div className="toast">{toast}</div>}
     </main>
   );

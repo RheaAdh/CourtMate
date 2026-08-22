@@ -4,16 +4,19 @@ from datetime import date, time, timedelta
 
 os.environ["COURTMATE_DATASTORE"] = "memory"
 os.environ["COURTMATE_AUTH_REQUIRED"] = "false"
+os.environ["COURTMATE_DEV_PLAYER_ID"] = "p1"
 os.environ["GEMINI_API_KEY"] = ""
 
 from fastapi.testclient import TestClient
 
 from backend.main import app, repository
 from backend.models import Session
+from tests.fixtures import load_repository_fixture
 
 
 class ApiFlowTests(unittest.TestCase):
     def setUp(self):
+        load_repository_fixture(repository)
         self.client = TestClient(app)
 
     def test_search_returns_existing_dupr_compatible_group(self):
@@ -178,6 +181,34 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(leave.status_code, 200)
         self.assertIn("p4", leave.json()["confirmed_player_ids"])
         self.assertNotIn("p4", leave.json()["waitlist_player_ids"])
+
+    def test_group_creation_accepts_custom_session_details(self):
+        response = self.client.post(
+            "/v1/groups",
+            json={
+                "query": "Find a game near Indiranagar",
+                "group_name": "Thursday Indiranagar Rally",
+                "sport": "pickleball",
+                "area": "Indiranagar",
+                "session_date": "2026-09-10",
+                "start_time": "20:00",
+                "end_time": "22:00",
+                "skill_min": 3.2,
+                "skill_max": 4.0,
+                "style": "competitive",
+            },
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        session = response.json()["session"]
+        self.assertEqual(session["group_name"], "Thursday Indiranagar Rally")
+        self.assertEqual(session["area"], "Indiranagar")
+        self.assertEqual(session["session_date"], "2026-09-10")
+        self.assertEqual(session["start_time"], "20:00:00")
+        self.assertEqual(session["end_time"], "22:00:00")
+        self.assertEqual(session["skill_min"], 3.2)
+        self.assertEqual(session["skill_max"], 4.0)
+        self.assertEqual(session["style"], "competitive")
 
 
 if __name__ == "__main__":

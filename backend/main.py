@@ -90,7 +90,7 @@ def _require_active_session(session: Session) -> None:
 
 
 def _geocode_area(area: str) -> tuple[float, float] | None:
-    """Resolve a locality with Google Maps, falling back to demo Bengaluru coordinates."""
+    """Resolve a locality with Google Maps, falling back to known locality coordinates."""
     normalized_area = area.strip().lower()
     if not normalized_area:
         return None
@@ -537,14 +537,27 @@ def complete_session(session_id: str, player: Player = Depends(get_current_playe
 def create_group(request: CreateGroupRequest, player: Player = Depends(get_current_player)) -> CreatedGroupResponse:
     intent = _parse_intent(request.query, request.sport, player)
     proposal = _group_proposal(intent, player.id, request.group_name, request.query)
+    overrides = request.model_dump(exclude_none=True, exclude={"query", "group_name", "sport"})
+    if request.area:
+        coordinates = _geocode_area(request.area)
+        overrides.update({"area": request.area, "latitude": coordinates[0] if coordinates else None, "longitude": coordinates[1] if coordinates else None})
+    proposal = proposal.model_copy(update=overrides)
     session_date = proposal.session_date or date.today()
     start_time = proposal.start_time or time(19)
     end_time = proposal.end_time or (datetime.combine(session_date, start_time) + timedelta(hours=2)).time()
+    if session_date < date.today():
+        raise HTTPException(status_code=422, detail="Choose today or a future date")
+    if end_time <= start_time:
+        raise HTTPException(status_code=422, detail="End time must be after start time")
+    if proposal.skill_min > proposal.skill_max:
+        raise HTTPException(status_code=422, detail="Minimum skill must not exceed maximum skill")
     session = Session(
         id=f"g-{uuid4().hex[:10]}",
         group_name=proposal.group_name,
         organizer_id=player.id,
         area=proposal.area,
+        latitude=proposal.latitude,
+        longitude=proposal.longitude,
         session_date=session_date,
         start_time=start_time,
         end_time=end_time,

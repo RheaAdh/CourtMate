@@ -4,6 +4,7 @@ from datetime import date
 from backend.gemini import GeminiIntentParser
 from backend.matching import search_sessions, suggest_replacements
 from backend.repository import InMemoryRepository
+from tests.fixtures import load_repository_fixture
 
 
 class MatchingTests(unittest.TestCase):
@@ -17,6 +18,7 @@ class MatchingTests(unittest.TestCase):
 
     def test_search_returns_open_whitefield_session(self):
         repo = InMemoryRepository()
+        load_repository_fixture(repo)
         intent = GeminiIntentParser().parse("Find a casual game near Whitefield this Sunday")
         results = search_sessions(repo.list_sessions(), intent)
         self.assertTrue(results)
@@ -24,6 +26,7 @@ class MatchingTests(unittest.TestCase):
 
     def test_coordinate_radius_filters_out_distant_localities(self):
         repo = InMemoryRepository()
+        load_repository_fixture(repo)
         player = repo.get_player("p1")
         player.travel_radius_km = 0.5
         intent = GeminiIntentParser().parse("Find a casual game near Whitefield this Sunday")
@@ -35,6 +38,7 @@ class MatchingTests(unittest.TestCase):
 
     def test_profile_skill_level_does_not_filter_search(self):
         repo = InMemoryRepository()
+        load_repository_fixture(repo)
         player = repo.get_player("p5")
         player.skill_levels = {"pickleball": "advanced"}
         intent = GeminiIntentParser().parse("Find a casual game near Whitefield this Sunday")
@@ -43,6 +47,7 @@ class MatchingTests(unittest.TestCase):
 
     def test_explicit_search_level_filters_without_using_profile_level(self):
         repo = InMemoryRepository()
+        load_repository_fixture(repo)
         player = repo.get_player("p5")
         player.skill_levels = {"pickleball": "advanced"}
         intent = GeminiIntentParser().parse("Find a beginner game near Whitefield")
@@ -51,6 +56,7 @@ class MatchingTests(unittest.TestCase):
 
     def test_nearby_profile_search_prioritizes_style_and_availability(self):
         repo = InMemoryRepository()
+        load_repository_fixture(repo)
         player = repo.get_player("p1")
         player.availability = ["weekend mornings"]
         intent = GeminiIntentParser().parse("Show me nearby pickleball games that match my profile")
@@ -60,6 +66,7 @@ class MatchingTests(unittest.TestCase):
 
     def test_parser_and_matcher_support_other_court_sports(self):
         repo = InMemoryRepository()
+        load_repository_fixture(repo)
         intent = GeminiIntentParser().parse("Find a casual badminton game near Whitefield this evening")
         self.assertEqual(intent.sport, "badminton")
         results = search_sessions(repo.list_sessions(), intent)
@@ -70,6 +77,7 @@ class MatchingTests(unittest.TestCase):
 
     def test_replacement_excludes_confirmed_players_and_prefers_fit(self):
         repo = InMemoryRepository()
+        load_repository_fixture(repo)
         session = repo.get_session("s1")
         candidates = suggest_replacements(session, repo.list_players())
         self.assertTrue(candidates)

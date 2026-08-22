@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class GeminiIntentParser:
-    """Gemini adapter with a deterministic demo fallback when no key is configured."""
+    """Gemini adapter with a deterministic fallback when no key is configured."""
 
     def __init__(self) -> None:
         self.api_key = os.getenv("GEMINI_API_KEY")

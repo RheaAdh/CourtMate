@@ -282,6 +282,13 @@ class CreateGroupRequest(BaseModel):
     query: str
     group_name: str | None = None
     sport: Sport | None = None
+    area: str | None = None
+    session_date: date_type | None = None
+    start_time: time | None = None
+    end_time: time | None = None
+    skill_min: float | None = Field(default=None, ge=1, le=8)
+    skill_max: float | None = Field(default=None, ge=1, le=8)
+    style: Literal["casual", "social", "competitive"] | None = None
 
 
 class CreatedGroupResponse(BaseModel):

@@ -44,7 +44,7 @@ def get_current_identity(
     if not authorization:
         if _is_required():
             raise HTTPException(status_code=401, detail="Sign in with Google to use CourtMate")
-        return AuthIdentity(uid=dev_player_id or os.getenv("COURTMATE_DEV_PLAYER_ID", "p1"), display_name="Demo player")
+        return AuthIdentity(uid=dev_player_id or os.getenv("COURTMATE_DEV_PLAYER_ID", "local-dev-player"), display_name="Local developer")
 
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token:
