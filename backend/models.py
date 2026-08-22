@@ -3,9 +3,12 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+Sport = Literal["pickleball", "badminton", "tennis", "padel", "squash", "table_tennis", "basketball", "volleyball"]
+RatingSource = Literal["dupr", "organizer_confirmed", "synthetic", "self_reported", "unrated"]
+
 
 class SearchIntent(BaseModel):
-    sport: Literal["pickleball"] = "pickleball"
+    sport: Sport = "pickleball"
     area: str = "Whitefield"
     date: date_type | None = None
     start_time: time | None = None
@@ -21,15 +24,26 @@ class Player(BaseModel):
     display_name: str
     area: str
     dupr_rating: float | None = Field(default=None, ge=1, le=8)
-    rating_source: Literal["dupr", "organizer_confirmed", "synthetic", "unrated"] = "unrated"
+    rating_source: RatingSource = "unrated"
     rating_confidence: float = Field(default=0.0, ge=0, le=1)
+    sport_ratings: dict[str, float] = Field(default_factory=dict)
+    rating_sources: dict[str, RatingSource] = Field(default_factory=dict)
     availability: list[str] = Field(default_factory=list)
     style: Literal["casual", "social", "competitive"] = "casual"
     reliability: float = Field(default=0.75, ge=0, le=1)
     community_score: float | None = Field(default=None, ge=1, le=5)
     community_rating_count: int = Field(default=0, ge=0)
+    community_scores: dict[str, float] = Field(default_factory=dict)
+    community_rating_counts: dict[str, int] = Field(default_factory=dict)
     friends: list[str] = Field(default_factory=list)
     opted_into_replacement_pool: bool = True
+
+
+def rating_for_sport(player: Player, sport: Sport) -> float | None:
+    """Return a sport-specific normalized rating, preserving legacy DUPR data."""
+    if sport in player.sport_ratings:
+        return player.sport_ratings[sport]
+    return player.dupr_rating if sport == "pickleball" else None
 
 
 class PublicPlayerProfile(BaseModel):
@@ -37,17 +51,23 @@ class PublicPlayerProfile(BaseModel):
     display_name: str
     area: str
     dupr_rating: float | None = Field(default=None, ge=1, le=8)
-    rating_source: Literal["dupr", "organizer_confirmed", "synthetic", "unrated"] = "unrated"
+    rating_source: RatingSource = "unrated"
     rating_confidence: float = Field(default=0.0, ge=0, le=1)
+    sport_ratings: dict[str, float] = Field(default_factory=dict)
+    rating_sources: dict[str, RatingSource] = Field(default_factory=dict)
     style: Literal["casual", "social", "competitive"] = "casual"
     reliability: float = Field(default=0.75, ge=0, le=1)
     community_score: float | None = Field(default=None, ge=1, le=5)
     community_rating_count: int = Field(default=0, ge=0)
+    community_scores: dict[str, float] = Field(default_factory=dict)
+    community_rating_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class ProfileUpdateRequest(BaseModel):
     area: str | None = None
     dupr_rating: float | None = Field(default=None, ge=1, le=8)
+    sport: Sport | None = None
+    skill_rating: float | None = Field(default=None, ge=1, le=8)
     style: Literal["casual", "social", "competitive"] | None = None
     availability: list[str] | None = None
 
@@ -65,8 +85,10 @@ class Session(BaseModel):
     style: Literal["casual", "social", "competitive"]
     capacity: int = Field(ge=2, le=16)
     confirmed_player_ids: list[str] = Field(default_factory=list)
+    waitlist_player_ids: list[str] = Field(default_factory=list)
     external_booking_url: str | None = None
     status: Literal["open", "full", "in_progress", "completed", "cancelled"] = "open"
+    sport: Sport = "pickleball"
 
     @property
     def open_slots(self) -> int:
@@ -99,6 +121,7 @@ class GroupProposal(BaseModel):
     skill_max: float
     style: Literal["casual", "social", "competitive"]
     capacity: int = Field(default=8, ge=2, le=16)
+    sport: Sport = "pickleball"
     explanation: str
 
 
@@ -131,6 +154,7 @@ class ReplacementResponse(BaseModel):
 class ParseRequest(BaseModel):
     query: str
     player_id: str | None = None
+    sport: Sport | None = None
 
 
 class JoinRequestRequest(BaseModel):
@@ -146,7 +170,7 @@ class JoinRequest(BaseModel):
     session_id: str
     player_id: str
     player_display_name: str | None = None
-    status: Literal["pending", "approved", "declined"] = "pending"
+    status: Literal["pending", "approved", "declined", "waitlisted", "withdrawn"] = "pending"
     created_at: datetime
 
 
@@ -168,8 +192,17 @@ class MyGroupsResponse(BaseModel):
     groups: list[Session]
 
 
+class PastGame(BaseModel):
+    session: Session
+    rank: int | None = None
+    score: float | None = None
+    ratings_count: int = 0
+    group_size: int
+
+
 class MyGamesResponse(BaseModel):
     games: list[Session]
+    past_games: list[PastGame] = Field(default_factory=list)
 
 
 class GroupViewResponse(BaseModel):
@@ -198,6 +231,7 @@ class ChatResponse(BaseModel):
 class CreateGroupRequest(BaseModel):
     query: str
     group_name: str | None = None
+    sport: Sport | None = None
 
 
 class CreatedGroupResponse(BaseModel):

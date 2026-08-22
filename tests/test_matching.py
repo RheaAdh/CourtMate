@@ -22,6 +22,15 @@ class MatchingTests(unittest.TestCase):
         self.assertTrue(results)
         self.assertEqual(results[0].session.id, "s1")
 
+    def test_parser_and_matcher_support_other_court_sports(self):
+        repo = InMemoryRepository()
+        intent = GeminiIntentParser().parse("Find a casual badminton game near Whitefield this evening")
+        self.assertEqual(intent.sport, "badminton")
+        results = search_sessions(repo.list_sessions(), intent)
+        self.assertTrue(results)
+        self.assertTrue(all(result.session.sport == "badminton" for result in results))
+        self.assertEqual(results[0].session.id, "s9")
+
 
     def test_replacement_excludes_confirmed_players_and_prefers_fit(self):
         repo = InMemoryRepository()

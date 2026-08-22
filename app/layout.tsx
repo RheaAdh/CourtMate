@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "CourtMate | Better pickleball groups",
+  title: "CourtMate | Better court-sport groups",
   description: "Find your people. Fill the court. Play the right game.",
   manifest: "/manifest.webmanifest",
 };

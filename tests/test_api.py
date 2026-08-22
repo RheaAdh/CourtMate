@@ -1,5 +1,6 @@
 import os
 import unittest
+from datetime import date, time, timedelta
 
 os.environ["COURTMATE_DATASTORE"] = "memory"
 os.environ["COURTMATE_AUTH_REQUIRED"] = "false"
@@ -7,7 +8,8 @@ os.environ["GEMINI_API_KEY"] = ""
 
 from fastapi.testclient import TestClient
 
-from backend.main import app
+from backend.main import app, repository
+from backend.models import Session
 
 
 class ApiFlowTests(unittest.TestCase):
@@ -39,6 +41,57 @@ class ApiFlowTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["area"], "Brookefield")
         self.assertEqual(payload["availability"], ["weekend mornings"])
+
+    def test_profile_and_search_are_sport_aware(self):
+        profile = self.client.post(
+            "/v1/me/profile",
+            json={"sport": "badminton", "skill_rating": 3.8},
+            headers={"X-CourtMate-Player-ID": "sport-profile-player"},
+        )
+        self.assertEqual(profile.status_code, 200)
+        self.assertEqual(profile.json()["sport_ratings"]["badminton"], 3.8)
+
+        search = self.client.post(
+            "/v1/sessions/search",
+            json={"query": "Find a badminton game near Whitefield this evening", "sport": "badminton"},
+            headers={"X-CourtMate-Player-ID": "sport-profile-player"},
+        )
+        self.assertEqual(search.status_code, 200)
+        self.assertTrue(search.json()["recommendations"])
+        self.assertTrue(all(item["session"]["sport"] == "badminton" for item in search.json()["recommendations"]))
+
+    def test_expired_session_closes_and_stops_new_changes(self):
+        session_id = "expired-session"
+        repository.save_session(
+            Session(
+                id=session_id,
+                sport="badminton",
+                group_name="Expired Badminton Game",
+                organizer_id="p1",
+                area="Whitefield",
+                session_date=date.today() - timedelta(days=1),
+                start_time=time(18),
+                end_time=time(20),
+                skill_min=3,
+                skill_max=4,
+                style="casual",
+                capacity=4,
+                confirmed_player_ids=["p1"],
+            )
+        )
+        join = self.client.post(f"/v1/sessions/{session_id}/join", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(join.status_code, 409)
+        self.assertIn("closed", join.json()["detail"])
+        self.assertEqual(repository.get_session(session_id).status, "completed")
+
+        history = self.client.get("/v1/me/games", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(history.status_code, 200)
+        past_game = next(item for item in history.json()["past_games"] if item["session"]["id"] == session_id)
+        self.assertEqual(past_game["group_size"], 1)
+        self.assertEqual(past_game["rank"], 1)
+
+        chat = self.client.post(f"/v1/sessions/{session_id}/chat", json={"message": "Can we still join?"}, headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(chat.status_code, 409)
 
     def test_no_match_proposes_group_and_join_request_is_explicit(self):
         response = self.client.post("/v1/sessions/search", json={"query": "Find an advanced game near Indiranagar this Sunday evening", "player_id": "p1"})
@@ -88,6 +141,14 @@ class ApiFlowTests(unittest.TestCase):
         p1_entry = next(entry for entry in leaderboard.json()["entries"] if entry["player"]["id"] == "p1")
         self.assertEqual(p1_entry["score"], 5.0)
         self.assertEqual(p1_entry["ratings_count"], 1)
+
+        waitlist = self.client.post("/v1/sessions/s7/join", headers={"X-CourtMate-Player-ID": "p4"})
+        self.assertEqual(waitlist.status_code, 200)
+        self.assertEqual(waitlist.json()["status"], "waitlisted")
+        leave = self.client.post("/v1/sessions/s7/leave", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(leave.status_code, 200)
+        self.assertIn("p4", leave.json()["confirmed_player_ids"])
+        self.assertNotIn("p4", leave.json()["waitlist_player_ids"])
 
 
 if __name__ == "__main__":

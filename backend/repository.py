@@ -26,7 +26,7 @@ class Repository(Protocol):
 class DemoData:
     @staticmethod
     def seed_players() -> list[Player]:
-        return [
+        players = [
             Player(id="p1", display_name="Ananya", area="Whitefield", dupr_rating=3.2, rating_source="dupr", rating_confidence=.9, style="casual", reliability=.94, friends=["p2"]),
             Player(id="p2", display_name="Kavya", area="Whitefield", dupr_rating=3.4, rating_source="dupr", rating_confidence=.9, style="casual", reliability=.88, friends=["p1"]),
             Player(id="p3", display_name="Rohit", area="Whitefield", dupr_rating=3.1, rating_source="organizer_confirmed", rating_confidence=.7, style="social", reliability=.91),
@@ -42,18 +42,35 @@ class DemoData:
             Player(id="p13", display_name="Tara", area="Whitefield", dupr_rating=3.6, rating_source="dupr", rating_confidence=.88, style="competitive", reliability=.93),
             Player(id="p14", display_name="Neil", area="Brookefield", dupr_rating=3.4, rating_source="dupr", rating_confidence=.86, style="social", reliability=.87),
         ]
+        for player in players:
+            base = player.dupr_rating
+            if base is not None:
+                player.sport_ratings = {
+                    "pickleball": base,
+                    "badminton": round(min(8, base + .4), 1),
+                    "tennis": round(max(1, base - .2), 1),
+                    "padel": round(base, 1),
+                    "squash": round(min(8, base + .1), 1),
+                }
+                player.rating_sources = {sport: player.rating_source for sport in player.sport_ratings}
+        return players
 
     @staticmethod
     def seed_sessions() -> list[Session]:
         return [
-            Session(id="s1", group_name="Sunday Rally Crew", organizer_id="p1", area="Whitefield", session_date=date(2026, 8, 30), start_time=time(8), end_time=time(10), skill_min=3.0, skill_max=3.5, style="casual", capacity=8, confirmed_player_ids=["p1", "p2", "p3", "p6"], external_booking_url="https://playo.co/"),
-            Session(id="s2", group_name="East Bengaluru Social", organizer_id="p3", area="Brookefield", session_date=date(2026, 8, 30), start_time=time(9), end_time=time(11), skill_min=2.8, skill_max=3.4, style="social", capacity=8, confirmed_player_ids=["p3", "p5"], external_booking_url="https://hudle.in/"),
-            Session(id="s3", group_name="Whitefield Competitive Ladder", organizer_id="p4", area="Whitefield", session_date=date(2026, 8, 30), start_time=time(19), end_time=time(21), skill_min=3.4, skill_max=4.0, style="competitive", capacity=8, confirmed_player_ids=["p4"], external_booking_url="https://playo.co/"),
-            Session(id="s4", group_name="Whitefield Beginner Rally", organizer_id="p7", area="Whitefield", session_date=date(2026, 8, 29), start_time=time(8), end_time=time(10), skill_min=1.8, skill_max=2.8, style="social", capacity=8, confirmed_player_ids=["p7", "p8", "p12"], external_booking_url="https://hudle.in/"),
-            Session(id="s5", group_name="Whitefield After-Work Doubles", organizer_id="p6", area="Whitefield", session_date=date(2026, 9, 2), start_time=time(19, 30), end_time=time(21, 30), skill_min=3.0, skill_max=3.6, style="casual", capacity=8, confirmed_player_ids=["p1", "p2", "p6", "p11", "p14", "p3"], external_booking_url="https://playo.co/"),
-            Session(id="s6", group_name="Kadugodi Advanced Ladder", organizer_id="p10", area="Kadugodi", session_date=date(2026, 9, 5), start_time=time(7), end_time=time(9), skill_min=3.8, skill_max=4.5, style="competitive", capacity=8, confirmed_player_ids=["p9", "p10", "p13"], external_booking_url="https://playo.co/"),
-            Session(id="s7", group_name="Whitefield Full Court Social", organizer_id="p3", area="Whitefield", session_date=date(2026, 8, 30), start_time=time(11), end_time=time(13), skill_min=2.8, skill_max=3.4, style="social", capacity=8, confirmed_player_ids=["p1", "p2", "p3", "p6", "p7", "p8", "p11", "p14"], external_booking_url="https://hudle.in/", status="full"),
-            Session(id="s8", group_name="Brookefield Saturday Mix", organizer_id="p14", area="Brookefield", session_date=date(2026, 9, 5), start_time=time(17), end_time=time(19), skill_min=3.0, skill_max=3.7, style="social", capacity=8, confirmed_player_ids=["p4", "p5", "p8", "p14"], external_booking_url="https://playo.co/"),
+            Session(id="s1", sport="pickleball", group_name="Sunday Rally Crew", organizer_id="p1", area="Whitefield", session_date=date(2026, 8, 30), start_time=time(8), end_time=time(10), skill_min=3.0, skill_max=3.5, style="casual", capacity=8, confirmed_player_ids=["p1", "p2", "p3", "p6"], external_booking_url="https://playo.co/"),
+            Session(id="s2", sport="pickleball", group_name="East Bengaluru Social", organizer_id="p3", area="Brookefield", session_date=date(2026, 8, 30), start_time=time(9), end_time=time(11), skill_min=2.8, skill_max=3.4, style="social", capacity=8, confirmed_player_ids=["p3", "p5"], external_booking_url="https://hudle.in/"),
+            Session(id="s3", sport="pickleball", group_name="Whitefield Competitive Ladder", organizer_id="p4", area="Whitefield", session_date=date(2026, 8, 30), start_time=time(19), end_time=time(21), skill_min=3.4, skill_max=4.0, style="competitive", capacity=8, confirmed_player_ids=["p4"], external_booking_url="https://playo.co/"),
+            Session(id="s4", sport="pickleball", group_name="Whitefield Beginner Rally", organizer_id="p7", area="Whitefield", session_date=date(2026, 8, 29), start_time=time(8), end_time=time(10), skill_min=1.8, skill_max=2.8, style="social", capacity=8, confirmed_player_ids=["p7", "p8", "p12"], external_booking_url="https://hudle.in/"),
+            Session(id="s5", sport="pickleball", group_name="Whitefield After-Work Doubles", organizer_id="p6", area="Whitefield", session_date=date(2026, 9, 2), start_time=time(19, 30), end_time=time(21, 30), skill_min=3.0, skill_max=3.6, style="casual", capacity=8, confirmed_player_ids=["p1", "p2", "p6", "p11", "p14", "p3"], external_booking_url="https://playo.co/"),
+            Session(id="s6", sport="pickleball", group_name="Kadugodi Advanced Ladder", organizer_id="p10", area="Kadugodi", session_date=date(2026, 9, 5), start_time=time(7), end_time=time(9), skill_min=3.8, skill_max=4.5, style="competitive", capacity=8, confirmed_player_ids=["p9", "p10", "p13"], external_booking_url="https://playo.co/"),
+            Session(id="s7", sport="pickleball", group_name="Whitefield Full Court Social", organizer_id="p3", area="Whitefield", session_date=date(2026, 8, 30), start_time=time(11), end_time=time(13), skill_min=2.8, skill_max=3.4, style="social", capacity=8, confirmed_player_ids=["p1", "p2", "p3", "p6", "p7", "p8", "p11", "p14"], external_booking_url="https://hudle.in/", status="full"),
+            Session(id="s8", sport="pickleball", group_name="Brookefield Saturday Mix", organizer_id="p14", area="Brookefield", session_date=date(2026, 9, 5), start_time=time(17), end_time=time(19), skill_min=3.0, skill_max=3.7, style="social", capacity=8, confirmed_player_ids=["p4", "p5", "p8", "p14"], external_booking_url="https://playo.co/"),
+            Session(id="s9", sport="badminton", group_name="Whitefield Evening Badminton", organizer_id="p6", area="Whitefield", session_date=date(2026, 9, 2), start_time=time(19), end_time=time(21), skill_min=3.2, skill_max=4.0, style="casual", capacity=8, confirmed_player_ids=["p1", "p2", "p6", "p11"], external_booking_url="https://playo.co/"),
+            Session(id="s10", sport="padel", group_name="Brookefield Padel Social", organizer_id="p14", area="Brookefield", session_date=date(2026, 9, 5), start_time=time(17), end_time=time(19), skill_min=3.0, skill_max=3.8, style="social", capacity=8, confirmed_player_ids=["p4", "p8", "p14"], external_booking_url="https://hudle.in/"),
+            Session(id="s11", sport="tennis", group_name="Kadugodi Tennis Ladder", organizer_id="p10", area="Kadugodi", session_date=date(2026, 9, 5), start_time=time(7), end_time=time(9), skill_min=3.4, skill_max=4.2, style="competitive", capacity=4, confirmed_player_ids=["p9", "p10", "p13"], external_booking_url="https://playo.co/"),
+            Session(id="s12", sport="squash", group_name="Whitefield Squash After Work", organizer_id="p3", area="Whitefield", session_date=date(2026, 9, 3), start_time=time(19), end_time=time(21), skill_min=2.8, skill_max=3.8, style="social", capacity=4, confirmed_player_ids=["p3", "p6"], external_booking_url="https://playo.co/"),
+            Session(id="s13", sport="table_tennis", group_name="Whitefield Table Tennis Mix", organizer_id="p11", area="Whitefield", session_date=date(2026, 9, 4), start_time=time(19), end_time=time(21), skill_min=2.5, skill_max=3.6, style="casual", capacity=6, confirmed_player_ids=["p1", "p11", "p14"], external_booking_url="https://hudle.in/"),
         ]
 
 
