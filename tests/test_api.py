@@ -21,6 +21,14 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(payload["action"], "join_existing")
         self.assertEqual(payload["recommendations"][0]["session"]["id"], "s1")
 
+    def test_group_view_returns_public_member_profiles(self):
+        response = self.client.get("/v1/sessions/s1/group")
+        self.assertEqual(response.status_code, 200)
+        members = response.json()["members"]
+        self.assertEqual({member["id"] for member in members}, {"p1", "p2", "p3", "p6"})
+        self.assertEqual(members[0]["dupr_rating"], 3.2)
+        self.assertNotIn("friends", members[0])
+
     def test_no_match_proposes_group_and_join_request_is_explicit(self):
         response = self.client.post("/v1/sessions/search", json={"query": "Find an advanced game near Indiranagar this Sunday evening", "player_id": "p1"})
         self.assertEqual(response.json()["action"], "create_group")

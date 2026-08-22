@@ -30,6 +30,17 @@ class Player(BaseModel):
     opted_into_replacement_pool: bool = True
 
 
+class PublicPlayerProfile(BaseModel):
+    id: str
+    display_name: str
+    area: str
+    dupr_rating: float | None = Field(default=None, ge=1, le=8)
+    rating_source: Literal["dupr", "organizer_confirmed", "synthetic", "unrated"] = "unrated"
+    rating_confidence: float = Field(default=0.0, ge=0, le=1)
+    style: Literal["casual", "social", "competitive"] = "casual"
+    reliability: float = Field(default=0.75, ge=0, le=1)
+
+
 class ProfileUpdateRequest(BaseModel):
     area: str | None = None
     dupr_rating: float | None = Field(default=None, ge=1, le=8)
@@ -133,6 +144,11 @@ class JoinRequest(BaseModel):
 class JoinRequestsResponse(BaseModel):
     session: Session
     requests: list[JoinRequest]
+
+
+class GroupViewResponse(BaseModel):
+    session: Session
+    members: list[PublicPlayerProfile]
 
 
 class CreateGroupRequest(BaseModel):

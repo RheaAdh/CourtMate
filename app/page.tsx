@@ -82,6 +82,22 @@ type JoinRequest = {
   status: string;
 };
 
+type GroupMember = {
+  id: string;
+  display_name: string;
+  area: string;
+  dupr_rating?: number | null;
+  rating_source: string;
+  rating_confidence: number;
+  style: string;
+  reliability: number;
+};
+
+type GroupView = {
+  session: Session;
+  members: GroupMember[];
+};
+
 const demoSessions: Session[] = [
   { id: "s1", group_name: "Sunday Rally Crew", area: "Whitefield", session_date: "2026-08-30", start_time: "08:00", end_time: "10:00", skill_min: 3, skill_max: 3.5, style: "casual", capacity: 8, confirmed_player_ids: ["p1", "p2", "p3", "p6"], open_slots: 4, score: .925, explanation: "Matches your area, Sunday morning, casual style, and intermediate skill band. 4 open slots." },
   { id: "s2", group_name: "East Bengaluru Social", area: "Brookefield", session_date: "2026-08-30", start_time: "09:00", end_time: "11:00", skill_min: 2.8, skill_max: 3.4, style: "social", capacity: 8, confirmed_player_ids: ["p3", "p5"], open_slots: 6, score: .748, explanation: "A nearby social group with a wider skill range and plenty of room to join." },
@@ -110,9 +126,17 @@ export default function Home() {
   const [createdGroupId, setCreatedGroupId] = useState<string | null>(null);
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
   const [requestsLoading, setRequestsLoading] = useState(false);
+  const [viewedGroup, setViewedGroup] = useState<GroupView | null>(null);
+  const [groupLoading, setGroupLoading] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
   const [toast, setToast] = useState("");
 
   useEffect(() => {
+    if (process.env.NODE_ENV === "development" && "serviceWorker" in navigator) {
+      void navigator.serviceWorker.getRegistrations().then((registrations) => {
+        registrations.forEach((registration) => void registration.unregister());
+      });
+    }
     if (!auth) {
       setAuthReady(true);
       return;
@@ -305,6 +329,24 @@ export default function Home() {
     }
   }
 
+  async function viewGroup(sessionId: string) {
+    setGroupLoading(true);
+    try {
+      const response = await authorizedFetch(`${apiUrl}/v1/sessions/${sessionId}/group`);
+      if (!response.ok) {
+        if (response.status === 401) throw new Error("Your sign-in session expired. Sign in again.");
+        if (response.status === 404) throw new Error("This group no longer exists.");
+        throw new Error(`Group request failed (${response.status})`);
+      }
+      setViewedGroup(await response.json() as GroupView);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not load this group");
+      window.setTimeout(() => setToast(""), 2600);
+    } finally {
+      setGroupLoading(false);
+    }
+  }
+
   async function loadJoinRequests() {
     if (!createdGroupId) return;
     setRequestsLoading(true);
@@ -331,8 +373,9 @@ export default function Home() {
     <main className="shell">
       <nav className="nav">
         <div className="brand"><span className="brand-mark">CM</span><span>CourtMate</span></div>
-        <div className="nav-right"><span className="location-pill"><span className="dot" /> Whitefield, Bengaluru</span>{user ? <><span className="user-name">{user.displayName ?? user.email}</span><button className="avatar" onClick={() => void signOutUser()} title="Sign out">{(user.displayName ?? user.email ?? "C")[0].toUpperCase()}</button></> : <button className="sign-in-button" onClick={() => void signIn()}>{authReady ? "Sign in with Google" : "Loading auth"}</button>}</div>
+        <div className="nav-right"><span className="location-pill"><span className="dot" /> Whitefield, Bengaluru</span>{user ? <><span className="user-name">{user.displayName ?? user.email}</span><button className="avatar" onClick={() => setShowProfile(!showProfile)} title="Open profile">{(user.displayName ?? user.email ?? "C")[0].toUpperCase()}</button></> : <button className="sign-in-button" onClick={() => void signIn()}>{authReady ? "Sign in with Google" : "Loading auth"}</button>}</div>
       </nav>
+      {showProfile && profile && <section className="profile-popover"><div className="profile-popover-top"><span className="kicker">YOUR PROFILE</span><button className="close-button" onClick={() => setShowProfile(false)}>×</button></div><h3>{profile.display_name}</h3><p>{user?.email}</p><div className="profile-stats"><span><strong>{profile.dupr_rating ? profile.dupr_rating.toFixed(1) : "--"}</strong><small>DUPR</small></span><span><strong>{profile.area}</strong><small>AREA</small></span><span><strong>{profile.style}</strong><small>STYLE</small></span></div><button className="dark-button" onClick={() => void setDUPRRating()}>Update DUPR <span>→</span></button><button className="text-button" onClick={() => void signOutUser()}>Sign out</button></section>}
 
       <section className="hero">
         <div className="eyebrow">THE GROUP INTELLIGENCE LAYER FOR PICKLEBALL</div>
@@ -357,7 +400,7 @@ export default function Home() {
               <div className="card-top"><span className="date-badge"><strong>{new Date(session.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><small>{new Date(session.session_date).getDate()}</small></span><div className="session-meta"><div className="session-title-row"><h3>{session.group_name}</h3><span className="fit-score">{Math.round(session.score * 100)}% fit</span></div><p>{session.start_time} – {session.end_time} · {session.area}</p></div><button className="more">•••</button></div>
               <div className="tags"><span className="tag rating">DUPR {session.skill_min.toFixed(1)}–{session.skill_max.toFixed(1)}</span><span className="tag">{session.style}</span><span className="tag open">{session.open_slots} spots open</span></div>
               <p className="explanation"><span>✦</span>{session.explanation}</p>
-              <div className="card-bottom"><div className="member-stack"><span className="member coral">A</span><span className="member green">K</span><span className="member blue">R</span><span className="member-count">+{session.confirmed_player_ids.length + 2}</span></div><button className="join-button" onClick={() => void joinSession(session.id, session.group_name)}>Request to join <span>↗</span></button></div>
+              <div className="card-bottom"><div className="member-stack"><span className="member coral">A</span><span className="member green">K</span><span className="member blue">R</span><span className="member-count">+{session.confirmed_player_ids.length + 2}</span></div><div className="card-actions"><button className="join-button secondary-button" onClick={() => void viewGroup(session.id)}>{groupLoading ? "Loading" : "View group"}</button><button className="join-button" onClick={() => void joinSession(session.id, session.group_name)}>Request to join <span>↗</span></button></div></div>
             </article>)}
           </div>
         </div>
@@ -370,6 +413,7 @@ export default function Home() {
       </section>
 
       <footer className="footer"><span>CourtMate is not a booking app.</span><span>Book your court on Playo, Hudle, or with your venue.</span></footer>
+      {viewedGroup && <div className="group-modal-backdrop" onClick={() => setViewedGroup(null)}><section className="group-modal" onClick={(event) => event.stopPropagation()}><div className="group-modal-header"><div><span className="kicker">GROUP PREVIEW</span><h2>{viewedGroup.session.group_name}</h2><p>{viewedGroup.session.start_time} – {viewedGroup.session.end_time} · {viewedGroup.session.area}</p></div><button className="close-button" onClick={() => setViewedGroup(null)}>×</button></div><div className="group-summary"><span><strong>{viewedGroup.members.length}/{viewedGroup.session.capacity}</strong><small>PLAYERS</small></span><span><strong>{viewedGroup.session.skill_min.toFixed(1)}–{viewedGroup.session.skill_max.toFixed(1)}</strong><small>DUPR BAND</small></span><span><strong>{viewedGroup.session.style}</strong><small>INTENSITY</small></span></div><div className="member-grid">{viewedGroup.members.map((member) => <article className="member-profile" key={member.id}><div className="member-profile-avatar">{member.display_name[0]}</div><div className="member-profile-copy"><h3>{member.display_name}</h3><p>{member.area} · {member.style}</p><div className="member-profile-meta"><strong>{member.dupr_rating ? `DUPR ${member.dupr_rating.toFixed(1)}` : "DUPR not set"}</strong><span>{Math.round(member.reliability * 100)}% reliable</span></div></div></article>)}</div><button className="dark-button modal-join" onClick={() => void joinSession(viewedGroup.session.id, viewedGroup.session.group_name)}>Request to join <span>→</span></button></section></div>}
       {toast && <div className="toast">{toast}</div>}
     </main>
   );

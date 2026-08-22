@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
 from .matching import search_sessions, suggest_replacements
-from .models import CreateGroupRequest, CreatedGroupResponse, Feedback, FeedbackRequest, GroupProposal, JoinRequest, JoinRequestRequest, JoinRequestsResponse, ParseRequest, Player, ProfileUpdateRequest, ReplacementResponse, SearchIntent, SearchResponse, Session
+from .models import CreateGroupRequest, CreatedGroupResponse, Feedback, FeedbackRequest, GroupProposal, GroupViewResponse, JoinRequest, JoinRequestRequest, JoinRequestsResponse, ParseRequest, Player, ProfileUpdateRequest, PublicPlayerProfile, ReplacementResponse, SearchIntent, SearchResponse, Session
 from .repository import create_repository
 
 
@@ -56,6 +56,19 @@ def update_profile(request: ProfileUpdateRequest, player: Player = Depends(get_c
     updates = request.model_dump(exclude_none=True)
     updated = player.model_copy(update=updates)
     return repository.save_player(updated)
+
+
+def _public_profile(player: Player) -> PublicPlayerProfile:
+    return PublicPlayerProfile(
+        id=player.id,
+        display_name=player.display_name,
+        area=player.area,
+        dupr_rating=player.dupr_rating,
+        rating_source=player.rating_source,
+        rating_confidence=player.rating_confidence,
+        style=player.style,
+        reliability=player.reliability,
+    )
 
 
 def _group_proposal(intent: SearchIntent, player_id: str, proposed_name: str | None = None) -> GroupProposal:
@@ -107,6 +120,16 @@ def join_requests(session_id: str, player: Player = Depends(get_current_player))
     if session.organizer_id != player.id:
         raise HTTPException(status_code=403, detail="Only the group organizer can view join requests")
     return JoinRequestsResponse(session=session, requests=repository.list_join_requests(session_id))
+
+
+@app.get("/v1/sessions/{session_id}/group", response_model=GroupViewResponse)
+def group_view(session_id: str, player: Player = Depends(get_current_player)) -> GroupViewResponse:
+    session = repository.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    players_by_id = {candidate.id: candidate for candidate in repository.list_players()}
+    members = [_public_profile(players_by_id[player_id]) for player_id in session.confirmed_player_ids if player_id in players_by_id]
+    return GroupViewResponse(session=session, members=members)
 
 
 @app.post("/v1/groups", response_model=CreatedGroupResponse)
