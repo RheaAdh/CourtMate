@@ -1,10 +1,30 @@
 {
+  "id": "/",
   "name": "CourtMate",
   "short_name": "CourtMate",
   "description": "Find your people. Fill the court.",
-  "start_url": "/",
+  "start_url": "/?source=pwa",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone"],
+  "orientation": "any",
+  "lang": "en-IN",
+  "dir": "ltr",
   "background_color": "#f8f7f2",
   "theme_color": "#192321",
-  "icons": []
+  "categories": ["sports", "social", "lifestyle"],
+  "icons": [
+    {
+      "src": "/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
 }

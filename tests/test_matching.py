@@ -49,6 +49,15 @@ class MatchingTests(unittest.TestCase):
         results = search_sessions(repo.list_sessions(), intent, repo.list_players(), player)
         self.assertIn("s4", {result.session.id for result in results})
 
+    def test_nearby_profile_search_prioritizes_style_and_availability(self):
+        repo = InMemoryRepository()
+        player = repo.get_player("p1")
+        player.availability = ["weekend mornings"]
+        intent = GeminiIntentParser().parse("Show me nearby pickleball games that match my profile")
+        results = search_sessions(repo.list_sessions(), intent, repo.list_players(), player)
+        self.assertTrue(results)
+        self.assertEqual(results[0].session.id, "s1")
+
     def test_parser_and_matcher_support_other_court_sports(self):
         repo = InMemoryRepository()
         intent = GeminiIntentParser().parse("Find a casual badminton game near Whitefield this evening")

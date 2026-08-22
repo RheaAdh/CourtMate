@@ -48,6 +48,20 @@ def _time_fit(start, end, query: SearchIntent) -> float:
     return 1.0 if overlaps else 0.0
 
 
+def _profile_availability_fit(session: Session, player: Player | None) -> float:
+    """Use saved availability as a ranking signal when the search has no time."""
+    if not player or not player.availability:
+        return 0.7
+    day_type = "weekend" if session.session_date.weekday() >= 5 else "weekday"
+    if session.start_time.hour < 12:
+        day_part = "mornings"
+    elif session.start_time.hour >= 16:
+        day_part = "evenings"
+    else:
+        return 0.45
+    return 1.0 if f"{day_type} {day_part}" in player.availability else 0.25
+
+
 def search_sessions(sessions: list[Session], query: SearchIntent, players: list[Player] | None = None, player: Player | None = None) -> list[SessionRecommendation]:
     results: list[SessionRecommendation] = []
     for session in sessions:
@@ -60,7 +74,7 @@ def search_sessions(sessions: list[Session], query: SearchIntent, players: list[
         location_matches, area_fit, distance = _location_match(session, query, player)
         if not location_matches:
             continue
-        time_fit = _time_fit(session.start_time, session.end_time, query)
+        time_fit = _time_fit(session.start_time, session.end_time, query) if query.start_time is not None else _profile_availability_fit(session, player)
         if time_fit == 0:
             continue
         skill_min = query.skill_min if query.skill_min is not None else session.skill_min
@@ -73,7 +87,9 @@ def search_sessions(sessions: list[Session], query: SearchIntent, players: list[
         player_rating = rating_for_sport(player, query.sport) if player and query.skill_min is None and query.skill_max is None else None
         if player and player_rating is not None and not session.skill_min <= player_rating <= session.skill_max:
             continue
-        style_fit = 1.0 if query.style in {"any", session.style} else 0.45
+        style_fit = 1.0 if query.style == session.style else 0.45
+        if query.style == "any" and player:
+            style_fit = 1.0 if player.style == session.style else 0.55
         member_reliability = 0.0
         familiarity = 0.0
         if players:

@@ -167,7 +167,7 @@ type CMRHistoryPoint = {
 
 type ActivityTab = "requests" | "groups" | "games" | "incoming";
 type AppTab = "search" | "explore" | "games" | "profile" | "about";
-type GamesViewTab = "requested" | "confirmed" | "past" | "incoming";
+type GamesViewTab = "pending" | "upcoming" | "history" | "requested" | "confirmed" | "past" | "incoming";
 
 type ProfileDraft = {
   sport: Sport;
@@ -267,14 +267,16 @@ export default function Home() {
   const [feedbackWouldReturn, setFeedbackWouldReturn] = useState(true);
   const [playerRatings, setPlayerRatings] = useState<Record<string, string>>({});
   const [activeTab, setActiveTab] = useState<AppTab>("search");
-  const [gamesViewTab, setGamesViewTab] = useState<GamesViewTab>("requested");
+  const [gamesViewTab, setGamesViewTab] = useState<GamesViewTab>("upcoming");
   const [toast, setToast] = useState("");
 
   useEffect(() => {
-    if (process.env.NODE_ENV === "development" && "serviceWorker" in navigator) {
-      void navigator.serviceWorker.getRegistrations().then((registrations) => {
-        registrations.forEach((registration) => void registration.unregister());
-      });
+    if ("serviceWorker" in navigator) {
+      if (process.env.NODE_ENV === "production") {
+        void navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+      } else {
+        void navigator.serviceWorker.getRegistration("/sw.js").then((registration) => registration?.unregister());
+      }
     }
     if (!auth) {
       setAuthReady(true);
@@ -732,7 +734,7 @@ export default function Home() {
     setActiveTab(tab);
     setViewedGroup(null);
     if (tab === "explore") {
-      const exploreQuery = `Find nearby ${selectedSport} games matching my skill rating near my location`;
+      const exploreQuery = `Show me nearby ${selectedSport} games that match my profile`;
       setQuery(exploreQuery);
       void search(undefined, exploreQuery);
     }
@@ -741,7 +743,9 @@ export default function Home() {
     }
   }
 
-  const requestedGames = myRequests.filter(({ request }) => request.status !== "approved");
+  const requestedGames = myRequests.filter(({ request }) => request.status === "pending" || request.status === "waitlisted");
+  const today = new Date().toISOString().slice(0, 10);
+  const upcomingGames = Array.from(new Map([...approvedGames, ...myGroups.filter((group) => group.session_date >= today && group.status !== "completed" && group.status !== "cancelled")].map((game) => [game.id, game])).values()).sort((a, b) => `${a.session_date} ${a.start_time}`.localeCompare(`${b.session_date} ${b.start_time}`));
   const profileHistory = profile?.cmr_history?.[profileDraft.sport] ?? [];
   const currentCmr = profile?.cmr_ratings?.[profileDraft.sport];
 
@@ -761,7 +765,7 @@ export default function Home() {
       <section className={`hero ${activeTab === "search" ? "search-hero" : "explore-hero"}`}>
         <div className="eyebrow">{activeTab === "search" ? "FIND YOUR PEOPLE" : "YOUR NEXT GOOD GAME"}</div>
         <h1 className="compact-hero-title">{activeTab === "search" ? <>Find a game <em>you&apos;ll enjoy.</em></> : <>Games that fit <em>your level.</em></>}</h1>
-        <p className="hero-copy">{activeTab === "search" ? "Tell us how you want to play. We&apos;ll find the group fit." : `Nearby ${sportLabel(selectedSport)} games matched to you.`}</p>
+        <p className="hero-copy">{activeTab === "search" ? "Tell us how you want to play. We&apos;ll find the group fit." : `Games around you, matched to your profile.`}</p>
         {activeTab === "search" ? <>
           <div className="search-tip"><span className="search-tip-mark">✦</span><span><strong>Better matches:</strong> include your level, sport, timing preference, date, location, and mood.</span></div>
           <form className="search-box" onSubmit={search}>
@@ -770,12 +774,12 @@ export default function Home() {
           <button type="button" className={`mic ${isListening ? "listening" : ""}`} onClick={startVoice} aria-label={isListening ? "Listening" : "Search by voice"} title={isListening ? "Listening" : "Search by voice"}><MicrophoneIcon /><span>{isListening ? "Listening" : ""}</span></button>
           <button className="search-button" type="submit">{loading ? "Finding" : "Find my group"}<span>↗</span></button>
           </form>
-        </> : <button className="explore-refresh-button" onClick={() => { const exploreQuery = `Find nearby ${selectedSport} games matching my skill rating near my location`; void search(undefined, exploreQuery); }}>{loading ? "Finding matches" : "Refresh matches"}<span>↗</span></button>}
+        </> : <button className="explore-refresh-button" onClick={() => { const exploreQuery = `Show me nearby ${selectedSport} games that match my profile`; void search(undefined, exploreQuery); }}>{loading ? "Finding matches" : "Refresh matches"}<span>↗</span></button>}
       </section>
 
       <section className="content-grid search-layout">
         <div className="results-column">
-          <div className="section-heading"><div><span className="kicker">{activeTab === "search" ? "GROUP DISCOVERY" : "MATCHING YOUR PROFILE"}</span><h2>{sessions.length ? activeTab === "search" ? "Groups that fit your ask" : "Nearby games at your level" : "No exact match yet"}</h2></div><span className="result-count">{sessions.length} good fits</span></div>
+          <div className="section-heading"><div><span className="kicker">{activeTab === "search" ? "GROUP DISCOVERY" : "AROUND YOU"}</span><h2>{sessions.length ? activeTab === "search" ? "Groups that fit your ask" : "Games around you" : "No exact match yet"}</h2></div><span className="result-count">{sessions.length} good fits</span></div>
           {!sessions.length && groupProposal && <div className="empty-state"><span className="empty-icon">+</span><span className="kicker">START THE NEXT GROUP</span><label className="group-name-editor"><span>Group name</span><input value={groupNameDraft} onChange={(event) => setGroupNameDraft(event.target.value)} aria-label="Group name" /></label><p>{groupProposal.explanation}</p><div className="tags"><span className="tag rating">{sportLabel(groupProposal.sport)} {groupProposal.skill_min.toFixed(1)}–{groupProposal.skill_max.toFixed(1)}</span><span className="tag">{groupProposal.style}</span><span className="tag open">{groupProposal.area}</span></div><button className="join-button create-button" disabled={!groupNameDraft.trim() || createGroupLoading} onClick={() => void createGroup()}>{createGroupLoading ? "Creating group" : "Create this group"}<span>↗</span></button></div>}
           <div className="session-list">
             {sessions.map((session, index) => <article className={`session-card ${index === 0 ? "featured" : ""}`} key={session.id}>
@@ -790,8 +794,11 @@ export default function Home() {
       </>}
 
       {activeTab === "games" && <section className="page-view games-page">
-        <div className="page-heading"><span className="kicker">YOUR GAMES</span><h1>Know where you stand.</h1><p>Requests, confirmed games, and your history.</p></div>
-        <div className="page-tabs"><button className={gamesViewTab === "confirmed" ? "active" : ""} onClick={() => setGamesViewTab("confirmed")}>Confirmed <span>{approvedGames.length}</span></button><button className={gamesViewTab === "requested" ? "active" : ""} onClick={() => setGamesViewTab("requested")}>Requests <span>{requestedGames.length}</span></button><button className={gamesViewTab === "incoming" ? "active" : ""} onClick={() => setGamesViewTab("incoming")}>Pending <span>{incomingRequests.length}</span></button><button className={gamesViewTab === "past" ? "active" : ""} onClick={() => setGamesViewTab("past")}>History <span>{pastGames.length}</span></button></div>
+        <div className="page-heading"><span className="kicker">YOUR GAMES</span><h1>Know where you stand.</h1><p>Upcoming games, pending requests, and history.</p></div>
+        <div className="page-tabs"><button className={gamesViewTab === "upcoming" ? "active" : ""} onClick={() => setGamesViewTab("upcoming")}>Upcoming <span>{upcomingGames.length}</span></button><button className={gamesViewTab === "pending" ? "active" : ""} onClick={() => setGamesViewTab("pending")}>Pending <span>{requestedGames.length}</span></button><button className={gamesViewTab === "history" ? "active" : ""} onClick={() => setGamesViewTab("history")}>History <span>{pastGames.length}</span></button></div>
+        {!activityLoading && gamesViewTab === "upcoming" && <div className="game-list">{upcomingGames.length ? upcomingGames.map((game) => { const owned = myGroups.some((group) => group.id === game.id); const groupRequests = incomingRequests.filter(({ session }) => session.id === game.id); const waitlistCount = game.waitlist_player_ids?.length ?? 0; return <article className="game-row upcoming-game-row" key={game.id}><div className="game-date confirmed"><strong>{new Date(game.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><span>{new Date(game.session_date).getDate()}</span></div><div className="game-copy"><h2>{game.group_name}</h2><p>{sportLabel(game.sport)} · {game.session_date} · {game.start_time}–{game.end_time} · {game.area}</p><small className="waitlist-summary">{waitlistCount ? `${waitlistCount} player${waitlistCount === 1 ? "" : "s"} on waitlist` : "Waitlist empty"}</small></div><div className="game-row-actions"><button className="manage-group-button" onClick={() => void openGroupSpace(game)}>Group space</button>{owned && <button className="manage-group-button" onClick={() => { if (managedGroupId === game.id) { setManagedGroupId(null); setJoinRequests([]); } else { setManagedGroupId(game.id); void loadJoinRequests(game.id); } }}>{managedGroupId === game.id ? "Hide requests" : `${groupRequests.length ? `${groupRequests.length} ` : ""}Review requests`}</button>}{!owned && <><button className="calendar-button" onClick={() => addToGoogleCalendar(game)}>Add to Google Calendar</button><button className="leave-game-button" onClick={() => void leaveGame(game.id, game.group_name)}>Back out</button></>}</div>{managedGroupId === game.id && <div className="inline-request-list">{requestsLoading ? <p className="request-empty">Loading requests...</p> : joinRequests.length ? joinRequests.map((request) => <div className="request-row" key={request.id}><div><strong>{request.player_display_name ?? request.player_id.slice(0, 10)}</strong><small className={`status-badge ${request.status}`}>{request.status}</small></div>{request.status === "pending" && <div className="request-actions"><button onClick={() => void decideJoinRequest(request.id, "approved", game.id)}>Approve</button><button onClick={() => void decideJoinRequest(request.id, "declined", game.id)}>Decline</button></div>}</div>) : <p className="request-empty">No requests waiting for approval.</p>}</div>}</article>; }) : <div className="page-empty"><strong>No upcoming games yet.</strong><p>Join a nearby game or create a group from Search.</p><button className="dark-button" onClick={() => selectTab("explore")}>Explore nearby <span>→</span></button></div>}</div>}
+        {!activityLoading && gamesViewTab === "pending" && <div className="game-list">{requestedGames.length ? requestedGames.map(({ request, session }) => <article className="game-row" key={request.id}><div className="game-date"><strong>{new Date(session.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><span>{new Date(session.session_date).getDate()}</span></div><div className="game-copy"><h2>{session.group_name}</h2><p>{sportLabel(session.sport)} · {session.start_time}–{session.end_time} · {session.area}</p><small className="waitlist-summary">{request.status === "waitlisted" ? "On waitlist" : "Waiting for organizer approval"}</small></div><div className="game-row-actions"><span className={`status-badge ${request.status}`}>{request.status}</span><button className="leave-game-button" onClick={() => void leaveGame(session.id, session.group_name)}>{request.status === "waitlisted" ? "Leave waitlist" : "Withdraw"}</button></div></article>) : <div className="page-empty"><strong>No pending requests.</strong><p>Games you request will stay here until the organizer approves them.</p><button className="dark-button" onClick={() => selectTab("search")}>Find a game <span>→</span></button></div>}</div>}
+        {!activityLoading && gamesViewTab === "history" && <div className="game-list">{pastGames.length ? pastGames.map((pastGame) => <article className="game-row past-game-row" key={pastGame.session.id}><div className="game-date completed"><strong>{new Date(pastGame.session.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><span>{new Date(pastGame.session.session_date).getDate()}</span></div><div className="game-copy"><h2>{pastGame.session.group_name}</h2><p>{sportLabel(pastGame.session.sport)} · {pastGame.session.session_date} · {pastGame.session.area}</p><small className="past-game-summary">{pastGame.rank ? `You ranked #${pastGame.rank} of ${pastGame.group_size}` : "Unranked for this game"}{pastGame.score != null ? ` · ${pastGame.score.toFixed(1)} rating` : ""}</small></div><div className="game-row-actions"><span className="status-badge completed">Completed</span><button className="manage-group-button" onClick={() => void openGroupSpace(pastGame.session)}>View ranking</button></div></article>) : <div className="page-empty"><strong>No history yet.</strong><p>Played games and your group ranking will appear here.</p><button className="dark-button" onClick={() => selectTab("explore")}>Find a game <span>→</span></button></div>}</div>}
         {activityLoading && <p className="page-loading">Refreshing your games...</p>}
         {!activityLoading && gamesViewTab === "past" && <div className="game-list">{pastGames.length ? pastGames.map((pastGame) => <article className="game-row past-game-row" key={pastGame.session.id}><div className="game-date completed"><strong>{new Date(pastGame.session.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><span>{new Date(pastGame.session.session_date).getDate()}</span></div><div className="game-copy"><h2>{pastGame.session.group_name}</h2><p>{sportLabel(pastGame.session.sport)} · {pastGame.session.session_date} · {pastGame.session.area}</p><small className="past-game-summary">{pastGame.rank ? `You ranked #${pastGame.rank} of ${pastGame.group_size}` : "Unranked for this game"}{pastGame.score != null ? ` · ${pastGame.score.toFixed(1)} rating` : ""}</small></div><div className="game-row-actions"><span className="status-badge completed">Completed</span><button className="manage-group-button" onClick={() => void openGroupSpace(pastGame.session)}>View ranking</button></div></article>) : <div className="page-empty"><strong>No past games yet.</strong><p>Once a completed game has been played, your group ranking will appear here.</p><button className="dark-button" onClick={() => selectTab("explore")}>Find a game <span>→</span></button></div>}</div>}
         {!activityLoading && gamesViewTab === "requested" && <div className="game-list">{requestedGames.length ? requestedGames.map(({ request, session }) => <article className="game-row" key={request.id}><div className="game-date"><strong>{new Date(session.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><span>{new Date(session.session_date).getDate()}</span></div><div className="game-copy"><h2>{session.group_name}</h2><p>{sportLabel(session.sport)} · {session.start_time}–{session.end_time} · {session.area}</p></div><div className="game-row-actions"><span className={`status-badge ${request.status}`}>{request.status}</span>{["pending", "waitlisted"].includes(request.status) && <button className="leave-game-button" onClick={() => void leaveGame(session.id, session.group_name)}>{request.status === "waitlisted" ? "Leave waitlist" : "Back out"}</button>}</div></article>) : <div className="page-empty"><strong>No open requests.</strong><p>Confirmed games live in the Confirmed tab. New requests will appear here until the organizer responds.</p><button className="dark-button" onClick={() => selectTab("search")}>Find a game <span>→</span></button></div>}</div>}
