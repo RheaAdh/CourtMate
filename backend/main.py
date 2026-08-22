@@ -1,5 +1,8 @@
 import os
 import re
+import json
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 from datetime import date, datetime, time, timedelta, timezone
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -11,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
 from .matching import search_sessions, suggest_replacements
-from .models import ChatPost, ChatPostRequest, ChatResponse, CreateGroupRequest, CreatedGroupResponse, Feedback, FeedbackRequest, GroupProposal, GroupViewResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, ParseRequest, PastGame, Player, ProfileUpdateRequest, PublicPlayerProfile, ReplacementResponse, SearchIntent, SearchResponse, Session, Sport, rating_for_sport
+from .models import CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, CreateGroupRequest, CreatedGroupResponse, Feedback, FeedbackRequest, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, ParseRequest, PastGame, Player, ProfileUpdateRequest, PublicPlayerProfile, ReplacementResponse, SearchIntent, SearchResponse, Session, Sport, baseline_rating_for_sport, rating_for_sport
 from .repository import create_repository
 
 
@@ -29,6 +32,16 @@ app.add_middleware(
 repository = create_repository()
 intent_parser = GeminiIntentParser()
 local_timezone = ZoneInfo(os.getenv("COURTMATE_TIMEZONE", "Asia/Kolkata"))
+_geocode_cache: dict[str, tuple[float, float] | None] = {}
+_fallback_area_coordinates = {
+    "whitefield": (12.9698, 77.7499),
+    "brookefield": (12.9665, 77.7168),
+    "kadugodi": (13.0068, 77.7585),
+    "varthur": (12.9408, 77.7460),
+    "indiranagar": (12.9784, 77.6408),
+    "koramangala": (12.9352, 77.6245),
+}
+_known_localities = tuple(_fallback_area_coordinates)
 
 
 def get_current_player(identity: AuthIdentity = Depends(get_current_identity)) -> Player:
@@ -36,7 +49,9 @@ def get_current_player(identity: AuthIdentity = Depends(get_current_identity)) -
     if player:
         return player
     display_name = identity.display_name or (identity.email.split("@")[0] if identity.email else "CourtMate player")
-    return repository.save_player(Player(id=identity.uid, display_name=display_name, area=os.getenv("COURTMATE_DEFAULT_AREA", "Whitefield")))
+    default_area = os.getenv("COURTMATE_DEFAULT_AREA", "Whitefield")
+    coordinates = _geocode_area(default_area)
+    return repository.save_player(Player(id=identity.uid, display_name=display_name, area=default_area, latitude=coordinates[0] if coordinates else None, longitude=coordinates[1] if coordinates else None))
 
 
 def _session_window(session: Session) -> tuple[datetime, datetime]:
@@ -54,6 +69,8 @@ def _refresh_session_status(session: Session) -> Session:
     if next_status != session.status:
         session.status = next_status
         repository.save_session(session)
+        if next_status == "completed":
+            _refresh_cmr_ratings()
     return session
 
 
@@ -72,6 +89,52 @@ def _require_active_session(session: Session) -> None:
         raise HTTPException(status_code=409, detail="This game is closed and no longer accepts changes")
 
 
+def _geocode_area(area: str) -> tuple[float, float] | None:
+    """Resolve a locality with Google Maps, falling back to demo Bengaluru coordinates."""
+    normalized_area = area.strip().lower()
+    if not normalized_area:
+        return None
+    if normalized_area in _geocode_cache:
+        return _geocode_cache[normalized_area]
+    api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+    coordinates = None
+    if api_key:
+        params = urlencode({"address": f"{area}, Bengaluru, India", "key": api_key})
+        try:
+            request = Request(f"https://maps.googleapis.com/maps/api/geocode/json?{params}", headers={"Accept": "application/json"})
+            with urlopen(request, timeout=2) as response:
+                payload = json.load(response)
+            if payload.get("status") == "OK" and payload.get("results"):
+                location = payload["results"][0]["geometry"]["location"]
+                coordinates = (float(location["lat"]), float(location["lng"]))
+        except (OSError, ValueError, KeyError, IndexError, json.JSONDecodeError):
+            coordinates = None
+    if coordinates is None:
+        coordinates = _fallback_area_coordinates.get(normalized_area)
+    _geocode_cache[normalized_area] = coordinates
+    return coordinates
+
+
+def _parse_intent(query: str, sport: Sport | None = None, player: Player | None = None) -> SearchIntent:
+    intent = intent_parser.parse(query, sport)
+    lowered_query = query.lower()
+    locality_match = re.search(r"\b(?:near|around|in)\s+(.+?)(?=\s+(?:this|next|on|at|for|today|tomorrow|sun(?:day)?|mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|weekday|weekend|morning|afternoon|evening|tonight)\b|$)", lowered_query)
+    requested_locality = locality_match.group(1).strip(" ,.") if locality_match else ""
+    has_explicit_locality = bool(requested_locality and not requested_locality.startswith(("my location", "my area", "my locality", "the ")))
+    if has_explicit_locality:
+        intent = intent.model_copy(update={"area": requested_locality.title(), "latitude": None, "longitude": None})
+    if not has_explicit_locality and player:
+        updates = {"area": player.area}
+        if player.latitude is not None and player.longitude is not None:
+            updates.update({"latitude": player.latitude, "longitude": player.longitude})
+        intent = intent.model_copy(update=updates)
+    if intent.latitude is None or intent.longitude is None:
+        coordinates = _geocode_area(intent.area)
+        if coordinates:
+            intent = intent.model_copy(update={"latitude": coordinates[0], "longitude": coordinates[1]})
+    return intent
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "courtmate-api", "datastore": type(repository).__name__}
@@ -79,7 +142,7 @@ def health() -> dict[str, str]:
 
 @app.post("/v1/intent/parse", response_model=SearchIntent)
 def parse_intent(request: ParseRequest) -> SearchIntent:
-    return intent_parser.parse(request.query, request.sport)
+    return _parse_intent(request.query, request.sport)
 
 
 @app.get("/v1/me", response_model=Player)
@@ -89,7 +152,11 @@ def me(player: Player = Depends(get_current_player)) -> Player:
 
 @app.post("/v1/me/profile", response_model=Player)
 def update_profile(request: ProfileUpdateRequest, player: Player = Depends(get_current_player)) -> Player:
-    updates = request.model_dump(exclude_none=True, exclude={"sport", "skill_rating"})
+    updates = request.model_dump(exclude_none=True, exclude={"sport", "skill_level", "skill_rating"})
+    if request.area and request.latitude is None and request.longitude is None:
+        coordinates = _geocode_area(request.area)
+        if coordinates:
+            updates.update({"latitude": coordinates[0], "longitude": coordinates[1]})
     updated = player.model_copy(update=updates)
     if request.sport and request.skill_rating is not None:
         sport_ratings = {**player.sport_ratings, request.sport: request.skill_rating}
@@ -98,6 +165,8 @@ def update_profile(request: ProfileUpdateRequest, player: Player = Depends(get_c
         if request.sport == "pickleball":
             rating_updates.update({"dupr_rating": request.skill_rating, "rating_source": "self_reported"})
         updated = updated.model_copy(update=rating_updates)
+    if request.sport and request.skill_level:
+        updated = updated.model_copy(update={"skill_levels": {**updated.skill_levels, request.sport: request.skill_level}})
     return repository.save_player(updated)
 
 
@@ -117,6 +186,8 @@ def _public_profile(player: Player) -> PublicPlayerProfile:
         community_rating_count=player.community_rating_count,
         community_scores=player.community_scores,
         community_rating_counts=player.community_rating_counts,
+        cmr_ratings=player.cmr_ratings,
+        cmr_game_counts=player.cmr_game_counts,
     )
 
 
@@ -133,12 +204,17 @@ def _leaderboard(session_ids: list[str], scope: str, sport: str | None = None) -
     players_by_id = {candidate.id: candidate for candidate in repository.list_players() if candidate.id in session_ids}
     entries = []
     for candidate in players_by_id.values():
-        score = candidate.community_scores.get(sport) if sport else candidate.community_score
+        score = candidate.cmr_ratings.get(sport) if sport else candidate.community_score
+        ratings_count = candidate.cmr_game_counts.get(sport, 0) if sport else 0
+        if score is None:
+            score = candidate.community_scores.get(sport) if sport else candidate.community_score
+            ratings_count = candidate.community_rating_counts.get(sport, 0) if sport else candidate.community_rating_count
         if score is None:
             score = rating_for_sport(candidate, sport) if sport else candidate.dupr_rating
         if score is None:
             continue
-        ratings_count = candidate.community_rating_counts.get(sport, 0) if sport else candidate.community_rating_count
+        if ratings_count == 0 and not sport:
+            ratings_count = candidate.community_rating_count
         entries.append((candidate, round(score, 2), ratings_count))
     entries.sort(key=lambda item: (-item[1], -item[0].reliability, item[0].display_name.lower()))
     return LeaderboardResponse(
@@ -165,6 +241,56 @@ def _refresh_community_scores() -> None:
             repository.save_player(player.model_copy(update=updates))
 
 
+def _refresh_cmr_ratings() -> None:
+    """Recompute CMR and a chronological per-game history from completed-game feedback."""
+    ratings_by_player: dict[tuple[str, str], dict[str, list[int]]] = {}
+    sessions_by_id = {session.id: session for session in repository.list_sessions() if session.status == "completed"}
+    for feedback_item in repository.list_feedback():
+        session = sessions_by_id.get(feedback_item.session_id)
+        if not session:
+            continue
+        for rating in feedback_item.ratings:
+            game_ratings = ratings_by_player.setdefault((rating.player_id, session.sport), {})
+            game_ratings.setdefault(session.id, []).append(rating.rating)
+    completed_sessions_by_player: dict[str, list[Session]] = {}
+    for session in sessions_by_id.values():
+        for player_id in session.confirmed_player_ids:
+            completed_sessions_by_player.setdefault(player_id, []).append(session)
+    for player_id, completed_sessions in completed_sessions_by_player.items():
+        player = repository.get_player(player_id)
+        if not player:
+            continue
+        sessions_by_sport: dict[str, list[Session]] = {}
+        for session in completed_sessions:
+            sessions_by_sport.setdefault(session.sport, []).append(session)
+        cmr_ratings = dict(player.cmr_ratings)
+        cmr_game_counts = dict(player.cmr_game_counts)
+        cmr_history = dict(player.cmr_history)
+        for sport, sport_sessions in sessions_by_sport.items():
+            prior = baseline_rating_for_sport(player, sport) or 3.5
+            running_rating: float | None = None
+            game_total = 0.0
+            rated_game_count = 0
+            history: list[CMRHistoryPoint] = []
+            for session in sorted(sport_sessions, key=lambda item: (item.session_date, item.start_time)):
+                values = ratings_by_player.get((player_id, sport), {}).get(session.id, [])
+                if values:
+                    game_rating = round(1 + (sum(values) / len(values) - 1) * 7 / 4, 2)
+                    game_total += game_rating
+                    rated_game_count += 1
+                    previous_rating = running_rating if running_rating is not None else prior
+                    running_rating = round((prior * 3 + game_total) / (3 + rated_game_count), 2)
+                    delta = round(running_rating - previous_rating, 2)
+                    history.append(CMRHistoryPoint(session_id=session.id, session_date=session.session_date, group_name=session.group_name, game_rating=game_rating, rating=running_rating, delta=delta))
+                else:
+                    history.append(CMRHistoryPoint(session_id=session.id, session_date=session.session_date, group_name=session.group_name, rating=running_rating))
+            cmr_history[sport] = history
+            if running_rating is not None:
+                cmr_ratings[sport] = running_rating
+                cmr_game_counts[sport] = rated_game_count
+        repository.save_player(player.model_copy(update={"cmr_ratings": cmr_ratings, "cmr_game_counts": cmr_game_counts, "cmr_history": cmr_history}))
+
+
 def _query_group_name(query: str, intent: SearchIntent, style: str) -> str:
     ignored_words = {"find", "me", "a", "an", "the", "show", "looking", "for", "create", "group", "game", "games", "near", "in", "at", "on", "this", "around", "please", "morning", "afternoon", "evening", "tonight", "beginner", "intermediate", "advanced", "casual", "social", "competitive", "pickleball", "badminton", "tennis", "padel", "squash", "table", "ping", "pong", "basketball", "volleyball"}
     words = [word for word in re.findall(r"[a-zA-Z0-9]+", query.lower()) if word not in ignored_words]
@@ -184,6 +310,8 @@ def _group_proposal(intent: SearchIntent, player_id: str, proposed_name: str | N
     return GroupProposal(
         group_name=proposed_name or _query_group_name(query, intent, style),
         area=intent.area,
+        latitude=intent.latitude,
+        longitude=intent.longitude,
         session_date=intent.date,
         start_time=intent.start_time,
         end_time=intent.end_time,
@@ -198,7 +326,7 @@ def _group_proposal(intent: SearchIntent, player_id: str, proposed_name: str | N
 @app.post("/v1/sessions/search", response_model=SearchResponse)
 def search(request: ParseRequest, player: Player = Depends(get_current_player)) -> SearchResponse:
     _refresh_all_session_statuses()
-    intent = intent_parser.parse(request.query, request.sport)
+    intent = _parse_intent(request.query, request.sport, player)
     sessions = repository.list_sessions()
     recommendations = search_sessions(sessions, intent, repository.list_players(), player)
     decision = intent_parser.decide(request.query, intent, sessions, recommendations, player)
@@ -314,6 +442,21 @@ def my_requests(player: Player = Depends(get_current_player)) -> MyRequestsRespo
     return MyRequestsResponse(requests=request_views)
 
 
+@app.get("/v1/me/incoming-requests", response_model=IncomingRequestsResponse)
+def incoming_requests(player: Player = Depends(get_current_player)) -> IncomingRequestsResponse:
+    """Aggregate pending requests across every group owned by the current player."""
+    _refresh_all_session_statuses()
+    request_views = []
+    for session in repository.list_sessions_by_organizer(player.id):
+        if session.status in {"completed", "cancelled"}:
+            continue
+        for join_request in repository.list_join_requests(session.id):
+            if join_request.status == "pending":
+                request_views.append(JoinRequestView(request=join_request, session=session))
+    request_views.sort(key=lambda item: item.request.created_at, reverse=True)
+    return IncomingRequestsResponse(requests=request_views)
+
+
 @app.get("/v1/me/groups", response_model=MyGroupsResponse)
 def my_groups(player: Player = Depends(get_current_player)) -> MyGroupsResponse:
     _refresh_all_session_statuses()
@@ -385,12 +528,14 @@ def complete_session(session_id: str, player: Player = Depends(get_current_playe
     if session.status == "cancelled":
         raise HTTPException(status_code=409, detail="Cancelled games cannot be completed")
     session.status = "completed"
-    return repository.save_session(session)
+    saved = repository.save_session(session)
+    _refresh_cmr_ratings()
+    return saved
 
 
 @app.post("/v1/groups", response_model=CreatedGroupResponse)
 def create_group(request: CreateGroupRequest, player: Player = Depends(get_current_player)) -> CreatedGroupResponse:
-    intent = intent_parser.parse(request.query, request.sport)
+    intent = _parse_intent(request.query, request.sport, player)
     proposal = _group_proposal(intent, player.id, request.group_name, request.query)
     session_date = proposal.session_date or date.today()
     start_time = proposal.start_time or time(19)
@@ -432,4 +577,5 @@ def feedback(session_id: str, request: FeedbackRequest, player: Player = Depends
             raise HTTPException(status_code=422, detail="You can only rate players from this group")
     saved = repository.save_feedback(Feedback(session_id=session_id, created_at=datetime.now(timezone.utc), player_id=player.id, fun=request.fun, fairness=request.fairness, would_return=request.would_return, ratings=ratings))
     _refresh_community_scores()
+    _refresh_cmr_ratings()
     return saved

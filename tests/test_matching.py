@@ -22,6 +22,33 @@ class MatchingTests(unittest.TestCase):
         self.assertTrue(results)
         self.assertEqual(results[0].session.id, "s1")
 
+    def test_coordinate_radius_filters_out_distant_localities(self):
+        repo = InMemoryRepository()
+        player = repo.get_player("p1")
+        player.travel_radius_km = 0.5
+        intent = GeminiIntentParser().parse("Find a casual game near Whitefield this Sunday")
+        intent = intent.model_copy(update={"latitude": player.latitude, "longitude": player.longitude})
+        results = search_sessions(repo.list_sessions(), intent, repo.list_players(), player)
+        self.assertTrue(results)
+        self.assertTrue(all(result.reasons.distance_km is not None for result in results))
+        self.assertNotIn("s2", {result.session.id for result in results})
+
+    def test_profile_skill_level_does_not_filter_search(self):
+        repo = InMemoryRepository()
+        player = repo.get_player("p5")
+        player.skill_levels = {"pickleball": "advanced"}
+        intent = GeminiIntentParser().parse("Find a casual game near Whitefield this Sunday")
+        results = search_sessions(repo.list_sessions(), intent, repo.list_players(), player)
+        self.assertIn("s1", {result.session.id for result in results})
+
+    def test_explicit_search_level_filters_without_using_profile_level(self):
+        repo = InMemoryRepository()
+        player = repo.get_player("p5")
+        player.skill_levels = {"pickleball": "advanced"}
+        intent = GeminiIntentParser().parse("Find a beginner game near Whitefield")
+        results = search_sessions(repo.list_sessions(), intent, repo.list_players(), player)
+        self.assertIn("s4", {result.session.id for result in results})
+
     def test_parser_and_matcher_support_other_court_sports(self):
         repo = InMemoryRepository()
         intent = GeminiIntentParser().parse("Find a casual badminton game near Whitefield this evening")

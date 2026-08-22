@@ -38,6 +38,8 @@ python3 -m backend.seed_firestore --project mttn-portal
 
 The API uses Firestore when `COURTMATE_DATASTORE=firestore`. Set `COURTMATE_DATASTORE=memory` for an offline local demo. With `GEMINI_API_KEY`, intent extraction and search explanation use the model in `GEMINI_MODEL` (default `gemini-3.6-flash`) through the server-side adapter. Gemini receives only a bounded session snapshot; Python remains the authority for sport, skill, date, area, time, and open-slot eligibility. If Gemini is unavailable, the API falls back to deterministic parsing and decisions so the demo remains usable.
 
+For coordinate-aware locality matching, set `GOOGLE_MAPS_API_KEY` with the Google Maps Geocoding API enabled. The key stays server-side; the backend geocodes search localities and profile locality labels, while browser location permission can provide more precise coordinates. If the key is absent, seeded Bengaluru locality coordinates keep the demo usable offline.
+
 ## Google sign-in setup
 
 Firebase Authentication Google sign-in is used for identity; the backend verifies the Firebase ID token before reading or writing player, group, or join-request data.
@@ -136,7 +138,7 @@ gcloud run deploy courtmate-api \
   --max 1 \
   --memory 512Mi \
   --cpu 1 \
-  --set-env-vars COURTMATE_DATASTORE=firestore,GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID,COURTMATE_MAX_SESSION_READS=100,COURTMATE_MAX_PLAYER_READS=500
+  --set-env-vars COURTMATE_DATASTORE=firestore,GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID,GOOGLE_MAPS_API_KEY=YOUR_MAPS_KEY,COURTMATE_MAX_SESSION_READS=100,COURTMATE_MAX_PLAYER_READS=500
 ```
 
 The pasted Google Cloud free-tier limits are usage limits, not a spend cap. Set a billing budget alert in Cloud Billing and monitor Firestore reads/writes and Cloud Run requests.

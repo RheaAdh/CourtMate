@@ -42,6 +42,17 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(payload["area"], "Brookefield")
         self.assertEqual(payload["availability"], ["weekend mornings"])
 
+    def test_profile_stores_skill_level_without_a_numeric_rating(self):
+        response = self.client.post(
+            "/v1/me/profile",
+            json={"sport": "pickleball", "skill_level": "beginner"},
+            headers={"X-CourtMate-Player-ID": "level-profile-player"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["skill_levels"]["pickleball"], "beginner")
+        self.assertNotIn("skill_rating", payload)
+
     def test_profile_and_search_are_sport_aware(self):
         profile = self.client.post(
             "/v1/me/profile",
@@ -59,6 +70,14 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(search.status_code, 200)
         self.assertTrue(search.json()["recommendations"])
         self.assertTrue(all(item["session"]["sport"] == "badminton" for item in search.json()["recommendations"]))
+
+    def test_incoming_requests_aggregate_for_group_organizer(self):
+        join = self.client.post("/v1/sessions/s1/join", headers={"X-CourtMate-Player-ID": "p4"})
+        self.assertEqual(join.status_code, 200)
+        incoming = self.client.get("/v1/me/incoming-requests", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(incoming.status_code, 200)
+        request_views = incoming.json()["requests"]
+        self.assertTrue(any(item["request"]["id"] == join.json()["id"] and item["session"]["id"] == "s1" for item in request_views))
 
     def test_expired_session_closes_and_stops_new_changes(self):
         session_id = "expired-session"
@@ -130,6 +149,10 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(chat_view.status_code, 200)
         self.assertEqual(chat_view.json()["posts"][0]["message"], "Court is booked for 7 PM")
 
+        complete = self.client.post(f"/v1/sessions/{session_id}/complete", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(complete.status_code, 200)
+        self.assertEqual(complete.json()["status"], "completed")
+
         feedback = self.client.post(
             f"/v1/sessions/{session_id}/feedback",
             json={"fun": 5, "fairness": 5, "would_return": True, "ratings": [{"player_id": "p1", "rating": 5, "comment": "Great organizer"}]},
@@ -139,8 +162,14 @@ class ApiFlowTests(unittest.TestCase):
         leaderboard = self.client.get(f"/v1/sessions/{session_id}/leaderboard", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(leaderboard.status_code, 200)
         p1_entry = next(entry for entry in leaderboard.json()["entries"] if entry["player"]["id"] == "p1")
-        self.assertEqual(p1_entry["score"], 5.0)
+        self.assertEqual(p1_entry["score"], 4.4)
         self.assertEqual(p1_entry["ratings_count"], 1)
+        profile = self.client.get("/v1/me", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(profile.status_code, 200)
+        history = profile.json()["cmr_history"]["pickleball"]
+        history_point = next(point for point in history if point["session_id"] == session_id)
+        self.assertEqual(history_point["game_rating"], 8.0)
+        self.assertEqual(history_point["delta"], 1.2)
 
         waitlist = self.client.post("/v1/sessions/s7/join", headers={"X-CourtMate-Player-ID": "p4"})
         self.assertEqual(waitlist.status_code, 200)

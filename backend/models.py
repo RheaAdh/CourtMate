@@ -5,6 +5,16 @@ from pydantic import BaseModel, Field
 
 Sport = Literal["pickleball", "badminton", "tennis", "padel", "squash", "table_tennis", "basketball", "volleyball"]
 RatingSource = Literal["dupr", "organizer_confirmed", "synthetic", "self_reported", "unrated"]
+SkillLevel = Literal["beginner", "intermediate", "advanced"]
+
+
+class CMRHistoryPoint(BaseModel):
+    session_id: str
+    session_date: date_type
+    group_name: str
+    game_rating: float | None = Field(default=None, ge=1, le=8)
+    rating: float | None = Field(default=None, ge=1, le=8)
+    delta: float | None = None
 
 
 class SearchIntent(BaseModel):
@@ -17,12 +27,18 @@ class SearchIntent(BaseModel):
     skill_max: float | None = Field(default=None, ge=1, le=8)
     style: Literal["casual", "social", "competitive", "any"] = "any"
     open_slots_required: int = Field(default=1, ge=1, le=8)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
 
 
 class Player(BaseModel):
     id: str
     display_name: str
     area: str
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    travel_radius_km: float = Field(default=10.0, ge=1, le=100)
+    skill_levels: dict[str, SkillLevel] = Field(default_factory=dict)
     dupr_rating: float | None = Field(default=None, ge=1, le=8)
     rating_source: RatingSource = "unrated"
     rating_confidence: float = Field(default=0.0, ge=0, le=1)
@@ -35,15 +51,31 @@ class Player(BaseModel):
     community_rating_count: int = Field(default=0, ge=0)
     community_scores: dict[str, float] = Field(default_factory=dict)
     community_rating_counts: dict[str, int] = Field(default_factory=dict)
+    cmr_ratings: dict[str, float] = Field(default_factory=dict)
+    cmr_game_counts: dict[str, int] = Field(default_factory=dict)
+    cmr_history: dict[str, list[CMRHistoryPoint]] = Field(default_factory=dict)
     friends: list[str] = Field(default_factory=list)
     opted_into_replacement_pool: bool = True
 
 
 def rating_for_sport(player: Player, sport: Sport) -> float | None:
-    """Return a sport-specific normalized rating, preserving legacy DUPR data."""
+    """Return a computed or externally verified rating, never a profile skill label."""
+    if sport in player.cmr_ratings:
+        return player.cmr_ratings[sport]
     if sport in player.sport_ratings:
         return player.sport_ratings[sport]
-    return player.dupr_rating if sport == "pickleball" else None
+    if sport == "pickleball" and player.dupr_rating is not None:
+        return player.dupr_rating
+    return None
+
+
+def baseline_rating_for_sport(player: Player, sport: Sport) -> float | None:
+    """Return only an external rating used to seed the first CMR calculation."""
+    if sport in player.sport_ratings:
+        return player.sport_ratings[sport]
+    if sport == "pickleball" and player.dupr_rating is not None:
+        return player.dupr_rating
+    return None
 
 
 class PublicPlayerProfile(BaseModel):
@@ -61,12 +93,19 @@ class PublicPlayerProfile(BaseModel):
     community_rating_count: int = Field(default=0, ge=0)
     community_scores: dict[str, float] = Field(default_factory=dict)
     community_rating_counts: dict[str, int] = Field(default_factory=dict)
+    cmr_ratings: dict[str, float] = Field(default_factory=dict)
+    cmr_game_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class ProfileUpdateRequest(BaseModel):
     area: str | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    travel_radius_km: float | None = Field(default=None, ge=1, le=100)
     dupr_rating: float | None = Field(default=None, ge=1, le=8)
     sport: Sport | None = None
+    skill_level: SkillLevel | None = None
+    # Kept for backwards-compatible API clients; the frontend no longer asks for it.
     skill_rating: float | None = Field(default=None, ge=1, le=8)
     style: Literal["casual", "social", "competitive"] | None = None
     availability: list[str] | None = None
@@ -77,6 +116,9 @@ class Session(BaseModel):
     group_name: str
     organizer_id: str
     area: str
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    venue_name: str | None = None
     session_date: date_type
     start_time: time
     end_time: time
@@ -102,6 +144,7 @@ class RecommendationReason(BaseModel):
     style_fit: float
     reliability: float
     familiarity: float
+    distance_km: float | None = None
     explanation: str
 
 
@@ -114,6 +157,9 @@ class SessionRecommendation(BaseModel):
 class GroupProposal(BaseModel):
     group_name: str
     area: str
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    venue_name: str | None = None
     session_date: date_type | None = None
     start_time: time | None = None
     end_time: time | None = None
@@ -185,6 +231,10 @@ class JoinRequestView(BaseModel):
 
 
 class MyRequestsResponse(BaseModel):
+    requests: list[JoinRequestView]
+
+
+class IncomingRequestsResponse(BaseModel):
     requests: list[JoinRequestView]
 
 
