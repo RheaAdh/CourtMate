@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import date, datetime, time, timedelta, timezone
 from uuid import uuid4
 
@@ -9,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
 from .matching import search_sessions, suggest_replacements
-from .models import CreateGroupRequest, CreatedGroupResponse, Feedback, FeedbackRequest, GroupProposal, GroupViewResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, ParseRequest, Player, ProfileUpdateRequest, PublicPlayerProfile, ReplacementResponse, SearchIntent, SearchResponse, Session
+from .models import ChatPost, ChatPostRequest, ChatResponse, CreateGroupRequest, CreatedGroupResponse, Feedback, FeedbackRequest, GroupProposal, GroupViewResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, ParseRequest, Player, ProfileUpdateRequest, PublicPlayerProfile, ReplacementResponse, SearchIntent, SearchResponse, Session
 from .repository import create_repository
 
 
@@ -68,17 +69,63 @@ def _public_profile(player: Player) -> PublicPlayerProfile:
         rating_confidence=player.rating_confidence,
         style=player.style,
         reliability=player.reliability,
+        community_score=player.community_score,
+        community_rating_count=player.community_rating_count,
     )
 
 
-def _group_proposal(intent: SearchIntent, player_id: str, proposed_name: str | None = None) -> GroupProposal:
+def _member_session(session_id: str, player: Player) -> Session:
+    session = repository.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if player.id not in session.confirmed_player_ids:
+        raise HTTPException(status_code=403, detail="Only confirmed group members can access this space")
+    return session
+
+
+def _leaderboard(session_ids: list[str], scope: str) -> LeaderboardResponse:
+    players_by_id = {candidate.id: candidate for candidate in repository.list_players() if candidate.id in session_ids}
+    entries = []
+    for candidate in players_by_id.values():
+        score = candidate.community_score if candidate.community_score is not None else candidate.dupr_rating
+        if score is None:
+            continue
+        entries.append((candidate, round(score, 2), candidate.community_rating_count))
+    entries.sort(key=lambda item: (-item[1], -item[0].reliability, item[0].display_name.lower()))
+    return LeaderboardResponse(
+        scope=scope,
+        entries=[LeaderboardEntry(rank=index, player=_public_profile(candidate), score=score, ratings_count=count) for index, (candidate, score, count) in enumerate(entries, start=1)],
+    )
+
+
+def _refresh_community_scores() -> None:
+    ratings_by_player: dict[str, list[int]] = {}
+    for feedback_item in repository.list_feedback():
+        for rating in feedback_item.ratings:
+            ratings_by_player.setdefault(rating.player_id, []).append(rating.rating)
+    for player_id, ratings in ratings_by_player.items():
+        player = repository.get_player(player_id)
+        if player:
+            repository.save_player(player.model_copy(update={"community_score": round(sum(ratings) / len(ratings), 2), "community_rating_count": len(ratings)}))
+
+
+def _query_group_name(query: str, intent: SearchIntent, style: str) -> str:
+    ignored_words = {"find", "me", "a", "an", "the", "show", "looking", "for", "create", "group", "game", "games", "pickleball", "near", "in", "at", "on", "this", "around", "please"}
+    words = [word for word in re.findall(r"[a-zA-Z0-9]+", query.lower()) if word not in ignored_words]
+    phrase = " ".join(word.title() for word in words[:5])
+    if not phrase:
+        phrase = f"{intent.area} {style.title()}"
+    return f"{phrase} Pickleball"[:64]
+
+
+def _group_proposal(intent: SearchIntent, player_id: str, proposed_name: str | None = None, query: str = "") -> GroupProposal:
     player = repository.get_player(player_id)
     rating = player.dupr_rating if player and player.dupr_rating is not None else 3.25
     skill_min = intent.skill_min if intent.skill_min is not None else max(1.0, round(rating - .3, 1))
     skill_max = intent.skill_max if intent.skill_max is not None else min(8.0, round(rating + .3, 1))
     style = intent.style if intent.style != "any" else player.style if player else "casual"
     return GroupProposal(
-        group_name=proposed_name or f"{intent.area} {style.title()} Rally",
+        group_name=proposed_name or _query_group_name(query, intent, style),
         area=intent.area,
         session_date=intent.date,
         start_time=intent.start_time,
@@ -96,7 +143,7 @@ def search(request: ParseRequest, player: Player = Depends(get_current_player)) 
     sessions = repository.list_sessions()
     recommendations = search_sessions(sessions, intent, repository.list_players(), player)
     decision = intent_parser.decide(request.query, intent, sessions, recommendations, player)
-    proposal = _group_proposal(intent, player.id, decision.proposed_group_name) if not recommendations else None
+    proposal = _group_proposal(intent, player.id, decision.proposed_group_name, request.query) if not recommendations else None
     return SearchResponse(intent=intent, recommendations=recommendations, action=decision.action, message=decision.summary, group_proposal=proposal)
 
 
@@ -183,10 +230,35 @@ def group_view(session_id: str, player: Player = Depends(get_current_player)) ->
     return GroupViewResponse(session=session, members=members)
 
 
+@app.get("/v1/sessions/{session_id}/chat", response_model=ChatResponse)
+def group_chat(session_id: str, player: Player = Depends(get_current_player)) -> ChatResponse:
+    session = _member_session(session_id, player)
+    return ChatResponse(session=session, posts=repository.list_chat_posts(session_id))
+
+
+@app.post("/v1/sessions/{session_id}/chat", response_model=ChatPost)
+def post_group_chat(session_id: str, request: ChatPostRequest, player: Player = Depends(get_current_player)) -> ChatPost:
+    _member_session(session_id, player)
+    return repository.save_chat_post(ChatPost(id=uuid4().hex, session_id=session_id, player_id=player.id, player_display_name=player.display_name, message=request.message.strip(), created_at=datetime.now(timezone.utc)))
+
+
+@app.get("/v1/sessions/{session_id}/leaderboard", response_model=LeaderboardResponse)
+def group_leaderboard(session_id: str, player: Player = Depends(get_current_player)) -> LeaderboardResponse:
+    session = _member_session(session_id, player)
+    return _leaderboard(session.confirmed_player_ids, f"group:{session_id}")
+
+
+@app.get("/v1/leaderboards/local", response_model=LeaderboardResponse)
+def local_leaderboard(area: str | None = None, player: Player = Depends(get_current_player)) -> LeaderboardResponse:
+    requested_area = (area or player.area).strip().lower()
+    local_players = [candidate for candidate in repository.list_players() if candidate.area.lower() == requested_area]
+    return _leaderboard([candidate.id for candidate in local_players], f"local:{area or player.area}")
+
+
 @app.post("/v1/groups", response_model=CreatedGroupResponse)
 def create_group(request: CreateGroupRequest, player: Player = Depends(get_current_player)) -> CreatedGroupResponse:
     intent = intent_parser.parse(request.query)
-    proposal = _group_proposal(intent, player.id)
+    proposal = _group_proposal(intent, player.id, request.group_name, request.query)
     session_date = proposal.session_date or date.today()
     start_time = proposal.start_time or time(19)
     end_time = proposal.end_time or (datetime.combine(session_date, start_time) + timedelta(hours=2)).time()
@@ -217,6 +289,13 @@ def replacement(session_id: str, player: Player = Depends(get_current_player)) -
 
 @app.post("/v1/sessions/{session_id}/feedback", response_model=Feedback)
 def feedback(session_id: str, request: FeedbackRequest, player: Player = Depends(get_current_player)) -> Feedback:
-    if not repository.get_session(session_id):
-        raise HTTPException(status_code=404, detail="Session not found")
-    return repository.save_feedback(Feedback(session_id=session_id, created_at=datetime.now(timezone.utc), player_id=player.id, fun=request.fun, fairness=request.fairness, would_return=request.would_return))
+    session = _member_session(session_id, player)
+    ratings = request.ratings
+    if request.player_id and request.rating is not None:
+        ratings = [*ratings, {"player_id": request.player_id, "rating": request.rating}]
+    for rating in ratings:
+        if rating.player_id not in session.confirmed_player_ids:
+            raise HTTPException(status_code=422, detail="You can only rate players from this group")
+    saved = repository.save_feedback(Feedback(session_id=session_id, created_at=datetime.now(timezone.utc), player_id=player.id, fun=request.fun, fairness=request.fairness, would_return=request.would_return, ratings=ratings))
+    _refresh_community_scores()
+    return saved

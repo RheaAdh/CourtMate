@@ -2,7 +2,7 @@ import os
 from datetime import date, datetime, time
 from typing import Protocol
 
-from .models import Feedback, JoinRequest, Player, Session
+from .models import ChatPost, Feedback, JoinRequest, Player, Session
 
 
 class Repository(Protocol):
@@ -12,6 +12,9 @@ class Repository(Protocol):
     def get_player(self, player_id: str) -> Player | None: ...
     def save_player(self, player: Player) -> Player: ...
     def save_feedback(self, feedback: Feedback) -> Feedback: ...
+    def list_feedback(self, session_id: str | None = None) -> list[Feedback]: ...
+    def save_chat_post(self, post: ChatPost) -> ChatPost: ...
+    def list_chat_posts(self, session_id: str) -> list[ChatPost]: ...
     def save_join_request(self, join_request: JoinRequest) -> JoinRequest: ...
     def list_join_requests(self, session_id: str) -> list[JoinRequest]: ...
     def list_join_requests_for_player(self, player_id: str) -> list[JoinRequest]: ...
@@ -61,6 +64,7 @@ class InMemoryRepository:
         self.players = {p.id: p for p in DemoData.seed_players()}
         self.sessions = {s.id: s for s in DemoData.seed_sessions()}
         self.feedback: list[Feedback] = []
+        self.chat_posts: dict[str, ChatPost] = {}
         self.join_requests: dict[str, JoinRequest] = {}
 
     def list_sessions(self) -> list[Session]:
@@ -82,6 +86,18 @@ class InMemoryRepository:
     def save_feedback(self, feedback: Feedback) -> Feedback:
         self.feedback.append(feedback)
         return feedback
+
+    def list_feedback(self, session_id: str | None = None) -> list[Feedback]:
+        if session_id is None:
+            return list(self.feedback)
+        return [item for item in self.feedback if item.session_id == session_id]
+
+    def save_chat_post(self, post: ChatPost) -> ChatPost:
+        self.chat_posts[post.id] = post
+        return post
+
+    def list_chat_posts(self, session_id: str) -> list[ChatPost]:
+        return sorted((post for post in self.chat_posts.values() if post.session_id == session_id), key=lambda post: post.created_at)
 
     def save_join_request(self, join_request: JoinRequest) -> JoinRequest:
         self.join_requests[join_request.id] = join_request
@@ -160,6 +176,21 @@ class FirestoreRepository:
     def save_feedback(self, feedback: Feedback) -> Feedback:
         self.client.collection("feedback").add(feedback.model_dump(mode="json"))
         return feedback
+
+    def list_feedback(self, session_id: str | None = None) -> list[Feedback]:
+        collection = self.client.collection("feedback")
+        documents = collection.where("session_id", "==", session_id).limit(1000).stream() if session_id else collection.limit(1000).stream()
+        return [Feedback.model_validate(document.to_dict() or {}) for document in documents]
+
+    def save_chat_post(self, post: ChatPost) -> ChatPost:
+        reference = self.client.collection("chat_posts").document(post.id)
+        reference.set(post.model_dump(mode="json"))
+        return post
+
+    def list_chat_posts(self, session_id: str) -> list[ChatPost]:
+        documents = self.client.collection("chat_posts").where("session_id", "==", session_id).limit(100).stream()
+        posts = [ChatPost.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
+        return sorted(posts, key=lambda post: post.created_at)
 
     def save_join_request(self, join_request: JoinRequest) -> JoinRequest:
         reference = self.client.collection("join_requests").document(join_request.id)

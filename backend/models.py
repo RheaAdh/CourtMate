@@ -26,6 +26,8 @@ class Player(BaseModel):
     availability: list[str] = Field(default_factory=list)
     style: Literal["casual", "social", "competitive"] = "casual"
     reliability: float = Field(default=0.75, ge=0, le=1)
+    community_score: float | None = Field(default=None, ge=1, le=5)
+    community_rating_count: int = Field(default=0, ge=0)
     friends: list[str] = Field(default_factory=list)
     opted_into_replacement_pool: bool = True
 
@@ -39,6 +41,8 @@ class PublicPlayerProfile(BaseModel):
     rating_confidence: float = Field(default=0.0, ge=0, le=1)
     style: Literal["casual", "social", "competitive"] = "casual"
     reliability: float = Field(default=0.75, ge=0, le=1)
+    community_score: float | None = Field(default=None, ge=1, le=5)
+    community_rating_count: int = Field(default=0, ge=0)
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -173,8 +177,27 @@ class GroupViewResponse(BaseModel):
     members: list[PublicPlayerProfile]
 
 
+class ChatPostRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=500)
+
+
+class ChatPost(BaseModel):
+    id: str
+    session_id: str
+    player_id: str
+    player_display_name: str
+    message: str
+    created_at: datetime
+
+
+class ChatResponse(BaseModel):
+    session: Session
+    posts: list[ChatPost]
+
+
 class CreateGroupRequest(BaseModel):
     query: str
+    group_name: str | None = None
 
 
 class CreatedGroupResponse(BaseModel):
@@ -183,10 +206,18 @@ class CreatedGroupResponse(BaseModel):
 
 
 class FeedbackRequest(BaseModel):
-    player_id: str
+    player_id: str | None = None
+    rating: int | None = Field(default=None, ge=1, le=5)
     fun: int = Field(ge=1, le=5)
     fairness: int = Field(ge=1, le=5)
     would_return: bool
+    ratings: list["PlayerRating"] = Field(default_factory=list)
+
+
+class PlayerRating(BaseModel):
+    player_id: str
+    rating: int = Field(ge=1, le=5)
+    comment: str | None = Field(default=None, max_length=300)
 
 
 class Feedback(BaseModel):
@@ -195,4 +226,17 @@ class Feedback(BaseModel):
     fun: int
     fairness: int
     would_return: bool
+    ratings: list[PlayerRating] = Field(default_factory=list)
     created_at: datetime
+
+
+class LeaderboardEntry(BaseModel):
+    rank: int
+    player: PublicPlayerProfile
+    score: float
+    ratings_count: int
+
+
+class LeaderboardResponse(BaseModel):
+    scope: str
+    entries: list[LeaderboardEntry]

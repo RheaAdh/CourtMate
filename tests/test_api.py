@@ -71,6 +71,24 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(games_view.status_code, 200)
         self.assertIn(session_id, {game["id"] for game in games_view.json()["games"]})
 
+        chat_post = self.client.post(f"/v1/sessions/{session_id}/chat", json={"message": "Court is booked for 7 PM"}, headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(chat_post.status_code, 200)
+        chat_view = self.client.get(f"/v1/sessions/{session_id}/chat", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(chat_view.status_code, 200)
+        self.assertEqual(chat_view.json()["posts"][0]["message"], "Court is booked for 7 PM")
+
+        feedback = self.client.post(
+            f"/v1/sessions/{session_id}/feedback",
+            json={"fun": 5, "fairness": 5, "would_return": True, "ratings": [{"player_id": "p1", "rating": 5, "comment": "Great organizer"}]},
+            headers={"X-CourtMate-Player-ID": "p2"},
+        )
+        self.assertEqual(feedback.status_code, 200)
+        leaderboard = self.client.get(f"/v1/sessions/{session_id}/leaderboard", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(leaderboard.status_code, 200)
+        p1_entry = next(entry for entry in leaderboard.json()["entries"] if entry["player"]["id"] == "p1")
+        self.assertEqual(p1_entry["score"], 5.0)
+        self.assertEqual(p1_entry["ratings_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
