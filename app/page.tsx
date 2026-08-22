@@ -29,6 +29,40 @@ type Replacement = {
   explanation: string;
 };
 
+type ReplacementResponse = {
+  candidates: ReplacementCandidate[];
+};
+
+type ReplacementCandidate = {
+  player: {
+    id: string;
+    display_name: string;
+    area: string;
+    dupr_rating?: number | null;
+    reliability: number;
+  };
+  explanation: string;
+};
+
+type GroupProposal = {
+  group_name: string;
+  area: string;
+  session_date?: string;
+  start_time?: string;
+  end_time?: string;
+  skill_min: number;
+  skill_max: number;
+  style: string;
+  explanation: string;
+};
+
+type SearchResponse = {
+  action: "join_existing" | "create_group";
+  message: string;
+  recommendations: { session: Session; score: number; reasons: { explanation: string } }[];
+  group_proposal?: GroupProposal;
+};
+
 const demoSessions: Session[] = [
   { id: "s1", group_name: "Sunday Rally Crew", area: "Whitefield", session_date: "2026-08-30", start_time: "08:00", end_time: "10:00", skill_min: 3, skill_max: 3.5, style: "casual", capacity: 8, confirmed_player_ids: ["p1", "p2", "p3", "p6"], open_slots: 4, score: .925, explanation: "Matches your area, Sunday morning, casual style, and intermediate skill band. 4 open slots." },
   { id: "s2", group_name: "East Bengaluru Social", area: "Brookefield", session_date: "2026-08-30", start_time: "09:00", end_time: "11:00", skill_min: 2.8, skill_max: 3.4, style: "social", capacity: 8, confirmed_player_ids: ["p3", "p5"], open_slots: 6, score: .748, explanation: "A nearby social group with a wider skill range and plenty of room to join." },
@@ -39,12 +73,18 @@ const demoReplacements: Replacement[] = [
   { id: "p5", display_name: "Vikram", area: "Kadugodi", rating: "Unrated / provisional", reliability: .8, explanation: "Casual style and nearby area. Organizer approval recommended because the player is unrated." },
 ];
 
+const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
 export default function Home() {
   const [query, setQuery] = useState("Find me a casual intermediate game near Whitefield this Sunday morning");
   const [sessions, setSessions] = useState(demoSessions);
   const [isListening, setIsListening] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showReplacement, setShowReplacement] = useState(false);
+  const [replacements, setReplacements] = useState(demoReplacements);
+  const [replacementLoading, setReplacementLoading] = useState(false);
+  const [groupProposal, setGroupProposal] = useState<GroupProposal | null>(null);
+  const [createGroupLoading, setCreateGroupLoading] = useState(false);
   const [toast, setToast] = useState("");
 
   async function search(event?: FormEvent, nextQuery?: string) {
@@ -52,25 +92,79 @@ export default function Home() {
     const requestQuery = nextQuery ?? query;
     setLoading(true);
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/v1/sessions/search`, {
+      const response = await fetch(`${apiUrl}/v1/sessions/search`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ query: requestQuery }),
+        body: JSON.stringify({ query: requestQuery, player_id: "p1" }),
       });
       if (!response.ok) throw new Error("API unavailable");
-      const payload = await response.json();
+      const payload = (await response.json()) as SearchResponse;
       setSessions(payload.recommendations.map((item: { session: Session; score: number; reasons: { explanation: string } }) => ({
         ...item.session,
         open_slots: item.session.capacity - item.session.confirmed_player_ids.length,
         score: item.score,
         explanation: item.reasons.explanation,
       })));
-      setToast("Gemini searched live session data");
+      setGroupProposal(payload.group_proposal ?? null);
+      setToast(payload.message || "Gemini searched live session data");
     } catch {
       setSessions(demoSessions);
+      setGroupProposal(null);
       setToast("Demo mode: showing seeded Whitefield groups");
     } finally {
       setLoading(false);
+      window.setTimeout(() => setToast(""), 2600);
+    }
+  }
+
+  async function createGroup() {
+    setCreateGroupLoading(true);
+    try {
+      const response = await fetch(`${apiUrl}/v1/groups`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query, player_id: "p1" }),
+      });
+      if (!response.ok) throw new Error("Unable to create group");
+      const payload = await response.json() as { session: Omit<Session, "open_slots" | "score" | "explanation">; message: string };
+      const createdSession: Session = {
+        ...payload.session,
+        open_slots: payload.session.capacity - payload.session.confirmed_player_ids.length,
+        score: 1,
+        explanation: "You are the organizer. CourtMate can now invite nearby players in the same DUPR band.",
+      };
+      setSessions([createdSession]);
+      setGroupProposal(null);
+      setToast(payload.message);
+    } catch {
+      setToast("Could not create the group. Check that the API is running.");
+    } finally {
+      setCreateGroupLoading(false);
+      window.setTimeout(() => setToast(""), 2600);
+    }
+  }
+
+  async function loadReplacements() {
+    setShowReplacement(true);
+    setReplacementLoading(true);
+    try {
+      const response = await fetch(`${apiUrl}/v1/sessions/s1/replacement`);
+      if (!response.ok) throw new Error("API unavailable");
+      const payload = (await response.json()) as ReplacementResponse;
+      setReplacements(payload.candidates.map((candidate) => ({
+        id: candidate.player.id,
+        display_name: candidate.player.display_name,
+        area: candidate.player.area,
+        rating: candidate.player.dupr_rating ? `DUPR ${candidate.player.dupr_rating.toFixed(1)}` : "Unrated / provisional",
+        reliability: candidate.player.reliability,
+        explanation: candidate.explanation,
+      })));
+      setToast("Live replacement suggestions loaded from Firestore");
+    } catch {
+      setReplacements(demoReplacements);
+      setToast("Demo mode: showing seeded replacement suggestions");
+    } finally {
+      setReplacementLoading(false);
       window.setTimeout(() => setToast(""), 2600);
     }
   }
@@ -94,8 +188,24 @@ export default function Home() {
     recognition.start();
   }
 
-  function joinSession(name: string) {
-    setToast(`Join request sent to ${name}`);
+  async function joinSession(sessionId: string, name: string) {
+    try {
+      const response = await fetch(`${apiUrl}/v1/sessions/${sessionId}/join`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ player_id: "p1" }),
+      });
+      if (!response.ok) throw new Error("Unable to join");
+      setToast(`Join request sent to ${name}`);
+    } catch {
+      setToast(`Could not request to join ${name}`);
+    } finally {
+      window.setTimeout(() => setToast(""), 2600);
+    }
+  }
+
+  function inviteCandidate(name: string) {
+    setToast(`Invite prepared for ${name}`);
     window.setTimeout(() => setToast(""), 2600);
   }
 
@@ -121,20 +231,21 @@ export default function Home() {
 
       <section className="content-grid">
         <div className="results-column">
-          <div className="section-heading"><div><span className="kicker">MATCHES FOR YOU</span><h2>Open games nearby</h2></div><span className="result-count">{sessions.length} good fits</span></div>
+          <div className="section-heading"><div><span className="kicker">MATCHES FOR YOU</span><h2>{sessions.length ? "Open games nearby" : "No exact match yet"}</h2></div><span className="result-count">{sessions.length} good fits</span></div>
           <div className="reason-strip"><span className="spark">✦</span><span><strong>AI read:</strong> You usually choose casual groups on Sunday mornings. We prioritized familiar skill bands and reliable players.</span></div>
+          {!sessions.length && groupProposal && <div className="empty-state"><span className="empty-icon">+</span><span className="kicker">START THE NEXT GROUP</span><h3>{groupProposal.group_name}</h3><p>{groupProposal.explanation}</p><div className="tags"><span className="tag rating">DUPR {groupProposal.skill_min.toFixed(1)}–{groupProposal.skill_max.toFixed(1)}</span><span className="tag">{groupProposal.style}</span><span className="tag open">{groupProposal.area}</span></div><button className="join-button create-button" onClick={() => void createGroup()}>{createGroupLoading ? "Creating group" : "Create this group"}<span>↗</span></button></div>}
           <div className="session-list">
             {sessions.map((session, index) => <article className={`session-card ${index === 0 ? "featured" : ""}`} key={session.id}>
               <div className="card-top"><span className="date-badge"><strong>{new Date(session.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><small>{new Date(session.session_date).getDate()}</small></span><div className="session-meta"><div className="session-title-row"><h3>{session.group_name}</h3><span className="fit-score">{Math.round(session.score * 100)}% fit</span></div><p>{session.start_time} – {session.end_time} · {session.area}</p></div><button className="more">•••</button></div>
               <div className="tags"><span className="tag rating">DUPR {session.skill_min.toFixed(1)}–{session.skill_max.toFixed(1)}</span><span className="tag">{session.style}</span><span className="tag open">{session.open_slots} spots open</span></div>
               <p className="explanation"><span>✦</span>{session.explanation}</p>
-              <div className="card-bottom"><div className="member-stack"><span className="member coral">A</span><span className="member green">K</span><span className="member blue">R</span><span className="member-count">+{session.confirmed_player_ids.length + 2}</span></div><button className="join-button" onClick={() => joinSession(session.group_name)}>View group <span>↗</span></button></div>
+              <div className="card-bottom"><div className="member-stack"><span className="member coral">A</span><span className="member green">K</span><span className="member blue">R</span><span className="member-count">+{session.confirmed_player_ids.length + 2}</span></div><button className="join-button" onClick={() => void joinSession(session.id, session.group_name)}>Request to join <span>↗</span></button></div>
             </article>)}
           </div>
         </div>
 
         <aside className="side-column">
-          <div className="side-card rescue-card"><div className="side-card-header"><span className="icon-box orange">↗</span><span className="kicker">ORGANIZER VIEW</span></div><h3>Keep the game alive.</h3><p>Someone dropped from <strong>Sunday Rally Crew</strong>. CourtMate found 2 players who fit the session.</p><button className="dark-button" onClick={() => setShowReplacement(!showReplacement)}>{showReplacement ? "Hide suggestions" : "See replacements"}<span>→</span></button>{showReplacement && <div className="replacement-list">{demoReplacements.map((candidate) => <div className="replacement" key={candidate.id}><div className="candidate-avatar">{candidate.display_name[0]}</div><div><strong>{candidate.display_name}</strong><small>{candidate.rating} · {Math.round(candidate.reliability * 100)}% reliable</small></div><button onClick={() => joinSession(candidate.display_name)}>Invite</button></div>)}</div>}</div>
+          <div className="side-card rescue-card"><div className="side-card-header"><span className="icon-box orange">↗</span><span className="kicker">ORGANIZER VIEW</span></div><h3>Keep the game alive.</h3><p>Someone dropped from <strong>Sunday Rally Crew</strong>. CourtMate found {replacements.length} players who fit the session.</p><button className="dark-button" onClick={() => showReplacement ? setShowReplacement(false) : void loadReplacements()}>{showReplacement ? "Hide suggestions" : replacementLoading ? "Finding players" : "See replacements"}<span>→</span></button>{showReplacement && <div className="replacement-list">{replacements.map((candidate) => <div className="replacement" key={candidate.id}><div className="candidate-avatar">{candidate.display_name[0]}</div><div><strong>{candidate.display_name}</strong><small>{candidate.rating} · {Math.round(candidate.reliability * 100)}% reliable</small></div><button onClick={() => inviteCandidate(candidate.display_name)}>Invite</button></div>)}</div>}</div>
           <div className="side-card trust-card"><div className="side-card-header"><span className="icon-box green-bg">✦</span><span className="kicker">WHY COURTMATE</span></div><h3>Built around the group, not the booking.</h3><div className="trust-row"><span>01</span><p><strong>DUPR-aware</strong><br />Skill is a signal, not a guess.</p></div><div className="trust-row"><span>02</span><p><strong>Group memory</strong><br />It remembers who you enjoy.</p></div><div className="trust-row"><span>03</span><p><strong>Always filling</strong><br />Dropouts become invitations.</p></div></div>
         </aside>
       </section>

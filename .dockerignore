@@ -1,0 +1,10 @@
+.git
+.next
+node_modules
+__pycache__
+*.pyc
+*.docx
+app
+public
+tests
+build_*.py

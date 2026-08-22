@@ -67,6 +67,26 @@ class SessionRecommendation(BaseModel):
     reasons: RecommendationReason
 
 
+class GroupProposal(BaseModel):
+    group_name: str
+    area: str
+    session_date: date_type | None = None
+    start_time: time | None = None
+    end_time: time | None = None
+    skill_min: float
+    skill_max: float
+    style: Literal["casual", "social", "competitive"]
+    capacity: int = Field(default=8, ge=2, le=16)
+    explanation: str
+
+
+class SearchDecision(BaseModel):
+    action: Literal["join_existing", "create_group"]
+    summary: str
+    ranked_session_ids: list[str] = Field(default_factory=list)
+    proposed_group_name: str | None = None
+
+
 class PlayerRecommendation(BaseModel):
     player: Player
     score: float
@@ -76,6 +96,9 @@ class PlayerRecommendation(BaseModel):
 class SearchResponse(BaseModel):
     intent: SearchIntent
     recommendations: list[SessionRecommendation]
+    action: Literal["join_existing", "create_group"] = "join_existing"
+    message: str = ""
+    group_proposal: GroupProposal | None = None
 
 
 class ReplacementResponse(BaseModel):
@@ -86,6 +109,28 @@ class ReplacementResponse(BaseModel):
 class ParseRequest(BaseModel):
     query: str
     player_id: str | None = None
+
+
+class JoinRequestRequest(BaseModel):
+    player_id: str = "p1"
+
+
+class JoinRequest(BaseModel):
+    id: str
+    session_id: str
+    player_id: str
+    status: Literal["pending", "approved", "declined"] = "pending"
+    created_at: datetime
+
+
+class CreateGroupRequest(BaseModel):
+    query: str
+    player_id: str = "p1"
+
+
+class CreatedGroupResponse(BaseModel):
+    session: Session
+    message: str
 
 
 class FeedbackRequest(BaseModel):

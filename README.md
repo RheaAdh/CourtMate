@@ -8,10 +8,13 @@ The first implementation slice is a Python API with:
 
 - Deterministic session search by area, time, skill band, and play style
 - DUPR-aware player and replacement ranking
+- Gemini search decision over a bounded Firestore session snapshot
+- Explicit join requests and no-match group creation
 - Unrated-player handling with explicit provenance
 - Gemini intent parsing through `google-genai` when `GEMINI_API_KEY` is configured
 - A deterministic local parser fallback for development and demos
-- In-memory seeded Whitefield data, designed to be replaced by Firestore
+- Firestore-backed players, sessions, and feedback, with an explicit in-memory fallback
+- A free-tier deployment profile with bounded Firestore reads and scale-to-zero Cloud Run
 - Feedback capture for fun, fairness, and repeat-play learning
 
 ## Run locally
@@ -21,10 +24,55 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
+cp .env.local.example .env.local
 uvicorn backend.main:app --reload
 ```
 
-Without a Gemini key, the API uses the local parser fallback. With a key, intent extraction uses Gemini through the server-side adapter.
+Set `GOOGLE_CLOUD_PROJECT` and authenticate with Application Default Credentials before starting the API:
+
+```bash
+gcloud auth application-default login
+python3 -m backend.seed_firestore --project mttn-portal
+```
+
+The API uses Firestore when `COURTMATE_DATASTORE=firestore`. Set `COURTMATE_DATASTORE=memory` for an offline local demo. With `GEMINI_API_KEY`, intent extraction and search explanation use the model in `GEMINI_MODEL` (default `gemini-3.6-flash`) through the server-side adapter. Gemini receives only a bounded session snapshot; Python remains the authority for DUPR, date, area, time, and open-slot eligibility. If Gemini is unavailable, the API falls back to deterministic parsing and decisions so the demo remains usable.
+
+## Test the Firestore flow
+
+Run the seed command once after Firestore is enabled. It is safe to rerun and writes the same 14 demo players and 8 sessions to the `players` and `sessions` collections.
+
+Start the API and website in separate terminals:
+
+```bash
+# terminal 1
+source .venv/bin/activate
+uvicorn backend.main:app --reload --port 8000
+
+# terminal 2
+npm run dev
+```
+
+Open `http://localhost:3000`, search for `Find me a casual intermediate game near Whitefield this Sunday morning`, and click `See replacements`. A successful API response will show the Firestore-backed candidates; the browser toast will say `Live replacement suggestions loaded from Firestore`.
+
+To test the no-match branch, search for `Find an advanced competitive game near Indiranagar this Sunday evening`. CourtMate will return a group proposal instead of fake results. Click `Create this group`; the new session is written to Firestore. Existing results use `Request to join`, which writes a pending record to the `join_requests` collection.
+
+Useful checks:
+
+```bash
+curl http://localhost:8000/health
+curl -X POST http://localhost:8000/v1/sessions/search \
+  -H 'content-type: application/json' \
+  -d '{"query":"Find a casual intermediate pickleball game near Whitefield this Sunday morning"}'
+curl http://localhost:8000/v1/sessions/s1/replacement
+
+curl -X POST http://localhost:8000/v1/sessions/s1/join \
+  -H 'content-type: application/json' \
+  -d '{"player_id":"p1"}'
+
+curl -X POST http://localhost:8000/v1/groups \
+  -H 'content-type: application/json' \
+  -d '{"query":"Find an advanced competitive game near Indiranagar this Sunday evening","player_id":"p1"}'
+```
 
 ## Example requests
 
@@ -44,12 +92,26 @@ curl http://localhost:8000/v1/sessions/s1/replacement
 python3 -m unittest discover -s tests -v
 ```
 
-## Google Cloud direction
+## Free-tier Google Cloud setup
 
-- Deploy the API container to Cloud Run.
-- Use Vertex AI with Application Default Credentials in Cloud Run, instead of shipping an API key.
-- Replace `InMemoryRepository` with Firestore behind the same repository contract.
-- Add Pub/Sub for reminders and replacement events after the synchronous demo flow is stable.
-- Export event records to BigQuery for organizer and venue analytics.
+- Create a Google Cloud project and enable Firestore in Native mode.
+- Enable the Firestore API and grant the Cloud Run service account Firestore User access.
+- Deploy one Cloud Run service in `us-central1` with scale-to-zero and a maximum of one instance for the demo.
+- Keep Firestore reads bounded with `COURTMATE_MAX_SESSION_READS` and `COURTMATE_MAX_PLAYER_READS`.
+- Use the Gemini API key server-side only; do not expose it in the frontend.
+- Do not enable Pub/Sub, BigQuery, Cloud Storage, or other paid services for the MVP.
 
-See [CourtMate_Technical_Design_and_Architecture.docx](CourtMate_Technical_Design_and_Architecture.docx) for the full architecture and decision record.
+Example Cloud Run deployment profile:
+
+```bash
+gcloud run deploy courtmate-api \
+  --source . \
+  --region us-central1 \
+  --min 0 \
+  --max 1 \
+  --memory 512Mi \
+  --cpu 1 \
+  --set-env-vars COURTMATE_DATASTORE=firestore,GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID,COURTMATE_MAX_SESSION_READS=100,COURTMATE_MAX_PLAYER_READS=500
+```
+
+The pasted Google Cloud free-tier limits are usage limits, not a spend cap. Set a billing budget alert in Cloud Billing and monitor Firestore reads/writes and Cloud Run requests.

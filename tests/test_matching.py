@@ -29,4 +29,4 @@ class MatchingTests(unittest.TestCase):
         candidates = suggest_replacements(session, repo.list_players())
         self.assertTrue(candidates)
         self.assertTrue(all(candidate.player.id not in session.confirmed_player_ids for candidate in candidates))
-        self.assertIn(candidates[0].player.id, {"p4", "p5"})
+        self.assertIn(candidates[0].player.id, {"p4", "p5", "p11", "p14"})
