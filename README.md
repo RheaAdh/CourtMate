@@ -25,7 +25,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 cp .env.local.example .env.local
-uvicorn backend.main:app --reload
+python -m uvicorn backend.main:app --reload
 ```
 
 Set `GOOGLE_CLOUD_PROJECT` and authenticate with Application Default Credentials before starting the API:
@@ -37,6 +37,28 @@ python3 -m backend.seed_firestore --project mttn-portal
 
 The API uses Firestore when `COURTMATE_DATASTORE=firestore`. Set `COURTMATE_DATASTORE=memory` for an offline local demo. With `GEMINI_API_KEY`, intent extraction and search explanation use the model in `GEMINI_MODEL` (default `gemini-3.6-flash`) through the server-side adapter. Gemini receives only a bounded session snapshot; Python remains the authority for DUPR, date, area, time, and open-slot eligibility. If Gemini is unavailable, the API falls back to deterministic parsing and decisions so the demo remains usable.
 
+## Google sign-in setup
+
+Firebase Authentication Google sign-in is used for identity; the backend verifies the Firebase ID token before reading or writing player, group, or join-request data.
+
+1. In the Firebase console, open project `mttn-portal`, add a Web app, and copy its Firebase configuration.
+2. In Authentication, enable the Google provider and add `localhost` to the authorized domains.
+3. Copy `.env.local.example` to `.env.local` and fill the `NEXT_PUBLIC_FIREBASE_*` values from the Web app configuration.
+4. Keep `COURTMATE_AUTH_REQUIRED=true` in `.env`.
+5. Install the updated dependencies and run both services:
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+python -m uvicorn backend.main:app --reload --port 8000
+
+# another terminal
+npm install
+npm run dev
+```
+
+To test two people, sign in with Google using two separate browser profiles. One user creates a group; the other searches for it and requests to join. The creator can click `View requests` in the organizer panel. The API also exposes `GET /v1/me` and `GET /v1/sessions/{session_id}/join-requests` for the authenticated user.
+
 ## Test the Firestore flow
 
 Run the seed command once after Firestore is enabled. It is safe to rerun and writes the same 14 demo players and 8 sessions to the `players` and `sessions` collections.
@@ -46,7 +68,7 @@ Start the API and website in separate terminals:
 ```bash
 # terminal 1
 source .venv/bin/activate
-uvicorn backend.main:app --reload --port 8000
+python -m uvicorn backend.main:app --reload --port 8000
 
 # terminal 2
 npm run dev
@@ -115,3 +137,5 @@ gcloud run deploy courtmate-api \
 ```
 
 The pasted Google Cloud free-tier limits are usage limits, not a spend cap. Set a billing budget alert in Cloud Billing and monitor Firestore reads/writes and Cloud Run requests.
+
+If the traceback shows `/opt/homebrew/anaconda3/site-packages`, Uvicorn was started outside the project environment. Activate `.venv` first or run it explicitly with `.venv/bin/python -m uvicorn`.

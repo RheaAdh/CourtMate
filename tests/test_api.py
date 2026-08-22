@@ -2,6 +2,7 @@ import os
 import unittest
 
 os.environ["COURTMATE_DATASTORE"] = "memory"
+os.environ["COURTMATE_AUTH_REQUIRED"] = "false"
 os.environ["GEMINI_API_KEY"] = ""
 
 from fastapi.testclient import TestClient
@@ -26,7 +27,7 @@ class ApiFlowTests(unittest.TestCase):
         created = self.client.post("/v1/groups", json={"query": "Find an advanced game near Indiranagar this Sunday evening", "player_id": "p1"})
         self.assertEqual(created.status_code, 200)
         session_id = created.json()["session"]["id"]
-        join = self.client.post(f"/v1/sessions/{session_id}/join", json={"player_id": "p2"})
+        join = self.client.post(f"/v1/sessions/{session_id}/join", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(join.status_code, 200)
         self.assertEqual(join.json()["status"], "pending")
 

@@ -30,6 +30,12 @@ class Player(BaseModel):
     opted_into_replacement_pool: bool = True
 
 
+class ProfileUpdateRequest(BaseModel):
+    area: str | None = None
+    dupr_rating: float | None = Field(default=None, ge=1, le=8)
+    style: Literal["casual", "social", "competitive"] | None = None
+
+
 class Session(BaseModel):
     id: str
     group_name: str
@@ -112,20 +118,25 @@ class ParseRequest(BaseModel):
 
 
 class JoinRequestRequest(BaseModel):
-    player_id: str = "p1"
+    pass
 
 
 class JoinRequest(BaseModel):
     id: str
     session_id: str
     player_id: str
+    player_display_name: str | None = None
     status: Literal["pending", "approved", "declined"] = "pending"
     created_at: datetime
 
 
+class JoinRequestsResponse(BaseModel):
+    session: Session
+    requests: list[JoinRequest]
+
+
 class CreateGroupRequest(BaseModel):
     query: str
-    player_id: str = "p1"
 
 
 class CreatedGroupResponse(BaseModel):

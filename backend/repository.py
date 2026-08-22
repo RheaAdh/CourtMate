@@ -10,8 +10,10 @@ class Repository(Protocol):
     def get_session(self, session_id: str) -> Session | None: ...
     def list_players(self) -> list[Player]: ...
     def get_player(self, player_id: str) -> Player | None: ...
+    def save_player(self, player: Player) -> Player: ...
     def save_feedback(self, feedback: Feedback) -> Feedback: ...
     def save_join_request(self, join_request: JoinRequest) -> JoinRequest: ...
+    def list_join_requests(self, session_id: str) -> list[JoinRequest]: ...
     def save_session(self, session: Session) -> Session: ...
 
 
@@ -70,6 +72,10 @@ class InMemoryRepository:
     def get_player(self, player_id: str) -> Player | None:
         return self.players.get(player_id)
 
+    def save_player(self, player: Player) -> Player:
+        self.players[player.id] = player
+        return player
+
     def save_feedback(self, feedback: Feedback) -> Feedback:
         self.feedback.append(feedback)
         return feedback
@@ -77,6 +83,9 @@ class InMemoryRepository:
     def save_join_request(self, join_request: JoinRequest) -> JoinRequest:
         self.join_requests[join_request.id] = join_request
         return join_request
+
+    def list_join_requests(self, session_id: str) -> list[JoinRequest]:
+        return [request for request in self.join_requests.values() if request.session_id == session_id]
 
     def save_session(self, session: Session) -> Session:
         self.sessions[session.id] = session
@@ -131,6 +140,11 @@ class FirestoreRepository:
         document = self.client.collection("players").document(player_id).get()
         return self._as_player(document) if document.exists else None
 
+    def save_player(self, player: Player) -> Player:
+        reference = self.client.collection("players").document(player.id)
+        reference.set(self._write_model(player), merge=True)
+        return player
+
     def save_feedback(self, feedback: Feedback) -> Feedback:
         self.client.collection("feedback").add(feedback.model_dump(mode="json"))
         return feedback
@@ -139,6 +153,10 @@ class FirestoreRepository:
         reference = self.client.collection("join_requests").document(join_request.id)
         reference.set(join_request.model_dump(mode="json"))
         return join_request
+
+    def list_join_requests(self, session_id: str) -> list[JoinRequest]:
+        documents = self.client.collection("join_requests").where("session_id", "==", session_id).limit(100).stream()
+        return [JoinRequest.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
 
     def save_session(self, session: Session) -> Session:
         reference = self.client.collection("sessions").document(session.id)

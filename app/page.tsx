@@ -1,6 +1,9 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
+import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, User } from "firebase/auth";
+
+import { auth, isFirebaseConfigured } from "../lib/firebase";
 
 type Session = {
   id: string;
@@ -63,6 +66,22 @@ type SearchResponse = {
   group_proposal?: GroupProposal;
 };
 
+type PlayerProfile = {
+  id: string;
+  display_name: string;
+  area: string;
+  dupr_rating?: number | null;
+  rating_source: string;
+  style: string;
+};
+
+type JoinRequest = {
+  id: string;
+  player_id: string;
+  player_display_name?: string;
+  status: string;
+};
+
 const demoSessions: Session[] = [
   { id: "s1", group_name: "Sunday Rally Crew", area: "Whitefield", session_date: "2026-08-30", start_time: "08:00", end_time: "10:00", skill_min: 3, skill_max: 3.5, style: "casual", capacity: 8, confirmed_player_ids: ["p1", "p2", "p3", "p6"], open_slots: 4, score: .925, explanation: "Matches your area, Sunday morning, casual style, and intermediate skill band. 4 open slots." },
   { id: "s2", group_name: "East Bengaluru Social", area: "Brookefield", session_date: "2026-08-30", start_time: "09:00", end_time: "11:00", skill_min: 2.8, skill_max: 3.4, style: "social", capacity: 8, confirmed_player_ids: ["p3", "p5"], open_slots: 6, score: .748, explanation: "A nearby social group with a wider skill range and plenty of room to join." },
@@ -85,17 +104,95 @@ export default function Home() {
   const [replacementLoading, setReplacementLoading] = useState(false);
   const [groupProposal, setGroupProposal] = useState<GroupProposal | null>(null);
   const [createGroupLoading, setCreateGroupLoading] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<PlayerProfile | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [createdGroupId, setCreatedGroupId] = useState<string | null>(null);
+  const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
+  const [requestsLoading, setRequestsLoading] = useState(false);
   const [toast, setToast] = useState("");
+
+  useEffect(() => {
+    if (!auth) {
+      setAuthReady(true);
+      return;
+    }
+    return onAuthStateChanged(auth, (nextUser) => {
+      setUser(nextUser);
+      setAuthReady(true);
+      if (nextUser) void loadProfile(nextUser);
+    });
+  }, []);
+
+  async function authorizedFetch(url: string, options: RequestInit = {}, authUser: User | null = user) {
+    if (!authUser) throw new Error("Sign in required");
+    const token = await authUser.getIdToken();
+    const headers = new Headers(options.headers);
+    headers.set("authorization", `Bearer ${token}`);
+    return fetch(url, { ...options, headers });
+  }
+
+  async function loadProfile(authUser: User = user as User) {
+    try {
+      const response = await authorizedFetch(`${apiUrl}/v1/me`, {}, authUser);
+      if (!response.ok) throw new Error("Profile unavailable");
+      setProfile(await response.json() as PlayerProfile);
+    } catch {
+      setToast("Could not load your CourtMate profile");
+    }
+  }
+
+  async function signIn() {
+    if (!auth || !isFirebaseConfigured) {
+      setToast("Add Firebase web config to .env.local first");
+      return;
+    }
+    try {
+      await signInWithPopup(auth, new GoogleAuthProvider());
+    } catch {
+      setToast("Google sign-in was cancelled or failed");
+    }
+  }
+
+  async function signOutUser() {
+    if (auth) await signOut(auth);
+    setProfile(null);
+    setCreatedGroupId(null);
+    setJoinRequests([]);
+  }
+
+  async function setDUPRRating() {
+    if (!profile) return;
+    const value = window.prompt("Enter your DUPR rating", profile.dupr_rating?.toString() ?? "3.2");
+    if (!value) return;
+    const rating = Number(value);
+    if (!Number.isFinite(rating) || rating < 1 || rating > 8) {
+      setToast("DUPR rating must be between 1.0 and 8.0");
+      return;
+    }
+    try {
+      const response = await authorizedFetch(`${apiUrl}/v1/me/profile`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dupr_rating: rating }) });
+      if (!response.ok) throw new Error("Profile update failed");
+      setProfile(await response.json() as PlayerProfile);
+      setToast("DUPR profile updated");
+    } catch {
+      setToast("Could not update your DUPR profile");
+    }
+  }
 
   async function search(event?: FormEvent, nextQuery?: string) {
     event?.preventDefault();
+    if (!user) {
+      setToast("Sign in with Google before searching");
+      return;
+    }
     const requestQuery = nextQuery ?? query;
     setLoading(true);
     try {
-      const response = await fetch(`${apiUrl}/v1/sessions/search`, {
+      const response = await authorizedFetch(`${apiUrl}/v1/sessions/search`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ query: requestQuery, player_id: "p1" }),
+        body: JSON.stringify({ query: requestQuery }),
       });
       if (!response.ok) throw new Error("API unavailable");
       const payload = (await response.json()) as SearchResponse;
@@ -118,12 +215,16 @@ export default function Home() {
   }
 
   async function createGroup() {
+    if (!user) {
+      setToast("Sign in with Google before creating a group");
+      return;
+    }
     setCreateGroupLoading(true);
     try {
-      const response = await fetch(`${apiUrl}/v1/groups`, {
+      const response = await authorizedFetch(`${apiUrl}/v1/groups`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ query, player_id: "p1" }),
+        body: JSON.stringify({ query }),
       });
       if (!response.ok) throw new Error("Unable to create group");
       const payload = await response.json() as { session: Omit<Session, "open_slots" | "score" | "explanation">; message: string };
@@ -135,6 +236,7 @@ export default function Home() {
       };
       setSessions([createdSession]);
       setGroupProposal(null);
+      setCreatedGroupId(createdSession.id);
       setToast(payload.message);
     } catch {
       setToast("Could not create the group. Check that the API is running.");
@@ -148,7 +250,7 @@ export default function Home() {
     setShowReplacement(true);
     setReplacementLoading(true);
     try {
-      const response = await fetch(`${apiUrl}/v1/sessions/s1/replacement`);
+      const response = await authorizedFetch(`${apiUrl}/v1/sessions/s1/replacement`);
       if (!response.ok) throw new Error("API unavailable");
       const payload = (await response.json()) as ReplacementResponse;
       setReplacements(payload.candidates.map((candidate) => ({
@@ -190,16 +292,32 @@ export default function Home() {
 
   async function joinSession(sessionId: string, name: string) {
     try {
-      const response = await fetch(`${apiUrl}/v1/sessions/${sessionId}/join`, {
+      const response = await authorizedFetch(`${apiUrl}/v1/sessions/${sessionId}/join`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ player_id: "p1" }),
       });
       if (!response.ok) throw new Error("Unable to join");
       setToast(`Join request sent to ${name}`);
     } catch {
       setToast(`Could not request to join ${name}`);
     } finally {
+      window.setTimeout(() => setToast(""), 2600);
+    }
+  }
+
+  async function loadJoinRequests() {
+    if (!createdGroupId) return;
+    setRequestsLoading(true);
+    try {
+      const response = await authorizedFetch(`${apiUrl}/v1/sessions/${createdGroupId}/join-requests`);
+      if (!response.ok) throw new Error("Requests unavailable");
+      const payload = await response.json() as { requests: JoinRequest[] };
+      setJoinRequests(payload.requests);
+      setToast(`${payload.requests.length} join request(s) loaded`);
+    } catch {
+      setToast("Only the group organizer can view these requests");
+    } finally {
+      setRequestsLoading(false);
       window.setTimeout(() => setToast(""), 2600);
     }
   }
@@ -213,7 +331,7 @@ export default function Home() {
     <main className="shell">
       <nav className="nav">
         <div className="brand"><span className="brand-mark">CM</span><span>CourtMate</span></div>
-        <div className="nav-right"><span className="location-pill"><span className="dot" /> Whitefield, Bengaluru</span><button className="avatar">R</button></div>
+        <div className="nav-right"><span className="location-pill"><span className="dot" /> Whitefield, Bengaluru</span>{user ? <><span className="user-name">{user.displayName ?? user.email}</span><button className="avatar" onClick={() => void signOutUser()} title="Sign out">{(user.displayName ?? user.email ?? "C")[0].toUpperCase()}</button></> : <button className="sign-in-button" onClick={() => void signIn()}>{authReady ? "Sign in with Google" : "Loading auth"}</button>}</div>
       </nav>
 
       <section className="hero">
@@ -232,7 +350,7 @@ export default function Home() {
       <section className="content-grid">
         <div className="results-column">
           <div className="section-heading"><div><span className="kicker">MATCHES FOR YOU</span><h2>{sessions.length ? "Open games nearby" : "No exact match yet"}</h2></div><span className="result-count">{sessions.length} good fits</span></div>
-          <div className="reason-strip"><span className="spark">✦</span><span><strong>AI read:</strong> You usually choose casual groups on Sunday mornings. We prioritized familiar skill bands and reliable players.</span></div>
+          <div className="reason-strip"><span className="spark">✦</span><span><strong>AI read:</strong> {profile?.dupr_rating ? `Your DUPR ${profile.dupr_rating.toFixed(1)} profile is being used for skill matching.` : "Set your DUPR rating so CourtMate can make skill-aware recommendations."}</span>{profile && <button className="profile-action" onClick={() => void setDUPRRating()}>{profile.dupr_rating ? "Update" : "Set DUPR"}</button>}</div>
           {!sessions.length && groupProposal && <div className="empty-state"><span className="empty-icon">+</span><span className="kicker">START THE NEXT GROUP</span><h3>{groupProposal.group_name}</h3><p>{groupProposal.explanation}</p><div className="tags"><span className="tag rating">DUPR {groupProposal.skill_min.toFixed(1)}–{groupProposal.skill_max.toFixed(1)}</span><span className="tag">{groupProposal.style}</span><span className="tag open">{groupProposal.area}</span></div><button className="join-button create-button" onClick={() => void createGroup()}>{createGroupLoading ? "Creating group" : "Create this group"}<span>↗</span></button></div>}
           <div className="session-list">
             {sessions.map((session, index) => <article className={`session-card ${index === 0 ? "featured" : ""}`} key={session.id}>
@@ -247,6 +365,7 @@ export default function Home() {
         <aside className="side-column">
           <div className="side-card rescue-card"><div className="side-card-header"><span className="icon-box orange">↗</span><span className="kicker">ORGANIZER VIEW</span></div><h3>Keep the game alive.</h3><p>Someone dropped from <strong>Sunday Rally Crew</strong>. CourtMate found {replacements.length} players who fit the session.</p><button className="dark-button" onClick={() => showReplacement ? setShowReplacement(false) : void loadReplacements()}>{showReplacement ? "Hide suggestions" : replacementLoading ? "Finding players" : "See replacements"}<span>→</span></button>{showReplacement && <div className="replacement-list">{replacements.map((candidate) => <div className="replacement" key={candidate.id}><div className="candidate-avatar">{candidate.display_name[0]}</div><div><strong>{candidate.display_name}</strong><small>{candidate.rating} · {Math.round(candidate.reliability * 100)}% reliable</small></div><button onClick={() => inviteCandidate(candidate.display_name)}>Invite</button></div>)}</div>}</div>
           <div className="side-card trust-card"><div className="side-card-header"><span className="icon-box green-bg">✦</span><span className="kicker">WHY COURTMATE</span></div><h3>Built around the group, not the booking.</h3><div className="trust-row"><span>01</span><p><strong>DUPR-aware</strong><br />Skill is a signal, not a guess.</p></div><div className="trust-row"><span>02</span><p><strong>Group memory</strong><br />It remembers who you enjoy.</p></div><div className="trust-row"><span>03</span><p><strong>Always filling</strong><br />Dropouts become invitations.</p></div></div>
+          {createdGroupId && <div className="side-card request-card"><div className="side-card-header"><span className="icon-box green-bg">✓</span><span className="kicker">YOUR GROUP</span></div><h3>Join requests</h3><p>Other signed-in players can request to join your new group. Refresh here to see them.</p><button className="dark-button" onClick={() => void loadJoinRequests()}>{requestsLoading ? "Loading requests" : "View requests"}<span>→</span></button>{joinRequests.length > 0 && <div className="request-list">{joinRequests.map((request) => <div className="request-row" key={request.id}><strong>{request.player_display_name ?? request.player_id.slice(0, 10)}</strong><small>{request.status}</small></div>)}</div>}</div>}
         </aside>
       </section>
 
