@@ -20,6 +20,7 @@ The first implementation slice is a Python API with:
 - CMR calculated and displayed on a 0-100 scale, with compatibility conversion for existing 1-8 skill bands
 - A free-tier deployment profile with bounded Firestore reads and scale-to-zero Cloud Run
 - Post-game feedback with fun/fairness signals, broad player skill levels, and optional team/score context
+- Gemini vision analysis of optional watch-tracker screenshots, with extracted game stats saved as activity proof
 - Tournament desk for racket-sport registration, round-robin fixtures, score confirmation, and live standings
 
 ## Run locally
@@ -74,7 +75,7 @@ npm run dev
 
 To test two people, sign in with Google using two separate browser profiles. One user creates a group; compatible nearby players receive a persistent in-app alert in the notification bell, and can open it to return to matching games. The other player can search for the group and request to join. The creator can click `View requests` in the organizer panel and approve or decline the request. Confirmed members can open the group space to post and reload chat messages, submit post-game feedback using `Beginner`, `Intermediate`, or `Advanced` labels instead of numeric player ratings, optionally record who played on each team and the final score, and view group and locality leaderboards. Click any group member to open their public profile, see sport CMR and reliability, and follow or unfollow them. The `My activity` panel shows `pending`, `approved`, or `declined` requests, upcoming approved games, and all groups created by the signed-in organizer. Approved games can be added to Google Calendar. The notification API exposes `GET /v1/me/notifications` and `POST /v1/me/notifications/{notification_id}/read`; the frontend refreshes the inbox every 30 seconds. Native browser or mobile push can be added later with Firebase Cloud Messaging without changing the matching contract. Social APIs expose `GET /v1/players/{player_id}`, `POST /v1/players/{player_id}/follow`, `POST /v1/players/{player_id}/unfollow`, `GET /v1/me/following`, and `GET /v1/me/followers`. The API also exposes `GET /v1/me`, `GET /v1/me/requests`, `GET /v1/me/games`, `GET /v1/me/groups`, `GET /v1/sessions/{session_id}/join-requests`, `GET/POST /v1/sessions/{session_id}/chat`, `POST /v1/sessions/{session_id}/feedback`, `GET /v1/sessions/{session_id}/leaderboard`, and `GET /v1/leaderboards/local` for the authenticated user.
 
-After the scheduled end time, CourtMate marks the session `completed`, removes it from discovery and upcoming games, and makes chat read-only while preserving feedback and leaderboard access. Organizers can close a game immediately with `POST /v1/sessions/{session_id}/complete`.
+After the scheduled end time, CourtMate marks the session `completed`, removes it from discovery and upcoming games, and makes chat read-only while preserving feedback, tracker screenshots, and leaderboard access. Organizers can close a game immediately with `POST /v1/sessions/{session_id}/complete`. Confirmed players can attach a JPG, PNG, or WebP watch screenshot in the game check-in; Gemini extracts only clearly visible calories, duration, distance, steps, and heart rate values, and stores the structured proof in the `activity_proofs` Firestore collection.
 
 ## Test the Firestore flow
 
@@ -87,7 +88,15 @@ COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
   python -m backend.seed_synthetic_firestore
 ```
 
-The script upserts only `demo-` records in the CourtMate collections: players, sessions, join requests, chat posts, feedback, and follows. It does not touch Firebase Authentication or unrelated collections.
+The script upserts only `demo-` records in the CourtMate collections: players, sessions, join requests, chat posts, feedback, follows, notifications, tournaments, tournament registrations, and tournament matches. It does not touch Firebase Authentication or unrelated collections. To attach the Rhea Adhikari demo profile to your signed-in Firebase account, pass the Firebase Auth UID from that account:
+
+```bash
+COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
+COURTMATE_DEMO_RHEA_UID=YOUR_FIREBASE_AUTH_UID \
+  python -m backend.seed_synthetic_firestore
+```
+
+Without `COURTMATE_DEMO_RHEA_UID`, Rhea is created as the isolated `demo-rhea-adhikari` player. The seed includes multi-sport CMR history for Rhea, synthetic nearby players, notifications, and tournament fixtures so the Profile, Home, Games, group requests, leaderboard, social, and tournament flows are ready for a hackathon walkthrough. It is safe to rerun because the demo IDs are stable and writes are upserts.
 
 Existing player documents created before the 0-100 CMR update are converted safely when read. To permanently rewrite those records in Firestore, run the one-time migration with Application Default Credentials:
 

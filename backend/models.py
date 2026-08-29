@@ -423,9 +423,34 @@ class MyGamesResponse(BaseModel):
     past_games: list[PastGame] = Field(default_factory=list)
 
 
+class ActivityProofAnalysis(BaseModel):
+    calories_burned: float | None = Field(default=None, ge=0, le=10000)
+    duration_minutes: float | None = Field(default=None, ge=0, le=1440)
+    active_minutes: float | None = Field(default=None, ge=0, le=1440)
+    distance_km: float | None = Field(default=None, ge=0, le=1000)
+    steps: int | None = Field(default=None, ge=0, le=200000)
+    average_heart_rate: int | None = Field(default=None, ge=0, le=250)
+    summary: str = Field(default="Tracker stats extracted from the uploaded screenshot.", max_length=240)
+    confidence: float = Field(default=0.0, ge=0, le=1)
+
+
+class ActivityProof(BaseModel):
+    id: str
+    session_id: str
+    player_id: str
+    image_url: str
+    analysis: ActivityProofAnalysis
+    created_at: datetime
+
+
+class ActivityProofRequest(BaseModel):
+    image_url: str = Field(min_length=1, max_length=2048)
+
+
 class GroupViewResponse(BaseModel):
     session: Session
     members: list[PublicPlayerProfile]
+    activity_proofs: list[ActivityProof] = Field(default_factory=list)
 
 
 class ChatPostRequest(BaseModel):

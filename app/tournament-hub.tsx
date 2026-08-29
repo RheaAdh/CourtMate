@@ -120,6 +120,11 @@ export function TournamentHub({ apiUrl, currentUserId, authorizedFetch, onToast,
     void loadTournaments();
   }, [currentUserId]);
 
+  useEffect(() => {
+    const sharedTournamentId = new URLSearchParams(window.location.search).get("tournament");
+    if (currentUserId && sharedTournamentId) void openTournament(sharedTournamentId);
+  }, [currentUserId]);
+
   async function openTournament(tournamentId: string) {
     try {
       setBusyId(tournamentId);
@@ -171,6 +176,30 @@ export function TournamentHub({ apiUrl, currentUserId, authorizedFetch, onToast,
     }
   }
 
+  async function shareTournament() {
+    if (!selected) return;
+    const shareUrl = new URL(window.location.href);
+    shareUrl.search = "";
+    shareUrl.searchParams.set("tournament", selected.tournament.id);
+    const shareData = {
+      title: selected.tournament.name,
+      text: `${selected.tournament.name} · ${sportLabel(selected.tournament.sport)} · ${selected.tournament.tournament_date}`,
+      url: shareUrl.toString(),
+    };
+    try {
+      if (navigator.share) {
+        await navigator.share(shareData);
+        onToast("Tournament link shared");
+        return;
+      }
+      await navigator.clipboard.writeText(shareUrl.toString());
+      onToast("Tournament link copied");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      onToast("Could not share this tournament link");
+    }
+  }
+
   async function generateFixtures() {
     if (!selected) return;
     try {
@@ -218,9 +247,7 @@ export function TournamentHub({ apiUrl, currentUserId, authorizedFetch, onToast,
     return (
       <section className="page-view tournament-page">
         <div className="tournament-hero">
-          <span className="kicker">TOURNAMENT DESK</span>
-          <h1>Run a better competition.</h1>
-          <p>Generate fixtures, confirm scores, and keep a trusted leaderboard for every racket sport.</p>
+          <h1>Tournaments</h1>
           <button className="dark-button" onClick={onSignIn}>Sign in to enter <span>-&gt;</span></button>
         </div>
       </section>
@@ -237,9 +264,7 @@ export function TournamentHub({ apiUrl, currentUserId, authorizedFetch, onToast,
     <section className="page-view tournament-page">
       <div className="tournament-hero">
         <div>
-          <span className="kicker">TOURNAMENT DESK</span>
-          <h1>Run a better competition.</h1>
-          <p>Fixtures, scores, and standings for the people who showed up.</p>
+          <h1>Tournaments</h1>
         </div>
         <button className="create-game-action" onClick={() => setShowCreate((open) => !open)}>
           {showCreate ? "Close" : "Create tournament"} <span>+</span>
@@ -249,7 +274,7 @@ export function TournamentHub({ apiUrl, currentUserId, authorizedFetch, onToast,
       {showCreate && (
         <form className="tournament-create-card" onSubmit={createTournament}>
           <div className="tournament-create-heading">
-            <div><span className="kicker">NEW EVENT</span><h2>Set the court in motion.</h2></div>
+            <div><h2>New tournament</h2></div>
             <span>Round robin</span>
           </div>
           <div className="tournament-form-grid">
@@ -266,7 +291,7 @@ export function TournamentHub({ apiUrl, currentUserId, authorizedFetch, onToast,
 
       {selected ? (
         <div className="tournament-detail">
-          <button className="back-link" onClick={() => setSelected(null)}>&lt;- All tournaments</button>
+          <div className="tournament-detail-nav"><button className="back-link" onClick={() => setSelected(null)}>&lt;- All tournaments</button><button className="share-tournament-button" onClick={() => void shareTournament()}>Share tournament <span>↑</span></button></div>
           <div className="tournament-detail-header">
             <div>
               <span className="kicker">{sportLabel(selected.tournament.sport).toUpperCase()} · {selected.tournament.status.replace("_", " ").toUpperCase()}</span>
@@ -322,12 +347,12 @@ export function TournamentHub({ apiUrl, currentUserId, authorizedFetch, onToast,
               </aside>
             </div>
           ) : (
-            <div className="tournament-waiting"><span className="tournament-waiting-icon">+</span><div><strong>Registration is open.</strong><p>Share this tournament link, invite your regulars, then generate fixtures when the room is ready.</p></div></div>
+            <div className="tournament-waiting"><span className="tournament-waiting-icon">+</span><div><strong>Registration is open.</strong></div></div>
           )}
         </div>
       ) : (
         <div className="tournament-list">
-          <div className="tournament-list-heading"><div><span className="kicker">OPEN EVENTS</span><h2>Find your next bracket.</h2></div><span>{loading ? "Loading..." : `${tournaments.length} tournament${tournaments.length === 1 ? "" : "s"}`}</span></div>
+          <div className="tournament-list-heading"><div><h2>Open tournaments</h2></div><span>{loading ? "Loading..." : `${tournaments.length} tournament${tournaments.length === 1 ? "" : "s"}`}</span></div>
           {tournaments.length ? tournaments.map((tournament) => (
             <button className="tournament-card" key={tournament.id} onClick={() => void openTournament(tournament.id)} disabled={busyId === tournament.id}>
               <span className="tournament-card-date"><strong>{new Date(`${tournament.tournament_date}T00:00:00`).toLocaleDateString("en-IN", { day: "2-digit" })}</strong><small>{new Date(`${tournament.tournament_date}T00:00:00`).toLocaleDateString("en-IN", { month: "short" })}</small></span>
@@ -336,7 +361,7 @@ export function TournamentHub({ apiUrl, currentUserId, authorizedFetch, onToast,
               <span className="tournament-card-arrow">-&gt;</span>
             </button>
           )) : (
-            <div className="tournament-waiting"><span className="tournament-waiting-icon">+</span><div><strong>No tournaments yet.</strong><p>Create the first event and CourtMate will generate the draw as players register.</p></div></div>
+            <div className="tournament-waiting"><span className="tournament-waiting-icon">+</span><div><strong>No tournaments yet.</strong></div></div>
           )}
         </div>
       )}

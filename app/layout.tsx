@@ -7,10 +7,10 @@ export const metadata: Metadata = {
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [
-      { url: "/icon-192.svg", type: "image/svg+xml", sizes: "192x192" },
-      { url: "/icon-512.svg", type: "image/svg+xml", sizes: "512x512" },
+      { url: "/courtmate-icon-192.png", type: "image/png", sizes: "192x192" },
+      { url: "/courtmate-icon-512.png", type: "image/png", sizes: "512x512" },
     ],
-    apple: "/icon-192.svg",
+    apple: "/courtmate-icon-192.png",
   },
   appleWebApp: {
     capable: true,
@@ -26,7 +26,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#d8f56b",
+  themeColor: "#d7f23f",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

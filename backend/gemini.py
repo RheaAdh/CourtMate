@@ -3,7 +3,7 @@ import re
 from datetime import date
 import logging
 
-from .models import Player, SearchDecision, SearchIntent, Session, SessionRecommendation, Sport, rating_for_sport
+from .models import ActivityProofAnalysis, Player, SearchDecision, SearchIntent, Session, SessionRecommendation, Sport, rating_for_sport
 
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,10 @@ class GeminiIntentParser:
                 self._client = genai.Client(api_key=self.api_key)
             except ImportError:
                 self._client = None
+
+    @property
+    def image_analysis_available(self) -> bool:
+        return self._client is not None
 
     def parse(self, query: str, sport: Sport | None = None) -> SearchIntent:
         if self._client:
@@ -93,6 +97,23 @@ Firestore session snapshot: {snapshot}
         except Exception as error:
             logger.warning("Gemini search decision failed (%s); using deterministic decision", error)
             return fallback
+
+    def analyze_activity_image(self, image_bytes: bytes, mime_type: str) -> ActivityProofAnalysis:
+        """Extract only visible tracker metrics; never invent values that are not shown."""
+        if not self._client:
+            raise RuntimeError("Gemini image analysis is not configured")
+        from google.genai import types
+
+        prompt = """Read this fitness or sports tracker screenshot and return JSON matching the schema.
+Extract only metrics that are clearly visible in the image. Use null for metrics that are missing or unreadable.
+Do not estimate calories, duration, distance, steps, or heart rate. Keep summary short and factual.
+This screenshot is being attached to a completed racket-sport game."""
+        response = self._client.models.generate_content(
+            model=self.model,
+            contents=[prompt, types.Part.from_bytes(data=image_bytes, mime_type=mime_type)],
+            config={"response_mime_type": "application/json", "response_schema": ActivityProofAnalysis.model_json_schema()},
+        )
+        return ActivityProofAnalysis.model_validate_json(response.text)
 
     @staticmethod
     def _fallback_parse(query: str) -> SearchIntent:

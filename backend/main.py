@@ -1,7 +1,7 @@
 import os
 import re
 import json
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 from datetime import date, datetime, time, timedelta, timezone
 from uuid import uuid4
@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, SearchIntent, SearchResponse, Session, Sport, Tournament, TournamentDetailsResponse, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import ActivityProof, ActivityProofRequest, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, SearchIntent, SearchResponse, Session, Sport, Tournament, TournamentDetailsResponse, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
 from .tournaments import calculate_standings, generate_round_robin_matches, rules_for_sport, validate_score
 
@@ -701,7 +701,7 @@ def group_view(session_id: str, player: Player = Depends(get_current_player)) ->
         raise HTTPException(status_code=404, detail="Session not found")
     players_by_id = {candidate.id: candidate for candidate in repository.list_players()}
     members = [_public_profile(players_by_id[player_id], player.id) for player_id in session.confirmed_player_ids if player_id in players_by_id]
-    return GroupViewResponse(session=session, members=members)
+    return GroupViewResponse(session=session, members=members, activity_proofs=repository.list_activity_proofs(session_id=session.id))
 
 
 def _tournament_details(tournament: Tournament) -> TournamentDetailsResponse:
@@ -971,3 +971,32 @@ def feedback(session_id: str, request: FeedbackRequest, player: Player = Depends
     _refresh_community_scores()
     _refresh_cmr_ratings()
     return saved
+
+
+@app.post("/v1/sessions/{session_id}/activity-proof/analyze", response_model=ActivityProof)
+def analyze_activity_proof(session_id: str, request: ActivityProofRequest, player: Player = Depends(get_current_player)) -> ActivityProof:
+    session = _member_session(session_id, player)
+    if session.status != "completed":
+        raise HTTPException(status_code=409, detail="Attach tracker stats after the game is complete")
+    parsed_url = urlparse(request.image_url)
+    if parsed_url.scheme != "https" or parsed_url.hostname not in {"firebasestorage.googleapis.com", "storage.googleapis.com"}:
+        raise HTTPException(status_code=422, detail="Tracker screenshot must be stored in Google Cloud Storage")
+    if not intent_parser.image_analysis_available:
+        raise HTTPException(status_code=503, detail="Gemini image analysis is not configured")
+    try:
+        download_request = Request(request.image_url, headers={"Accept": "image/*"})
+        with urlopen(download_request, timeout=8) as response:
+            mime_type = response.headers.get_content_type()
+            image_bytes = response.read(8 * 1024 * 1024 + 1)
+    except (OSError, ValueError) as error:
+        raise HTTPException(status_code=422, detail="Could not read the tracker screenshot") from error
+    if mime_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(status_code=422, detail="Tracker screenshot must be JPG, PNG, or WebP")
+    if len(image_bytes) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Tracker screenshots must be smaller than 8 MB")
+    try:
+        analysis = intent_parser.analyze_activity_image(image_bytes, mime_type)
+    except Exception as error:
+        raise HTTPException(status_code=502, detail="Gemini could not read this screenshot") from error
+    proof = ActivityProof(id=f"proof-{uuid4().hex[:12]}", session_id=session.id, player_id=player.id, image_url=request.image_url, analysis=analysis, created_at=datetime.now(timezone.utc))
+    return repository.save_activity_proof(proof)

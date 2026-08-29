@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 from typing import Protocol
 
-from .models import AppNotification, ChatPost, Feedback, FollowRecord, JoinRequest, Player, Session, Tournament, TournamentMatch, TournamentRegistration, normalize_cmr_player
+from .models import ActivityProof, AppNotification, ChatPost, Feedback, FollowRecord, JoinRequest, Player, Session, Tournament, TournamentMatch, TournamentRegistration, normalize_cmr_player
 
 
 class Repository(Protocol):
@@ -13,6 +13,8 @@ class Repository(Protocol):
     def save_player(self, player: Player) -> Player: ...
     def save_feedback(self, feedback: Feedback) -> Feedback: ...
     def list_feedback(self, session_id: str | None = None) -> list[Feedback]: ...
+    def save_activity_proof(self, proof: ActivityProof) -> ActivityProof: ...
+    def list_activity_proofs(self, session_id: str | None = None, player_id: str | None = None) -> list[ActivityProof]: ...
     def save_chat_post(self, post: ChatPost) -> ChatPost: ...
     def list_chat_posts(self, session_id: str) -> list[ChatPost]: ...
     def save_join_request(self, join_request: JoinRequest) -> JoinRequest: ...
@@ -46,6 +48,7 @@ class InMemoryRepository:
         self.players: dict[str, Player] = {}
         self.sessions: dict[str, Session] = {}
         self.feedback: list[Feedback] = []
+        self.activity_proofs: dict[str, ActivityProof] = {}
         self.chat_posts: dict[str, ChatPost] = {}
         self.join_requests: dict[str, JoinRequest] = {}
         self.notifications: dict[str, AppNotification] = {}
@@ -80,6 +83,18 @@ class InMemoryRepository:
         if session_id is None:
             return list(self.feedback)
         return [item for item in self.feedback if item.session_id == session_id]
+
+    def save_activity_proof(self, proof: ActivityProof) -> ActivityProof:
+        self.activity_proofs[proof.id] = proof
+        return proof
+
+    def list_activity_proofs(self, session_id: str | None = None, player_id: str | None = None) -> list[ActivityProof]:
+        proofs = list(self.activity_proofs.values())
+        if session_id:
+            proofs = [proof for proof in proofs if proof.session_id == session_id]
+        if player_id:
+            proofs = [proof for proof in proofs if proof.player_id == player_id]
+        return sorted(proofs, key=lambda proof: proof.created_at, reverse=True)
 
     def save_chat_post(self, post: ChatPost) -> ChatPost:
         self.chat_posts[post.id] = post
@@ -230,6 +245,22 @@ class FirestoreRepository:
         collection = self.client.collection("feedback")
         documents = collection.where("session_id", "==", session_id).limit(1000).stream() if session_id else collection.limit(1000).stream()
         return [Feedback.model_validate(document.to_dict() or {}) for document in documents]
+
+    def save_activity_proof(self, proof: ActivityProof) -> ActivityProof:
+        reference = self.client.collection("activity_proofs").document(proof.id)
+        reference.set(self._write_model(proof))
+        return proof
+
+    def list_activity_proofs(self, session_id: str | None = None, player_id: str | None = None) -> list[ActivityProof]:
+        collection = self.client.collection("activity_proofs")
+        if session_id:
+            documents = collection.where("session_id", "==", session_id).limit(100).stream()
+        elif player_id:
+            documents = collection.where("player_id", "==", player_id).limit(100).stream()
+        else:
+            documents = collection.limit(100).stream()
+        proofs = [ActivityProof.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
+        return sorted(proofs, key=lambda proof: proof.created_at, reverse=True)
 
     def save_chat_post(self, post: ChatPost) -> ChatPost:
         reference = self.client.collection("chat_posts").document(post.id)

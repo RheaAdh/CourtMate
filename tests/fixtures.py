@@ -85,6 +85,7 @@ def load_repository_fixture(repository: InMemoryRepository) -> None:
     repository.players = players
     repository.sessions = {session.id: session for session in sessions}
     repository.feedback.clear()
+    repository.activity_proofs.clear()
     repository.chat_posts.clear()
     repository.join_requests.clear()
     repository.notifications.clear()

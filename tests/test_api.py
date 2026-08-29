@@ -154,6 +154,40 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(payload["area"], "Brookefield")
         self.assertEqual(payload["availability"], ["weekend mornings"])
 
+    def test_activity_proof_requires_cloud_storage_and_gemini(self):
+        repository.save_session(
+            Session(
+                id="activity-proof-game",
+                sport="pickleball",
+                group_name="Tracker Test Rally",
+                organizer_id="p1",
+                area="Whitefield",
+                session_date=date.today(),
+                start_time=time(8),
+                end_time=time(10),
+                skill_min=3.0,
+                skill_max=3.6,
+                style="casual",
+                capacity=8,
+                confirmed_player_ids=["p1"],
+                status="completed",
+            )
+        )
+        external = self.client.post(
+            "/v1/sessions/activity-proof-game/activity-proof/analyze",
+            json={"image_url": "https://example.com/tracker.jpg"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(external.status_code, 422)
+
+        storage_url = "https://firebasestorage.googleapis.com/v0/b/mttn-portal.firebasestorage.app/o/activity-proofs%2Fp1%2Factivity-proof-game%2Ftracker.jpg?alt=media&token=test"
+        not_configured = self.client.post(
+            "/v1/sessions/activity-proof-game/activity-proof/analyze",
+            json={"image_url": storage_url},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(not_configured.status_code, 503)
+
     def test_profile_stores_skill_level_without_a_numeric_rating(self):
         response = self.client.post(
             "/v1/me/profile",
