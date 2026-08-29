@@ -3032,6 +3032,24 @@ body::before { border-color: rgba(117, 140, 31, .18); }
   background: #cbdc73;
 }
 
+.profile-sign-out {
+  display: block;
+  margin: 12px 0 0 auto;
+  border: 1px solid #e4c6bc;
+  border-radius: 999px;
+  background: #fff8f5;
+  color: #a85f4b;
+  padding: 8px 12px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.profile-sign-out:hover {
+  border-color: #a85f4b;
+  background: #a85f4b;
+  color: white;
+}
+
 @media (max-width: 600px) {
   .home-chat-page {
     height: calc(100dvh - 64px);
