@@ -79,6 +79,8 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(followed.status_code, 200)
         self.assertTrue(followed.json()["is_following"])
         self.assertEqual(followed.json()["followers_count"], 1)
+        follow_notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertTrue(any(item["kind"] == "follow" and item["actor_id"] == "p1" for item in follow_notifications.json()["notifications"]))
 
         following = self.client.get("/v1/me/following", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(following.status_code, 200)
@@ -210,6 +212,9 @@ class ApiFlowTests(unittest.TestCase):
         join = self.client.post(f"/v1/sessions/{session_id}/join", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(join.status_code, 200)
         self.assertEqual(join.json()["status"], "pending")
+        organizer_notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": "p1"})
+        request_notification = next(item for item in organizer_notifications.json()["notifications"] if item["kind"] == "join_request")
+        self.assertEqual(request_notification["request_id"], join.json()["id"])
 
         organizer_view = self.client.get(f"/v1/me/groups", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(organizer_view.status_code, 200)
@@ -222,6 +227,8 @@ class ApiFlowTests(unittest.TestCase):
         )
         self.assertEqual(decision.status_code, 200)
         self.assertEqual(decision.json()["status"], "approved")
+        requester_notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertTrue(any(item["kind"] == "request_update" and item["request_id"] == join.json()["id"] for item in requester_notifications.json()["notifications"]))
 
         requester_view = self.client.get("/v1/me/requests", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(requester_view.status_code, 200)

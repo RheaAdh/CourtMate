@@ -167,6 +167,19 @@ def follow_player(player_id: str, player: Player = Depends(get_current_player)) 
         raise HTTPException(status_code=409, detail="You cannot follow yourself")
     if not repository.is_following(player.id, target.id):
         repository.save_follow(FollowRecord(id=f"{player.id}_{target.id}", follower_id=player.id, following_id=target.id, created_at=datetime.now(timezone.utc)))
+        try:
+            repository.save_notification(AppNotification(
+                id=f"follow-{player.id}-{target.id}",
+                player_id=target.id,
+                kind="follow",
+                title="New follower",
+                message=f"{player.display_name} followed you.",
+                session_id="",
+                actor_id=player.id,
+                created_at=datetime.now(timezone.utc),
+            ))
+        except Exception:
+            pass
     return _public_profile(target, player.id)
 
 
@@ -492,7 +505,39 @@ def join_session(session_id: str, request: JoinRequestRequest | None = None, pla
         session.waitlist_player_ids.append(player.id)
         repository.save_session(session)
         status = "waitlisted"
-    return repository.save_join_request(JoinRequest(id=request_id, session_id=session_id, player_id=player.id, player_display_name=player.display_name, status=status, created_at=datetime.now(timezone.utc)))
+    saved_request = repository.save_join_request(JoinRequest(id=request_id, session_id=session_id, player_id=player.id, player_display_name=player.display_name, status=status, created_at=datetime.now(timezone.utc)))
+    if status == "pending":
+        try:
+            repository.save_notification(AppNotification(
+                id=f"request-{request_id}",
+                player_id=session.organizer_id,
+                kind="join_request",
+                title="New join request",
+                message=f"{player.display_name} wants to join {session.group_name}.",
+                session_id=session.id,
+                request_id=saved_request.id,
+                created_at=datetime.now(timezone.utc),
+            ))
+        except Exception:
+            pass
+    return saved_request
+
+
+def _notify_request_update(join_request: JoinRequest, session: Session) -> None:
+    try:
+        status_label = "confirmed" if join_request.status == "approved" else join_request.status
+        repository.save_notification(AppNotification(
+            id=f"request-update-{join_request.id}-{join_request.status}",
+            player_id=join_request.player_id,
+            kind="request_update",
+            title=f"Join request {status_label}",
+            message=f"Your request for {session.group_name} is {status_label}.",
+            session_id=session.id,
+            request_id=join_request.id,
+            created_at=datetime.now(timezone.utc),
+        ))
+    except Exception:
+        pass
 
 
 @app.post("/v1/sessions/{session_id}/leave", response_model=Session)
@@ -564,12 +609,16 @@ def decide_join_request(session_id: str, request_id: str, request: JoinRequestDe
                 session.waitlist_player_ids.append(join_request.player_id)
                 repository.save_session(session)
             join_request.status = "waitlisted"
-            return repository.save_join_request(join_request)
+            saved_request = repository.save_join_request(join_request)
+            _notify_request_update(saved_request, session)
+            return saved_request
         if join_request.player_id not in session.confirmed_player_ids:
             session.confirmed_player_ids.append(join_request.player_id)
             repository.save_session(session)
     join_request.status = request.status
-    return repository.save_join_request(join_request)
+    saved_request = repository.save_join_request(join_request)
+    _notify_request_update(saved_request, session)
+    return saved_request
 
 
 @app.get("/v1/me/requests", response_model=MyRequestsResponse)

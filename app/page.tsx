@@ -191,10 +191,12 @@ type ChatPost = {
 
 type AppNotification = {
   id: string;
-  kind: "game_match";
+  kind: "game_match" | "join_request" | "request_update" | "follow";
   title: string;
   message: string;
   session_id: string;
+  request_id?: string | null;
+  actor_id?: string | null;
   read: boolean;
   created_at: string;
 };
@@ -470,9 +472,32 @@ export default function Home() {
     }
   }
 
+  async function decideNotificationRequest(notification: AppNotification, status: "approved" | "declined") {
+    if (!notification.request_id) return;
+    await markNotificationRead(notification.id);
+    await decideJoinRequest(notification.request_id, status, notification.session_id);
+    setNotificationsOpen(false);
+  }
+
   function openNotification(notification: AppNotification) {
     if (!notification.read) void markNotificationRead(notification.id);
     setNotificationsOpen(false);
+    if (notification.kind === "join_request") {
+      setActiveTab("games");
+      setGamesViewTab("upcoming");
+      void loadActivity("incoming");
+      return;
+    }
+    if (notification.kind === "request_update") {
+      setActiveTab("games");
+      setGamesViewTab("pending");
+      void loadActivity("requests");
+      return;
+    }
+    if (notification.kind === "follow" && notification.actor_id) {
+      void viewPlayerProfile(notification.actor_id);
+      return;
+    }
     setActiveTab("home");
     setQuery("");
     void search(undefined, `Show me nearby ${selectedSport} games that match my saved preferences`, false);
@@ -1012,8 +1037,8 @@ export default function Home() {
         <div className="nav-right"><button className={`about-link ${activeTab === "about" ? "active" : ""}`} onClick={() => selectTab("about")}>About</button><span className="location-pill"><span className="dot" /> Whitefield, Bengaluru</span>{user ? <><div className="notification-wrap">
           <button className={`notification-button ${notificationsOpen ? "active" : ""}`} type="button" onClick={() => { setNotificationsOpen((open) => !open); if (!notifications.length) void loadNotifications(); }} aria-label={`Notifications${unreadNotifications ? `, ${unreadNotifications} unread` : ""}`} title="Notifications"><BellIcon />{unreadNotifications > 0 && <span className="notification-count">{unreadNotifications > 9 ? "9+" : unreadNotifications}</span>}</button>
           {notificationsOpen && <div className="notification-popover" role="dialog" aria-label="Notifications">
-            <div className="notification-popover-heading"><div><span className="kicker">COURTMATE ALERTS</span><strong>Games for you</strong></div><button type="button" className="notification-close" onClick={() => setNotificationsOpen(false)} aria-label="Close notifications">×</button></div>
-            {notifications.length ? <div className="notification-list">{notifications.map((notification) => <button type="button" className={`notification-item ${notification.read ? "" : "unread"}`} key={notification.id} onClick={() => openNotification(notification)}><span className="notification-mark"><BellIcon /></span><span><strong>{notification.title}</strong><small>{notification.message}</small><em>{new Date(notification.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</em></span></button>)}</div> : <p className="notification-empty">No nearby game alerts yet. We&apos;ll let you know when a game fits your preferences.</p>}
+            <div className="notification-popover-heading"><div><span className="kicker">COURTMATE ALERTS</span><strong>Your activity</strong></div><button type="button" className="notification-close" onClick={() => setNotificationsOpen(false)} aria-label="Close notifications">×</button></div>
+            {notifications.length ? <div className="notification-list">{notifications.map((notification) => <div className={`notification-item ${notification.read ? "" : "unread"}`} key={notification.id}><button type="button" className="notification-item-main" onClick={() => openNotification(notification)}><span className="notification-mark"><BellIcon /></span><span><strong>{notification.title}</strong><small>{notification.message}</small><em>{new Date(notification.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</em></span></button>{notification.kind === "join_request" && notification.request_id && <div className="notification-actions"><button type="button" onClick={(event) => { event.stopPropagation(); void decideNotificationRequest(notification, "approved"); }}>Confirm</button><button type="button" onClick={(event) => { event.stopPropagation(); void decideNotificationRequest(notification, "declined"); }}>Decline</button></div>}</div>)}</div> : <p className="notification-empty">No alerts yet. We&apos;ll let you know when a game fits your preferences or someone requests to join.</p>}
           </div>}
         </div><span className="user-name">{user.displayName ?? user.email}</span><button className="avatar" onClick={() => selectTab("profile")} title="Open profile">{(user.displayName ?? user.email ?? "C")[0].toUpperCase()}</button></> : <button className="sign-in-button" onClick={() => void signIn()}>{authReady ? "Sign in with Google" : "Loading auth"}</button>}</div>
       </nav>

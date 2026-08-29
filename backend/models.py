@@ -279,10 +279,12 @@ class JoinRequest(BaseModel):
 class AppNotification(BaseModel):
     id: str
     player_id: str
-    kind: Literal["game_match"] = "game_match"
+    kind: Literal["game_match", "join_request", "request_update", "follow"] = "game_match"
     title: str
     message: str
     session_id: str
+    request_id: str | None = None
+    actor_id: str | None = None
     read: bool = False
     created_at: datetime
 
