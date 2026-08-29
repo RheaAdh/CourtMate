@@ -34,6 +34,33 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual({item["session"]["id"] for item in response.json()["recommendations"]}, {"s2"})
 
+    def test_game_creation_notifies_compatible_nearby_players(self):
+        response = self.client.post(
+            "/v1/groups",
+            json={
+                "query": "Create a casual pickleball game near Whitefield",
+                "area": "Whitefield",
+                "session_date": str(date.today() + timedelta(days=2)),
+                "start_time": "19:00",
+                "end_time": "21:00",
+                "skill_min": 3.0,
+                "skill_max": 3.6,
+                "style": "casual",
+            },
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        session_id = response.json()["session"]["id"]
+
+        notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(notifications.status_code, 200)
+        item = next(item for item in notifications.json()["notifications"] if item["session_id"] == session_id)
+        self.assertFalse(item["read"])
+
+        read = self.client.post(f"/v1/me/notifications/{item['id']}/read", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(read.status_code, 200)
+        self.assertTrue(read.json()["read"])
+
     def test_group_view_returns_public_member_profiles(self):
         response = self.client.get("/v1/sessions/s1/group")
         self.assertEqual(response.status_code, 200)
@@ -41,6 +68,57 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual({member["id"] for member in members}, {"p1", "p2", "p3", "p6"})
         self.assertEqual(members[0]["dupr_rating"], 3.2)
         self.assertNotIn("friends", members[0])
+
+    def test_players_can_view_profiles_and_follow_each_other(self):
+        profile = self.client.get("/v1/players/p2", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(profile.status_code, 200)
+        self.assertFalse(profile.json()["is_following"])
+        self.assertEqual(profile.json()["followers_count"], 0)
+
+        followed = self.client.post("/v1/players/p2/follow", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(followed.status_code, 200)
+        self.assertTrue(followed.json()["is_following"])
+        self.assertEqual(followed.json()["followers_count"], 1)
+
+        following = self.client.get("/v1/me/following", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(following.status_code, 200)
+        self.assertEqual([item["id"] for item in following.json()["profiles"]], ["p2"])
+
+        self.client.post("/v1/players/p1/follow", headers={"X-CourtMate-Player-ID": "p2"})
+        as_target = self.client.get("/v1/players/p1", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(as_target.status_code, 200)
+        self.assertTrue(as_target.json()["follows_you"])
+
+        unfollowed = self.client.post("/v1/players/p2/unfollow", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(unfollowed.status_code, 200)
+        self.assertFalse(unfollowed.json()["is_following"])
+        self.assertEqual(unfollowed.json()["followers_count"], 0)
+
+    def test_public_profile_exposes_recent_games_and_activity_heatmap(self):
+        played_on = date.today() - timedelta(days=3)
+        repository.save_session(
+            Session(
+                id="profile-activity-game",
+                sport="pickleball",
+                group_name="Wednesday Rally",
+                organizer_id="p1",
+                area="Whitefield",
+                session_date=played_on,
+                start_time=time(19),
+                end_time=time(21),
+                skill_min=3.0,
+                skill_max=3.6,
+                style="casual",
+                capacity=8,
+                confirmed_player_ids=["p2"],
+                status="completed",
+            )
+        )
+        response = self.client.get("/v1/players/p2", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["recent_games"][0]["group_name"], "Wednesday Rally")
+        self.assertEqual(payload["activity_by_date"][played_on.isoformat()], 1)
 
     def test_profile_preferences_update_includes_availability(self):
         response = self.client.post(
@@ -166,21 +244,32 @@ class ApiFlowTests(unittest.TestCase):
 
         feedback = self.client.post(
             f"/v1/sessions/{session_id}/feedback",
-            json={"fun": 5, "fairness": 5, "would_return": True, "ratings": [{"player_id": "p1", "rating": 5, "comment": "Great organizer"}]},
+            json={
+                "fun": 5,
+                "fairness": 5,
+                "would_return": True,
+                "ratings": [{"player_id": "p1", "skill_level": "advanced", "comment": "Great organizer"}],
+                "teams": [
+                    {"name": "Team 1", "player_ids": ["p1"], "score": 11},
+                    {"name": "Team 2", "player_ids": ["p2"], "score": 8},
+                ],
+            },
             headers={"X-CourtMate-Player-ID": "p2"},
         )
         self.assertEqual(feedback.status_code, 200)
+        self.assertEqual(feedback.json()["teams"][0]["player_ids"], ["p1"])
+        self.assertEqual(feedback.json()["teams"][0]["score"], 11)
         leaderboard = self.client.get(f"/v1/sessions/{session_id}/leaderboard", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(leaderboard.status_code, 200)
         p1_entry = next(entry for entry in leaderboard.json()["entries"] if entry["player"]["id"] == "p1")
-        self.assertEqual(p1_entry["score"], 4.4)
+        self.assertEqual(p1_entry["score"], 42.32)
         self.assertEqual(p1_entry["ratings_count"], 1)
         profile = self.client.get("/v1/me", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(profile.status_code, 200)
         history = profile.json()["cmr_history"]["pickleball"]
         history_point = next(point for point in history if point["session_id"] == session_id)
-        self.assertEqual(history_point["game_rating"], 8.0)
-        self.assertEqual(history_point["delta"], 1.2)
+        self.assertEqual(history_point["game_rating"], 75.0)
+        self.assertEqual(history_point["delta"], 10.89)
 
         waitlist = self.client.post("/v1/sessions/s7/join", headers={"X-CourtMate-Player-ID": "p4"})
         self.assertEqual(waitlist.status_code, 200)

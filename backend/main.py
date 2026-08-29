@@ -13,8 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
-from .matching import search_sessions, suggest_replacements
-from .models import CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, CreateGroupRequest, CreatedGroupResponse, Feedback, FeedbackRequest, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, ParseRequest, PastGame, Player, ProfileUpdateRequest, PublicPlayerProfile, ReplacementResponse, SearchIntent, SearchResponse, Session, Sport, baseline_rating_for_sport, rating_for_sport
+from .matching import distance_km, search_sessions, suggest_replacements
+from .models import AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, CreateGroupRequest, CreatedGroupResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, Player, ProfileGameSummary, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, SearchIntent, SearchResponse, Session, Sport, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
 
 
@@ -150,6 +150,57 @@ def me(player: Player = Depends(get_current_player)) -> Player:
     return player
 
 
+@app.get("/v1/players/{player_id}", response_model=PublicPlayerProfile)
+def public_player_profile(player_id: str, player: Player = Depends(get_current_player)) -> PublicPlayerProfile:
+    target = repository.get_player(player_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return _public_profile(target, player.id)
+
+
+@app.post("/v1/players/{player_id}/follow", response_model=PublicPlayerProfile)
+def follow_player(player_id: str, player: Player = Depends(get_current_player)) -> PublicPlayerProfile:
+    target = repository.get_player(player_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Player not found")
+    if target.id == player.id:
+        raise HTTPException(status_code=409, detail="You cannot follow yourself")
+    if not repository.is_following(player.id, target.id):
+        repository.save_follow(FollowRecord(id=f"{player.id}_{target.id}", follower_id=player.id, following_id=target.id, created_at=datetime.now(timezone.utc)))
+    return _public_profile(target, player.id)
+
+
+@app.post("/v1/players/{player_id}/unfollow", response_model=PublicPlayerProfile)
+def unfollow_player(player_id: str, player: Player = Depends(get_current_player)) -> PublicPlayerProfile:
+    target = repository.get_player(player_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Player not found")
+    repository.delete_follow(player.id, target.id)
+    return _public_profile(target, player.id)
+
+
+def _social_profiles(player: Player, following: bool) -> PublicPlayerProfilesResponse:
+    records = repository.list_following(player.id) if following else repository.list_followers(player.id)
+    profiles = []
+    for record in records:
+        target_id = record.following_id if following else record.follower_id
+        target = repository.get_player(target_id)
+        if target:
+            profiles.append(_public_profile(target, player.id))
+    profiles.sort(key=lambda profile: profile.display_name.lower())
+    return PublicPlayerProfilesResponse(profiles=profiles)
+
+
+@app.get("/v1/me/following", response_model=PublicPlayerProfilesResponse)
+def my_following(player: Player = Depends(get_current_player)) -> PublicPlayerProfilesResponse:
+    return _social_profiles(player, following=True)
+
+
+@app.get("/v1/me/followers", response_model=PublicPlayerProfilesResponse)
+def my_followers(player: Player = Depends(get_current_player)) -> PublicPlayerProfilesResponse:
+    return _social_profiles(player, following=False)
+
+
 @app.post("/v1/me/profile", response_model=Player)
 def update_profile(request: ProfileUpdateRequest, player: Player = Depends(get_current_player)) -> Player:
     updates = request.model_dump(exclude_none=True, exclude={"sport", "skill_level", "skill_rating"})
@@ -170,7 +221,33 @@ def update_profile(request: ProfileUpdateRequest, player: Player = Depends(get_c
     return repository.save_player(updated)
 
 
-def _public_profile(player: Player) -> PublicPlayerProfile:
+def _profile_activity(player_id: str) -> tuple[list[ProfileGameSummary], dict[str, int]]:
+    today = date.today()
+    window_start = today - timedelta(days=83)
+    sessions = [session for session in repository.list_sessions() if player_id in session.confirmed_player_ids and session.status != "cancelled"]
+    played_sessions = [session for session in sessions if session.session_date <= today]
+    recent_games = [
+        ProfileGameSummary(
+            id=session.id,
+            group_name=session.group_name,
+            sport=session.sport,
+            area=session.area,
+            session_date=session.session_date,
+            start_time=session.start_time,
+            status="played" if session.session_date < today or session.status == "completed" else session.status,
+        )
+        for session in sorted(played_sessions, key=lambda item: (item.session_date, item.start_time), reverse=True)[:6]
+    ]
+    activity_by_date: dict[str, int] = {}
+    for session in played_sessions:
+        if window_start <= session.session_date <= today:
+            key = session.session_date.isoformat()
+            activity_by_date[key] = activity_by_date.get(key, 0) + 1
+    return recent_games, activity_by_date
+
+
+def _public_profile(player: Player, viewer_id: str | None = None) -> PublicPlayerProfile:
+    recent_games, activity_by_date = _profile_activity(player.id)
     return PublicPlayerProfile(
         id=player.id,
         display_name=player.display_name,
@@ -188,6 +265,12 @@ def _public_profile(player: Player) -> PublicPlayerProfile:
         community_rating_counts=player.community_rating_counts,
         cmr_ratings=player.cmr_ratings,
         cmr_game_counts=player.cmr_game_counts,
+        followers_count=len(repository.list_followers(player.id)),
+        following_count=len(repository.list_following(player.id)),
+        is_following=bool(viewer_id and repository.is_following(viewer_id, player.id)),
+        follows_you=bool(viewer_id and repository.is_following(player.id, viewer_id)),
+        recent_games=recent_games,
+        activity_by_date=activity_by_date,
     )
 
 
@@ -229,7 +312,11 @@ def _refresh_community_scores() -> None:
         session = repository.get_session(feedback_item.session_id)
         sport = session.sport if session else "pickleball"
         for rating in feedback_item.ratings:
-            ratings_by_player.setdefault((rating.player_id, sport), []).append(rating.rating)
+            value = rating.rating
+            if value is None and rating.skill_level:
+                value = {"beginner": 2, "intermediate": 3, "advanced": 4}[rating.skill_level]
+            if value is not None:
+                ratings_by_player.setdefault((rating.player_id, sport), []).append(value)
     for (player_id, sport), ratings in ratings_by_player.items():
         player = repository.get_player(player_id)
         if player:
@@ -243,15 +330,21 @@ def _refresh_community_scores() -> None:
 
 def _refresh_cmr_ratings() -> None:
     """Recompute CMR and a chronological per-game history from completed-game feedback."""
-    ratings_by_player: dict[tuple[str, str], dict[str, list[int]]] = {}
+    ratings_by_player: dict[tuple[str, str], dict[str, list[float]]] = {}
     sessions_by_id = {session.id: session for session in repository.list_sessions() if session.status == "completed"}
     for feedback_item in repository.list_feedback():
         session = sessions_by_id.get(feedback_item.session_id)
         if not session:
             continue
         for rating in feedback_item.ratings:
-            game_ratings = ratings_by_player.setdefault((rating.player_id, session.sport), {})
-            game_ratings.setdefault(session.id, []).append(rating.rating)
+            value = rating.rating
+            if rating.skill_level:
+                value = {"beginner": 25.0, "intermediate": 50.0, "advanced": 75.0}[rating.skill_level]
+            elif value is not None:
+                value = round((value - 1) * 100 / 4, 2)
+            if value is not None:
+                game_ratings = ratings_by_player.setdefault((rating.player_id, session.sport), {})
+                game_ratings.setdefault(session.id, []).append(value)
     completed_sessions_by_player: dict[str, list[Session]] = {}
     for session in sessions_by_id.values():
         for player_id in session.confirmed_player_ids:
@@ -267,7 +360,7 @@ def _refresh_cmr_ratings() -> None:
         cmr_game_counts = dict(player.cmr_game_counts)
         cmr_history = dict(player.cmr_history)
         for sport, sport_sessions in sessions_by_sport.items():
-            prior = baseline_rating_for_sport(player, sport) or 3.5
+            prior = cmr_from_legacy_rating(baseline_rating_for_sport(player, sport) or 3.5)
             running_rating: float | None = None
             game_total = 0.0
             rated_game_count = 0
@@ -275,7 +368,7 @@ def _refresh_cmr_ratings() -> None:
             for session in sorted(sport_sessions, key=lambda item: (item.session_date, item.start_time)):
                 values = ratings_by_player.get((player_id, sport), {}).get(session.id, [])
                 if values:
-                    game_rating = round(1 + (sum(values) / len(values) - 1) * 7 / 4, 2)
+                    game_rating = round(sum(values) / len(values), 2)
                     game_total += game_rating
                     rated_game_count += 1
                     previous_rating = running_rating if running_rating is not None else prior
@@ -288,7 +381,55 @@ def _refresh_cmr_ratings() -> None:
             if running_rating is not None:
                 cmr_ratings[sport] = running_rating
                 cmr_game_counts[sport] = rated_game_count
-        repository.save_player(player.model_copy(update={"cmr_ratings": cmr_ratings, "cmr_game_counts": cmr_game_counts, "cmr_history": cmr_history}))
+        repository.save_player(player.model_copy(update={"cmr_ratings": cmr_ratings, "cmr_game_counts": cmr_game_counts, "cmr_history": cmr_history, "cmr_scale": 100}))
+
+
+def _notification_day_part(session: Session) -> str:
+    day_type = "weekend" if session.session_date.weekday() >= 5 else "weekday"
+    if session.start_time.hour < 12:
+        day_part = "mornings"
+    elif session.start_time.hour >= 16:
+        day_part = "evenings"
+    else:
+        day_part = "afternoons"
+    return f"{day_type} {day_part}"
+
+
+def _matches_new_game(player: Player, session: Session) -> bool:
+    if player.id == session.organizer_id:
+        return False
+    if session.latitude is not None and session.longitude is not None and player.latitude is not None and player.longitude is not None:
+        if distance_km(player.latitude, player.longitude, session.latitude, session.longitude) > player.travel_radius_km:
+            return False
+    elif player.area.strip().lower() != session.area.strip().lower():
+        return False
+    player_rating = rating_for_sport(player, session.sport)
+    if player_rating is not None and not session.skill_min <= player_rating <= session.skill_max:
+        return False
+    if player.availability and _notification_day_part(session) not in player.availability:
+        return False
+    compatible_style = player.style == session.style or (player.style == "casual" and session.style == "social") or (player.style == "social" and session.style == "casual")
+    return compatible_style
+
+
+def _notify_players_about_game(session: Session) -> None:
+    game_date = session.session_date.strftime("%a, %d %b")
+    for candidate in repository.list_players():
+        if not _matches_new_game(candidate, session):
+            continue
+        notification = AppNotification(
+            id=f"game-{session.id}-{candidate.id}",
+            player_id=candidate.id,
+            title=f"A {session.sport.replace('_', ' ')} game opened near you",
+            message=f"{session.group_name} is looking for players on {game_date} at {session.start_time.strftime('%I:%M %p').lstrip('0')} in {session.area}.",
+            session_id=session.id,
+            created_at=datetime.now(timezone.utc),
+        )
+        try:
+            repository.save_notification(notification)
+        except Exception:
+            # A notification failure must not prevent game creation.
+            continue
 
 
 def _query_group_name(query: str, intent: SearchIntent, style: str) -> str:
@@ -442,6 +583,19 @@ def my_requests(player: Player = Depends(get_current_player)) -> MyRequestsRespo
     return MyRequestsResponse(requests=request_views)
 
 
+@app.get("/v1/me/notifications", response_model=NotificationsResponse)
+def notifications(player: Player = Depends(get_current_player)) -> NotificationsResponse:
+    return NotificationsResponse(notifications=repository.list_notifications_for_player(player.id))
+
+
+@app.post("/v1/me/notifications/{notification_id}/read", response_model=AppNotification)
+def mark_notification_read(notification_id: str, player: Player = Depends(get_current_player)) -> AppNotification:
+    notification = repository.mark_notification_read(notification_id, player.id)
+    if not notification:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return notification
+
+
 @app.get("/v1/me/incoming-requests", response_model=IncomingRequestsResponse)
 def incoming_requests(player: Player = Depends(get_current_player)) -> IncomingRequestsResponse:
     """Aggregate pending requests across every group owned by the current player."""
@@ -488,7 +642,7 @@ def group_view(session_id: str, player: Player = Depends(get_current_player)) ->
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     players_by_id = {candidate.id: candidate for candidate in repository.list_players()}
-    members = [_public_profile(players_by_id[player_id]) for player_id in session.confirmed_player_ids if player_id in players_by_id]
+    members = [_public_profile(players_by_id[player_id], player.id) for player_id in session.confirmed_player_ids if player_id in players_by_id]
     return GroupViewResponse(session=session, members=members)
 
 
@@ -568,7 +722,9 @@ def create_group(request: CreateGroupRequest, player: Player = Depends(get_curre
         capacity=proposal.capacity,
         confirmed_player_ids=[player.id],
     )
-    return CreatedGroupResponse(session=repository.save_session(session), message="Group created. CourtMate can now invite compatible nearby players.")
+    saved_session = repository.save_session(session)
+    _notify_players_about_game(saved_session)
+    return CreatedGroupResponse(session=saved_session, message="Group created. Compatible nearby players have been notified.")
 
 
 @app.get("/v1/sessions/{session_id}/replacement", response_model=ReplacementResponse)
@@ -586,9 +742,27 @@ def feedback(session_id: str, request: FeedbackRequest, player: Player = Depends
     if request.player_id and request.rating is not None:
         ratings = [*ratings, {"player_id": request.player_id, "rating": request.rating}]
     for rating in ratings:
+        if rating.player_id == player.id:
+            raise HTTPException(status_code=422, detail="You cannot rate yourself")
         if rating.player_id not in session.confirmed_player_ids:
             raise HTTPException(status_code=422, detail="You can only rate players from this group")
-    saved = repository.save_feedback(Feedback(session_id=session_id, created_at=datetime.now(timezone.utc), player_id=player.id, fun=request.fun, fairness=request.fairness, would_return=request.would_return, ratings=ratings))
+        if rating.skill_level is None and rating.rating is None:
+            raise HTTPException(status_code=422, detail="Choose a skill level or skip this player")
+    seen_team_players: set[str] = set()
+    if request.teams:
+        if len(request.teams) < 2:
+            raise HTTPException(status_code=422, detail="Add at least two teams for a match result")
+        has_score = any(team.score is not None for team in request.teams)
+        if has_score and any(team.score is None for team in request.teams):
+            raise HTTPException(status_code=422, detail="Enter a score for every team")
+        for team in request.teams:
+            for player_id in team.player_ids:
+                if player_id not in session.confirmed_player_ids:
+                    raise HTTPException(status_code=422, detail="Teams can only include players from this group")
+                if player_id in seen_team_players:
+                    raise HTTPException(status_code=422, detail="A player can only be on one team")
+                seen_team_players.add(player_id)
+    saved = repository.save_feedback(Feedback(session_id=session_id, created_at=datetime.now(timezone.utc), player_id=player.id, fun=request.fun, fairness=request.fairness, would_return=request.would_return, ratings=ratings, teams=request.teams))
     _refresh_community_scores()
     _refresh_cmr_ratings()
     return saved

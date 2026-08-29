@@ -15,8 +15,11 @@ The first implementation slice is a Python API with:
 - Gemini intent parsing through `google-genai` when `GEMINI_API_KEY` is configured
 - A deterministic local parser fallback for development
 - Firestore-backed players, sessions, and feedback, with an explicit in-memory fallback
+- Persistent in-app game notifications for compatible nearby players after a game is created
+- Public player profiles with sport CMR, reliability, follower counts, and follow/unfollow relationships
+- CMR calculated and displayed on a 0-100 scale, with compatibility conversion for existing 1-8 skill bands
 - A free-tier deployment profile with bounded Firestore reads and scale-to-zero Cloud Run
-- Feedback capture for fun, fairness, and repeat-play learning
+- Post-game feedback with fun/fairness signals, broad player skill levels, and optional team/score context
 
 ## Run locally
 
@@ -59,13 +62,29 @@ npm install
 npm run dev
 ```
 
-To test two people, sign in with Google using two separate browser profiles. One user creates a group; the other searches for it and requests to join. The creator can click `View requests` in the organizer panel and approve or decline the request. Confirmed members can open the group space to post and reload chat messages, submit post-game feedback, rate other players, and view group and locality leaderboards. The `My activity` panel shows `pending`, `approved`, or `declined` requests, upcoming approved games, and all groups created by the signed-in organizer. Approved games can be added to Google Calendar. The API also exposes `GET /v1/me`, `GET /v1/me/requests`, `GET /v1/me/games`, `GET /v1/me/groups`, `GET /v1/sessions/{session_id}/join-requests`, `GET/POST /v1/sessions/{session_id}/chat`, `POST /v1/sessions/{session_id}/feedback`, `GET /v1/sessions/{session_id}/leaderboard`, and `GET /v1/leaderboards/local` for the authenticated user.
+To test two people, sign in with Google using two separate browser profiles. One user creates a group; compatible nearby players receive a persistent in-app alert in the notification bell, and can open it to return to matching games. The other player can search for the group and request to join. The creator can click `View requests` in the organizer panel and approve or decline the request. Confirmed members can open the group space to post and reload chat messages, submit post-game feedback using `Beginner`, `Intermediate`, or `Advanced` labels instead of numeric player ratings, optionally record who played on each team and the final score, and view group and locality leaderboards. Click any group member to open their public profile, see sport CMR and reliability, and follow or unfollow them. The `My activity` panel shows `pending`, `approved`, or `declined` requests, upcoming approved games, and all groups created by the signed-in organizer. Approved games can be added to Google Calendar. The notification API exposes `GET /v1/me/notifications` and `POST /v1/me/notifications/{notification_id}/read`; the frontend refreshes the inbox every 30 seconds. Native browser or mobile push can be added later with Firebase Cloud Messaging without changing the matching contract. Social APIs expose `GET /v1/players/{player_id}`, `POST /v1/players/{player_id}/follow`, `POST /v1/players/{player_id}/unfollow`, `GET /v1/me/following`, and `GET /v1/me/followers`. The API also exposes `GET /v1/me`, `GET /v1/me/requests`, `GET /v1/me/games`, `GET /v1/me/groups`, `GET /v1/sessions/{session_id}/join-requests`, `GET/POST /v1/sessions/{session_id}/chat`, `POST /v1/sessions/{session_id}/feedback`, `GET /v1/sessions/{session_id}/leaderboard`, and `GET /v1/leaderboards/local` for the authenticated user.
 
 After the scheduled end time, CourtMate marks the session `completed`, removes it from discovery and upcoming games, and makes chat read-only while preserving feedback and leaderboard access. Organizers can close a game immediately with `POST /v1/sessions/{session_id}/complete`.
 
 ## Test the Firestore flow
 
 Firestore starts empty. Sign in, search for a game, and create the first group. Other signed-in users can then discover the group and request to join it.
+
+To populate a realistic demo dataset, authenticate with Application Default Credentials and run the demo-only seed script:
+
+```bash
+COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
+  python -m backend.seed_synthetic_firestore
+```
+
+The script upserts only `demo-` records in the CourtMate collections: players, sessions, join requests, chat posts, feedback, and follows. It does not touch Firebase Authentication or unrelated collections.
+
+Existing player documents created before the 0-100 CMR update are converted safely when read. To permanently rewrite those records in Firestore, run the one-time migration with Application Default Credentials:
+
+```bash
+COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
+  python -m backend.migrate_cmr_to_100
+```
 
 Start the API and website in separate terminals:
 

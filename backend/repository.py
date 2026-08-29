@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 from typing import Protocol
 
-from .models import ChatPost, Feedback, JoinRequest, Player, Session
+from .models import AppNotification, ChatPost, Feedback, FollowRecord, JoinRequest, Player, Session, normalize_cmr_player
 
 
 class Repository(Protocol):
@@ -21,6 +21,14 @@ class Repository(Protocol):
     def list_sessions_by_organizer(self, organizer_id: str) -> list[Session]: ...
     def list_sessions_for_player(self, player_id: str) -> list[Session]: ...
     def save_session(self, session: Session) -> Session: ...
+    def save_notification(self, notification: AppNotification) -> AppNotification: ...
+    def list_notifications_for_player(self, player_id: str) -> list[AppNotification]: ...
+    def mark_notification_read(self, notification_id: str, player_id: str) -> AppNotification | None: ...
+    def save_follow(self, follow: FollowRecord) -> FollowRecord: ...
+    def delete_follow(self, follower_id: str, following_id: str) -> None: ...
+    def is_following(self, follower_id: str, following_id: str) -> bool: ...
+    def list_followers(self, player_id: str) -> list[FollowRecord]: ...
+    def list_following(self, player_id: str) -> list[FollowRecord]: ...
 
 
 class InMemoryRepository:
@@ -32,6 +40,8 @@ class InMemoryRepository:
         self.feedback: list[Feedback] = []
         self.chat_posts: dict[str, ChatPost] = {}
         self.join_requests: dict[str, JoinRequest] = {}
+        self.notifications: dict[str, AppNotification] = {}
+        self.follows: dict[str, FollowRecord] = {}
 
     def list_sessions(self) -> list[Session]:
         return list(self.sessions.values())
@@ -40,14 +50,16 @@ class InMemoryRepository:
         return self.sessions.get(session_id)
 
     def list_players(self) -> list[Player]:
-        return list(self.players.values())
+        return [normalize_cmr_player(player) for player in self.players.values()]
 
     def get_player(self, player_id: str) -> Player | None:
-        return self.players.get(player_id)
+        player = self.players.get(player_id)
+        return normalize_cmr_player(player) if player else None
 
     def save_player(self, player: Player) -> Player:
-        self.players[player.id] = player
-        return player
+        normalized = normalize_cmr_player(player)
+        self.players[normalized.id] = normalized
+        return normalized
 
     def save_feedback(self, feedback: Feedback) -> Feedback:
         self.feedback.append(feedback)
@@ -85,6 +97,37 @@ class InMemoryRepository:
         self.sessions[session.id] = session
         return session
 
+    def save_notification(self, notification: AppNotification) -> AppNotification:
+        self.notifications[notification.id] = notification
+        return notification
+
+    def list_notifications_for_player(self, player_id: str) -> list[AppNotification]:
+        return sorted((item for item in self.notifications.values() if item.player_id == player_id), key=lambda item: item.created_at, reverse=True)
+
+    def mark_notification_read(self, notification_id: str, player_id: str) -> AppNotification | None:
+        notification = self.notifications.get(notification_id)
+        if not notification or notification.player_id != player_id:
+            return None
+        updated = notification.model_copy(update={"read": True})
+        self.notifications[notification_id] = updated
+        return updated
+
+    def save_follow(self, follow: FollowRecord) -> FollowRecord:
+        self.follows[follow.id] = follow
+        return follow
+
+    def delete_follow(self, follower_id: str, following_id: str) -> None:
+        self.follows.pop(f"{follower_id}_{following_id}", None)
+
+    def is_following(self, follower_id: str, following_id: str) -> bool:
+        return f"{follower_id}_{following_id}" in self.follows
+
+    def list_followers(self, player_id: str) -> list[FollowRecord]:
+        return [follow for follow in self.follows.values() if follow.following_id == player_id]
+
+    def list_following(self, player_id: str) -> list[FollowRecord]:
+        return [follow for follow in self.follows.values() if follow.follower_id == player_id]
+
 
 class FirestoreRepository:
     """Firestore-backed repository using Application Default Credentials."""
@@ -102,7 +145,7 @@ class FirestoreRepository:
     def _as_player(document) -> Player:
         data = document.to_dict() or {}
         data["id"] = document.id
-        return Player.model_validate(data)
+        return normalize_cmr_player(Player.model_validate(data))
 
     @staticmethod
     def _as_session(document) -> Session:
@@ -135,9 +178,10 @@ class FirestoreRepository:
         return self._as_player(document) if document.exists else None
 
     def save_player(self, player: Player) -> Player:
-        reference = self.client.collection("players").document(player.id)
-        reference.set(self._write_model(player), merge=True)
-        return player
+        normalized = normalize_cmr_player(player)
+        reference = self.client.collection("players").document(normalized.id)
+        reference.set(self._write_model(normalized), merge=True)
+        return normalized
 
     def save_feedback(self, feedback: Feedback) -> Feedback:
         self.client.collection("feedback").add(feedback.model_dump(mode="json"))
@@ -183,6 +227,48 @@ class FirestoreRepository:
         reference = self.client.collection("sessions").document(session.id)
         reference.set(self._write_model(session))
         return session
+
+    def save_notification(self, notification: AppNotification) -> AppNotification:
+        reference = self.client.collection("notifications").document(notification.id)
+        reference.set(self._write_model(notification), merge=True)
+        return notification
+
+    def list_notifications_for_player(self, player_id: str) -> list[AppNotification]:
+        documents = self.client.collection("notifications").where("player_id", "==", player_id).limit(100).stream()
+        notifications = [AppNotification.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
+        return sorted(notifications, key=lambda item: item.created_at, reverse=True)
+
+    def mark_notification_read(self, notification_id: str, player_id: str) -> AppNotification | None:
+        reference = self.client.collection("notifications").document(notification_id)
+        document = reference.get()
+        if not document.exists:
+            return None
+        notification = AppNotification.model_validate({**(document.to_dict() or {}), "id": document.id})
+        if notification.player_id != player_id:
+            return None
+        updated = notification.model_copy(update={"read": True})
+        reference.set(self._write_model(updated), merge=True)
+        return updated
+
+    def save_follow(self, follow: FollowRecord) -> FollowRecord:
+        reference = self.client.collection("follows").document(follow.id)
+        reference.set(self._write_model(follow), merge=True)
+        return follow
+
+    def delete_follow(self, follower_id: str, following_id: str) -> None:
+        self.client.collection("follows").document(f"{follower_id}_{following_id}").delete()
+
+    def is_following(self, follower_id: str, following_id: str) -> bool:
+        document = self.client.collection("follows").document(f"{follower_id}_{following_id}").get()
+        return document.exists
+
+    def list_followers(self, player_id: str) -> list[FollowRecord]:
+        documents = self.client.collection("follows").where("following_id", "==", player_id).limit(self.max_player_reads).stream()
+        return [FollowRecord.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
+
+    def list_following(self, player_id: str) -> list[FollowRecord]:
+        documents = self.client.collection("follows").where("follower_id", "==", player_id).limit(self.max_player_reads).stream()
+        return [FollowRecord.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
 
 
 def create_repository() -> Repository:

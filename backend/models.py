@@ -12,8 +12,8 @@ class CMRHistoryPoint(BaseModel):
     session_id: str
     session_date: date_type
     group_name: str
-    game_rating: float | None = Field(default=None, ge=1, le=8)
-    rating: float | None = Field(default=None, ge=1, le=8)
+    game_rating: float | None = Field(default=None, ge=0, le=100)
+    rating: float | None = Field(default=None, ge=0, le=100)
     delta: float | None = None
 
 
@@ -54,19 +54,47 @@ class Player(BaseModel):
     cmr_ratings: dict[str, float] = Field(default_factory=dict)
     cmr_game_counts: dict[str, int] = Field(default_factory=dict)
     cmr_history: dict[str, list[CMRHistoryPoint]] = Field(default_factory=dict)
+    cmr_scale: Literal[8, 100] = 8
     friends: list[str] = Field(default_factory=list)
     opted_into_replacement_pool: bool = True
 
 
 def rating_for_sport(player: Player, sport: Sport) -> float | None:
-    """Return a computed or externally verified rating, never a profile skill label."""
+    """Return a rating in the legacy 1-8 compatibility scale for matching."""
     if sport in player.cmr_ratings:
-        return player.cmr_ratings[sport]
+        value = player.cmr_ratings[sport]
+        return round(1 + value * 7 / 100, 2) if player.cmr_scale == 100 else value
     if sport in player.sport_ratings:
         return player.sport_ratings[sport]
     if sport == "pickleball" and player.dupr_rating is not None:
         return player.dupr_rating
     return None
+
+
+def cmr_from_legacy_rating(rating: float) -> float:
+    """Convert the former 1-8 CMR scale to the new 0-100 display scale."""
+    return round(max(0.0, min(100.0, (rating - 1) * 100 / 7)), 2)
+
+
+def normalize_cmr_player(player: Player) -> Player:
+    """Upgrade old persisted CMR values without changing DUPR or skill bands."""
+    if player.cmr_scale == 100:
+        return player
+    cmr_ratings = {sport: cmr_from_legacy_rating(rating) for sport, rating in player.cmr_ratings.items()}
+    cmr_history = {
+        sport: [
+            point.model_copy(
+                update={
+                    "game_rating": cmr_from_legacy_rating(point.game_rating) if point.game_rating is not None else None,
+                    "rating": cmr_from_legacy_rating(point.rating) if point.rating is not None else None,
+                    "delta": round(point.delta * 100 / 7, 2) if point.delta is not None else None,
+                }
+            )
+            for point in history
+        ]
+        for sport, history in player.cmr_history.items()
+    }
+    return player.model_copy(update={"cmr_ratings": cmr_ratings, "cmr_history": cmr_history, "cmr_scale": 100})
 
 
 def baseline_rating_for_sport(player: Player, sport: Sport) -> float | None:
@@ -76,6 +104,16 @@ def baseline_rating_for_sport(player: Player, sport: Sport) -> float | None:
     if sport == "pickleball" and player.dupr_rating is not None:
         return player.dupr_rating
     return None
+
+
+class ProfileGameSummary(BaseModel):
+    id: str
+    group_name: str
+    sport: Sport
+    area: str
+    session_date: date_type
+    start_time: time
+    status: str
 
 
 class PublicPlayerProfile(BaseModel):
@@ -95,6 +133,23 @@ class PublicPlayerProfile(BaseModel):
     community_rating_counts: dict[str, int] = Field(default_factory=dict)
     cmr_ratings: dict[str, float] = Field(default_factory=dict)
     cmr_game_counts: dict[str, int] = Field(default_factory=dict)
+    followers_count: int = Field(default=0, ge=0)
+    following_count: int = Field(default=0, ge=0)
+    is_following: bool = False
+    follows_you: bool = False
+    recent_games: list["ProfileGameSummary"] = Field(default_factory=list)
+    activity_by_date: dict[str, int] = Field(default_factory=dict)
+
+
+class FollowRecord(BaseModel):
+    id: str
+    follower_id: str
+    following_id: str
+    created_at: datetime
+
+
+class PublicPlayerProfilesResponse(BaseModel):
+    profiles: list[PublicPlayerProfile]
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -221,6 +276,17 @@ class JoinRequest(BaseModel):
     created_at: datetime
 
 
+class AppNotification(BaseModel):
+    id: str
+    player_id: str
+    kind: Literal["game_match"] = "game_match"
+    title: str
+    message: str
+    session_id: str
+    read: bool = False
+    created_at: datetime
+
+
 class JoinRequestsResponse(BaseModel):
     session: Session
     requests: list[JoinRequest]
@@ -233,6 +299,10 @@ class JoinRequestView(BaseModel):
 
 class MyRequestsResponse(BaseModel):
     requests: list[JoinRequestView]
+
+
+class NotificationsResponse(BaseModel):
+    notifications: list[AppNotification]
 
 
 class IncomingRequestsResponse(BaseModel):
@@ -304,12 +374,21 @@ class FeedbackRequest(BaseModel):
     fairness: int = Field(ge=1, le=5)
     would_return: bool
     ratings: list["PlayerRating"] = Field(default_factory=list)
+    teams: list["MatchTeam"] = Field(default_factory=list, max_length=4)
 
 
 class PlayerRating(BaseModel):
     player_id: str
-    rating: int = Field(ge=1, le=5)
+    skill_level: SkillLevel | None = None
+    # Kept for old feedback documents and API clients. New feedback uses skill_level.
+    rating: int | None = Field(default=None, ge=1, le=5)
     comment: str | None = Field(default=None, max_length=300)
+
+
+class MatchTeam(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    player_ids: list[str] = Field(min_length=1, max_length=8)
+    score: int | None = Field(default=None, ge=0, le=999)
 
 
 class Feedback(BaseModel):
@@ -319,6 +398,7 @@ class Feedback(BaseModel):
     fairness: int
     would_return: bool
     ratings: list[PlayerRating] = Field(default_factory=list)
+    teams: list[MatchTeam] = Field(default_factory=list)
     created_at: datetime
 
 

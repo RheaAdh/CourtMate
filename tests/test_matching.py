@@ -3,11 +3,36 @@ from datetime import date
 
 from backend.gemini import GeminiIntentParser
 from backend.matching import search_sessions, suggest_replacements
+from backend.models import Player, cmr_from_legacy_rating, normalize_cmr_player, rating_for_sport
 from backend.repository import InMemoryRepository
 from tests.fixtures import load_repository_fixture
 
 
 class MatchingTests(unittest.TestCase):
+    def test_cmr_uses_100_scale_and_preserves_legacy_matching(self):
+        player = Player(
+            id="cmr-player",
+            display_name="CMR Player",
+            area="Whitefield",
+            cmr_ratings={"pickleball": 50.0},
+            cmr_scale=100,
+        )
+        self.assertEqual(cmr_from_legacy_rating(4.5), 50.0)
+        self.assertEqual(rating_for_sport(player, "pickleball"), 4.5)
+
+    def test_old_cmr_values_are_normalized_on_read(self):
+        player = Player(
+            id="legacy-player",
+            display_name="Legacy Player",
+            area="Whitefield",
+            cmr_ratings={"pickleball": 4.5},
+            cmr_scale=8,
+        )
+        normalized = normalize_cmr_player(player)
+        self.assertEqual(normalized.cmr_scale, 100)
+        self.assertEqual(normalized.cmr_ratings["pickleball"], 50.0)
+        self.assertEqual(rating_for_sport(normalized, "pickleball"), 4.5)
+
     def test_fallback_parser_extracts_core_search_fields(self):
         intent = GeminiIntentParser().parse("Find a casual intermediate pickleball game near Whitefield this Sunday morning")
         self.assertEqual(intent.sport, "pickleball")
