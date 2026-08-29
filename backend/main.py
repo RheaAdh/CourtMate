@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import ActivityProof, ActivityProofRequest, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialPost, SocialPostCreateRequest, SocialPostView, Sport, Tournament, TournamentDetailsResponse, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialPost, SocialPostCreateRequest, SocialPostView, Sport, Tournament, TournamentDetailsResponse, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
 from .tournaments import calculate_standings, generate_round_robin_matches, rules_for_sport, validate_score
 
@@ -517,10 +517,44 @@ def _refresh_community_scores() -> None:
             repository.save_player(player.model_copy(update=updates))
 
 
+def _relative_match_ratings(session: Session, teams: list) -> dict[str, float]:
+    """Turn a two-sided result into comparable 0-100 game ratings."""
+    if len(teams) != 2 or any(team.score is None or not team.player_ids for team in teams):
+        return {}
+    players = {player.id: player for player in repository.list_players()}
+    team_ratings = []
+    for team in teams:
+        members = [players[player_id] for player_id in team.player_ids if player_id in players]
+        if not members:
+            return {}
+        ratings = [cmr_from_legacy_rating(baseline_rating_for_sport(member, session.sport) or 3.5) for member in members]
+        team_ratings.append(sum(ratings) / len(ratings))
+    score_a, score_b = teams[0].score, teams[1].score
+    score_gap = abs(score_a - score_b)
+    margin_bonus = min(8.0, score_gap / max(max(score_a, score_b), 1) * 12.0)
+    result_a = 1.0 if score_a > score_b else 0.0 if score_a < score_b else 0.5
+    expected_a = 1 / (1 + 10 ** ((team_ratings[1] - team_ratings[0]) / 35))
+    result_ratings = {}
+    for index, team in enumerate(teams):
+        result = result_a if index == 0 else 1 - result_a if result_a != 0.5 else 0.5
+        outcome_delta = 18 * (result - (expected_a if index == 0 else 1 - expected_a))
+        margin_delta = margin_bonus if result == 1 else -margin_bonus if result == 0 else 0
+        game_rating = round(max(0, min(100, team_ratings[index] + outcome_delta + margin_delta)), 2)
+        for player_id in team.player_ids:
+            result_ratings[player_id] = game_rating
+    return result_ratings
+
+
 def _refresh_cmr_ratings() -> None:
     """Recompute CMR and a chronological per-game history from completed-game feedback."""
     ratings_by_player: dict[tuple[str, str], dict[str, list[float]]] = {}
     sessions_by_id = {session.id: session for session in repository.list_sessions() if session.status == "completed"}
+    for session in sessions_by_id.values():
+        for post in repository.list_chat_posts(session.id):
+            if post.post_type != "match_result":
+                continue
+            for player_id, game_rating in _relative_match_ratings(session, post.teams).items():
+                ratings_by_player.setdefault((player_id, session.sport), {}).setdefault(session.id, []).append(game_rating)
     for feedback_item in repository.list_feedback():
         session = sessions_by_id.get(feedback_item.session_id)
         if not session:
@@ -1043,8 +1077,40 @@ def group_chat(session_id: str, player: Player = Depends(get_current_player)) ->
 @app.post("/v1/sessions/{session_id}/chat", response_model=ChatPost)
 def post_group_chat(session_id: str, request: ChatPostRequest, player: Player = Depends(get_current_player)) -> ChatPost:
     session = _member_session(session_id, player)
-    _require_active_session(session)
-    return repository.save_chat_post(ChatPost(id=uuid4().hex, session_id=session_id, player_id=player.id, player_display_name=player.display_name, message=request.message.strip(), created_at=datetime.now(timezone.utc)))
+    message = request.message.strip()
+    if request.post_type == "message":
+        _require_active_session(session)
+        if not message:
+            raise HTTPException(status_code=422, detail="Chat message is required")
+    else:
+        if len(request.teams) != 2:
+            raise HTTPException(status_code=422, detail="Add the two sides that played")
+        if any(len(team.player_ids) > 2 or not team.player_ids for team in request.teams):
+            raise HTTPException(status_code=422, detail="Each side must include one or two players")
+        if any(team.score is None for team in request.teams):
+            raise HTTPException(status_code=422, detail="Enter both scores")
+        seen_team_players: set[str] = set()
+        for team in request.teams:
+            for player_id in team.player_ids:
+                if player_id not in session.confirmed_player_ids:
+                    raise HTTPException(status_code=422, detail="Scores can only include players from this group")
+                if player_id in seen_team_players:
+                    raise HTTPException(status_code=422, detail="A player can only be on one side")
+                seen_team_players.add(player_id)
+        if not message:
+            def team_label(team) -> str:
+                names = []
+                for player_id in team.player_ids:
+                    member = repository.get_player(player_id)
+                    if member:
+                        names.append(member.display_name)
+                return f"{team.name} ({' + '.join(names)})"
+
+            message = f"Match result: {team_label(request.teams[0])} {request.teams[0].score}–{request.teams[1].score} {team_label(request.teams[1])}"
+    post = repository.save_chat_post(ChatPost(id=uuid4().hex, session_id=session_id, player_id=player.id, player_display_name=player.display_name, message=message, post_type=request.post_type, teams=request.teams, created_at=datetime.now(timezone.utc)))
+    if request.post_type == "match_result" and session.status == "completed":
+        _refresh_cmr_ratings()
+    return post
 
 
 @app.get("/v1/sessions/{session_id}/leaderboard", response_model=LeaderboardResponse)
@@ -1156,18 +1222,14 @@ def feedback(session_id: str, request: FeedbackRequest, player: Player = Depends
     return saved
 
 
-@app.post("/v1/sessions/{session_id}/activity-proof/analyze", response_model=ActivityProof)
-def analyze_activity_proof(session_id: str, request: ActivityProofRequest, player: Player = Depends(get_current_player)) -> ActivityProof:
-    session = _member_session(session_id, player)
-    if session.status != "completed":
-        raise HTTPException(status_code=409, detail="Attach tracker stats after the game is complete")
-    parsed_url = urlparse(request.image_url)
+def _analyze_activity_image(image_url: str):
+    parsed_url = urlparse(image_url)
     if parsed_url.scheme != "https" or parsed_url.hostname not in {"firebasestorage.googleapis.com", "storage.googleapis.com"}:
         raise HTTPException(status_code=422, detail="Tracker screenshot must be stored in Google Cloud Storage")
     if not intent_parser.image_analysis_available:
         raise HTTPException(status_code=503, detail="Gemini image analysis is not configured")
     try:
-        download_request = Request(request.image_url, headers={"Accept": "image/*"})
+        download_request = Request(image_url, headers={"Accept": "image/*"})
         with urlopen(download_request, timeout=8) as response:
             mime_type = response.headers.get_content_type()
             image_bytes = response.read(8 * 1024 * 1024 + 1)
@@ -1181,5 +1243,46 @@ def analyze_activity_proof(session_id: str, request: ActivityProofRequest, playe
         analysis = intent_parser.analyze_activity_image(image_bytes, mime_type)
     except Exception as error:
         raise HTTPException(status_code=502, detail="Gemini could not read this screenshot") from error
-    proof = ActivityProof(id=f"proof-{uuid4().hex[:12]}", session_id=session.id, player_id=player.id, image_url=request.image_url, analysis=analysis, created_at=datetime.now(timezone.utc))
+    return analysis
+
+
+@app.get("/v1/me/activity-proofs", response_model=ActivityProofsResponse)
+def my_activity_proofs(player: Player = Depends(get_current_player)) -> ActivityProofsResponse:
+    return ActivityProofsResponse(proofs=repository.list_activity_proofs(player_id=player.id))
+
+
+@app.post("/v1/me/activity-proof/analyze", response_model=ActivityProof)
+def analyze_profile_activity_proof(request: ActivityProofRequest, player: Player = Depends(get_current_player)) -> ActivityProof:
+    analysis = _analyze_activity_image(request.image_url)
+    proof = ActivityProof(id=f"proof-{uuid4().hex[:12]}", session_id="profile", player_id=player.id, image_url=request.image_url, sport=request.sport, analysis=analysis, created_at=datetime.now(timezone.utc))
+    return repository.save_activity_proof(proof)
+
+
+@app.post("/v1/me/performance-chat", response_model=PerformanceChatResponse)
+def performance_chat(request: PerformanceChatRequest, player: Player = Depends(get_current_player)) -> PerformanceChatResponse:
+    if not intent_parser.is_performance_query(request.query):
+        return PerformanceChatResponse(scope="out_of_scope", answer="I can discuss your CourtMate racket-sport history, CMR, game trends, and uploaded wearable stats. Ask me about one of those.")
+    history = {sport: [point.model_dump(mode="json") for point in points] for sport, points in player.cmr_history.items()}
+    proofs = [
+        {
+            "sport": proof.sport,
+            "created_at": proof.created_at.isoformat(),
+            "analysis": proof.analysis.model_dump(mode="json"),
+        }
+        for proof in repository.list_activity_proofs(player_id=player.id)
+    ]
+    try:
+        answer = intent_parser.discuss_performance(request.query, player, history, proofs)
+    except Exception as error:
+        raise HTTPException(status_code=502, detail="Performance coach is temporarily unavailable") from error
+    return PerformanceChatResponse(answer=answer)
+
+
+@app.post("/v1/sessions/{session_id}/activity-proof/analyze", response_model=ActivityProof)
+def analyze_activity_proof(session_id: str, request: ActivityProofRequest, player: Player = Depends(get_current_player)) -> ActivityProof:
+    session = _member_session(session_id, player)
+    if session.status != "completed":
+        raise HTTPException(status_code=409, detail="Attach tracker stats after the game is complete")
+    analysis = _analyze_activity_image(request.image_url)
+    proof = ActivityProof(id=f"proof-{uuid4().hex[:12]}", session_id=session.id, player_id=player.id, image_url=request.image_url, sport=session.sport, analysis=analysis, created_at=datetime.now(timezone.utc))
     return repository.save_activity_proof(proof)

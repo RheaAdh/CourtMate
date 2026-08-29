@@ -461,12 +461,27 @@ class ActivityProof(BaseModel):
     session_id: str
     player_id: str
     image_url: str
+    sport: Sport = "pickleball"
     analysis: ActivityProofAnalysis
     created_at: datetime
 
 
 class ActivityProofRequest(BaseModel):
     image_url: str = Field(min_length=1, max_length=2048)
+    sport: Sport = "pickleball"
+
+
+class ActivityProofsResponse(BaseModel):
+    proofs: list[ActivityProof] = Field(default_factory=list)
+
+
+class PerformanceChatRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+
+
+class PerformanceChatResponse(BaseModel):
+    answer: str
+    scope: Literal["performance", "out_of_scope"] = "performance"
 
 
 class GroupViewResponse(BaseModel):
@@ -476,7 +491,9 @@ class GroupViewResponse(BaseModel):
 
 
 class ChatPostRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=500)
+    message: str = Field(default="", max_length=500)
+    post_type: Literal["message", "match_result"] = "message"
+    teams: list["MatchTeam"] = Field(default_factory=list, max_length=2)
 
 
 class ChatPost(BaseModel):
@@ -485,6 +502,8 @@ class ChatPost(BaseModel):
     player_id: str
     player_display_name: str
     message: str
+    post_type: Literal["message", "match_result"] = "message"
+    teams: list["MatchTeam"] = Field(default_factory=list)
     created_at: datetime
 
 

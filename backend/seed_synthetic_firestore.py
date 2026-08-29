@@ -222,7 +222,7 @@ def seed() -> None:
     now = datetime.now(timezone.utc)
 
     players = [
-        make_player(rhea_id, "Rhea Adhikari", "Whitefield", {"pickleball": 3.9, "tennis": 4.3, "badminton": 3.6, "padel": 3.2}, "casual", 0.95, history_games=8, avatar_number=47, age=29, gender="woman"),
+        make_player(rhea_id, "Rhea Adhikari", "Whitefield", {"pickleball": 3.9, "tennis": 4.3, "badminton": 3.6, "padel": 3.2}, "casual", 0.95, history_games=8, age=29, gender="woman"),
         make_player("demo-organizer-wf", "Demo Ananya", "Whitefield", {"pickleball": 3.4, "tennis": 3.8}, "casual", 0.96, avatar_number=44, age=31, gender="woman"),
         make_player("demo-kavya", "Demo Kavya", "Whitefield", {"pickleball": 3.2, "tennis": 3.5}, "casual", 0.91, avatar_number=45, age=27, gender="woman"),
         make_player("demo-rohit", "Demo Rohit", "Brookefield", {"pickleball": 3.5, "badminton": 4.1}, "social", 0.88, avatar_number=12, age=34, gender="man"),

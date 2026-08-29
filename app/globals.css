@@ -2514,7 +2514,43 @@ body::before { border-color: rgba(117, 140, 31, .18); }
 .social-empty strong { display: block; margin-bottom: 4px; color: var(--ink); font-size: 18px; }
 .social-empty p { margin: 0; }
 
+.match-result-overlay {
+  position: fixed;
+  z-index: 130;
+  right: 24px;
+  bottom: 24px;
+  width: min(410px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border: 1px solid #d6e59c;
+  border-radius: 18px;
+  background: rgba(251, 255, 240, .97);
+  box-shadow: 0 20px 60px rgba(20, 34, 31, .22);
+  backdrop-filter: blur(14px);
+}
+
+.match-result-composer { padding: 16px; }
+.match-result-heading { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 13px; }
+.match-result-heading div { display: flex; flex-direction: column; gap: 3px; }
+.match-result-heading strong { font-size: 14px; }
+.match-result-heading small { color: #7d897d; font-size: 9px; }
+.match-result-heading > span { color: #718f12; font: 9px "DM Mono", monospace; }
+.match-player-grid { display: grid; gap: 6px; }
+.match-player-grid label { display: grid; grid-template-columns: minmax(0, 1fr) 110px; align-items: center; gap: 8px; }
+.match-player-grid label > span { overflow: hidden; color: #56655a; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.match-player-grid select,
+.match-score-row input { min-width: 0; border: 1px solid #dce6c3; border-radius: 8px; outline: 0; background: #fff; color: var(--ink); padding: 8px; font-size: 10px; }
+.match-score-row { display: grid; grid-template-columns: minmax(0, 1fr) 12px minmax(0, 1fr) auto; align-items: end; gap: 7px; margin-top: 15px; }
+.match-score-row label { display: flex; flex-direction: column; gap: 4px; }
+.match-score-row label > span { color: #7c887d; font: 8px "DM Mono", monospace; text-transform: uppercase; }
+.match-score-row b { padding-bottom: 8px; color: #718f12; }
+.match-result-submit { border: 0; border-radius: 8px; background: var(--ink); color: var(--lime); padding: 9px 10px; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.match-result-submit:disabled { cursor: not-allowed; opacity: .45; }
+
 @media (max-width: 600px) {
+  .match-result-overlay { right: 10px; bottom: 76px; left: 10px; width: auto; max-height: calc(100vh - 92px); }
+  .match-score-row { grid-template-columns: 1fr 10px 1fr; }
+  .match-result-submit { grid-column: 1 / -1; width: 100%; }
   .app-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .social-page { margin-top: 24px; margin-bottom: 80px; }
   .social-page-heading { align-items: flex-start; flex-direction: column; gap: 13px; }

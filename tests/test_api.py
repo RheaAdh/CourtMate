@@ -34,6 +34,32 @@ class ApiFlowTests(unittest.TestCase):
         self.assertTrue(payload["recommendations"])
         self.assertIn("pickleball", payload["message"])
 
+    def test_group_chat_can_log_pairs_and_update_relative_cmr(self):
+        session = repository.get_session("s1")
+        session.status = "completed"
+        repository.save_session(session)
+
+        result = self.client.post(
+            "/v1/sessions/s1/chat",
+            json={
+                "post_type": "match_result",
+                "teams": [
+                    {"name": "Pair A", "player_ids": ["p1", "p2"], "score": 11},
+                    {"name": "Pair B", "player_ids": ["p3", "p6"], "score": 8},
+                ],
+            },
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(result.status_code, 200)
+        self.assertIn("Ananya", result.json()["message"])
+        self.assertIn("Rohit", result.json()["message"])
+
+        profile = self.client.get("/v1/me", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertIsNotNone(profile.json()["cmr_ratings"].get("pickleball"))
+        history = profile.json()["cmr_history"]["pickleball"]
+        point = next(item for item in history if item["session_id"] == "s1")
+        self.assertIsNotNone(point["game_rating"])
+
     def test_unrelated_chat_query_is_redirected_without_results(self):
         response = self.client.post("/v1/sessions/search", json={"query": "What is the weather near me?", "player_id": "p1"})
         payload = response.json()

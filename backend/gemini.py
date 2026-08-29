@@ -146,6 +146,45 @@ This screenshot is being attached to a completed racket-sport game."""
         )
         return ActivityProofAnalysis.model_validate_json(response.text)
 
+    @classmethod
+    def is_performance_query(cls, query: str) -> bool:
+        lowered = " ".join(query.lower().split())
+        return bool(re.search(r"\b(performance|history|cmr|rating|ratings|stats|statistics|calories|steps|heart rate|distance|wearable|progress|trend|improve|played|games|activity|fitness|form)\b", lowered))
+
+    def discuss_performance(self, query: str, player: Player, history: dict, activity_proofs: list[dict]) -> str:
+        """Answer only from the player's stored game and wearable evidence."""
+        context = {
+            "player": player.display_name,
+            "cmr_ratings": player.cmr_ratings,
+            "cmr_game_counts": player.cmr_game_counts,
+            "cmr_history": history,
+            "wearable_proofs": activity_proofs[:12],
+        }
+        if not self._client:
+            ratings = [
+                (sport, rating, player.cmr_game_counts.get(sport, 0))
+                for sport, rating in player.cmr_ratings.items()
+            ]
+            if not ratings:
+                return "You do not have a CMR history yet. Play a completed racket-sport game and check in to start tracking your form."
+            sport, rating, games = max(ratings, key=lambda item: item[1])
+            proof_count = len(activity_proofs)
+            evidence = f" I also have {proof_count} wearable check-in{'' if proof_count == 1 else 's'} to compare." if proof_count else ""
+            return f"Your strongest current signal is {sport.replace('_', ' ').title()} at {rating:.1f}/100 CMR across {games} game{'' if games == 1 else 's'}.{evidence} Ask about a specific sport, rating trend, or wearable metric for a closer read."
+
+        prompt = f"""You are CourtMate's private performance coach for racket-sport players.
+Answer the user's question using only the stored context below. Discuss CMR trends, completed games, consistency, and clearly extracted wearable metrics. Do not invent scores, medical advice, or metrics. Explain when the data is too limited. Keep the answer concise, warm, and actionable.
+If the request is unrelated to racket-sport performance, say you can only discuss the player's CourtMate history and uploaded wearable activity.
+
+User question: {query}
+Stored player context: {context}
+"""
+        response = self._client.models.generate_content(model=self.model, contents=prompt)
+        answer = response.text.strip()
+        if not answer:
+            raise RuntimeError("Gemini returned an empty performance answer")
+        return answer
+
     @staticmethod
     def _fallback_parse(query: str) -> SearchIntent:
         lowered = query.lower()
