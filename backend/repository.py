@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 from typing import Protocol
 
-from .models import AppNotification, ChatPost, Feedback, FollowRecord, JoinRequest, Player, Session, normalize_cmr_player
+from .models import AppNotification, ChatPost, Feedback, FollowRecord, JoinRequest, Player, Session, Tournament, TournamentMatch, TournamentRegistration, normalize_cmr_player
 
 
 class Repository(Protocol):
@@ -29,6 +29,14 @@ class Repository(Protocol):
     def is_following(self, follower_id: str, following_id: str) -> bool: ...
     def list_followers(self, player_id: str) -> list[FollowRecord]: ...
     def list_following(self, player_id: str) -> list[FollowRecord]: ...
+    def save_tournament(self, tournament: Tournament) -> Tournament: ...
+    def get_tournament(self, tournament_id: str) -> Tournament | None: ...
+    def list_tournaments(self) -> list[Tournament]: ...
+    def save_tournament_registration(self, registration: TournamentRegistration) -> TournamentRegistration: ...
+    def list_tournament_registrations(self, tournament_id: str) -> list[TournamentRegistration]: ...
+    def save_tournament_match(self, match: TournamentMatch) -> TournamentMatch: ...
+    def get_tournament_match(self, match_id: str) -> TournamentMatch | None: ...
+    def list_tournament_matches(self, tournament_id: str) -> list[TournamentMatch]: ...
 
 
 class InMemoryRepository:
@@ -42,6 +50,9 @@ class InMemoryRepository:
         self.join_requests: dict[str, JoinRequest] = {}
         self.notifications: dict[str, AppNotification] = {}
         self.follows: dict[str, FollowRecord] = {}
+        self.tournaments: dict[str, Tournament] = {}
+        self.tournament_registrations: dict[str, TournamentRegistration] = {}
+        self.tournament_matches: dict[str, TournamentMatch] = {}
 
     def list_sessions(self) -> list[Session]:
         return list(self.sessions.values())
@@ -128,6 +139,33 @@ class InMemoryRepository:
     def list_following(self, player_id: str) -> list[FollowRecord]:
         return [follow for follow in self.follows.values() if follow.follower_id == player_id]
 
+    def save_tournament(self, tournament: Tournament) -> Tournament:
+        self.tournaments[tournament.id] = tournament
+        return tournament
+
+    def get_tournament(self, tournament_id: str) -> Tournament | None:
+        return self.tournaments.get(tournament_id)
+
+    def list_tournaments(self) -> list[Tournament]:
+        return list(self.tournaments.values())
+
+    def save_tournament_registration(self, registration: TournamentRegistration) -> TournamentRegistration:
+        self.tournament_registrations[registration.id] = registration
+        return registration
+
+    def list_tournament_registrations(self, tournament_id: str) -> list[TournamentRegistration]:
+        return [item for item in self.tournament_registrations.values() if item.tournament_id == tournament_id]
+
+    def save_tournament_match(self, match: TournamentMatch) -> TournamentMatch:
+        self.tournament_matches[match.id] = match
+        return match
+
+    def get_tournament_match(self, match_id: str) -> TournamentMatch | None:
+        return self.tournament_matches.get(match_id)
+
+    def list_tournament_matches(self, tournament_id: str) -> list[TournamentMatch]:
+        return sorted((item for item in self.tournament_matches.values() if item.tournament_id == tournament_id), key=lambda item: (item.round_number, item.match_number))
+
 
 class FirestoreRepository:
     """Firestore-backed repository using Application Default Credentials."""
@@ -140,6 +178,7 @@ class FirestoreRepository:
         self.client = firestore.Client(project=project or os.getenv("GOOGLE_CLOUD_PROJECT"))
         self.max_session_reads = int(os.getenv("COURTMATE_MAX_SESSION_READS", "100"))
         self.max_player_reads = int(os.getenv("COURTMATE_MAX_PLAYER_READS", "500"))
+        self.max_tournament_reads = int(os.getenv("COURTMATE_MAX_TOURNAMENT_READS", "100"))
 
     @staticmethod
     def _as_player(document) -> Player:
@@ -269,6 +308,42 @@ class FirestoreRepository:
     def list_following(self, player_id: str) -> list[FollowRecord]:
         documents = self.client.collection("follows").where("follower_id", "==", player_id).limit(self.max_player_reads).stream()
         return [FollowRecord.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
+
+    def save_tournament(self, tournament: Tournament) -> Tournament:
+        reference = self.client.collection("tournaments").document(tournament.id)
+        reference.set(self._write_model(tournament))
+        return tournament
+
+    def get_tournament(self, tournament_id: str) -> Tournament | None:
+        document = self.client.collection("tournaments").document(tournament_id).get()
+        return Tournament.model_validate({**(document.to_dict() or {}), "id": document.id}) if document.exists else None
+
+    def list_tournaments(self) -> list[Tournament]:
+        documents = self.client.collection("tournaments").limit(self.max_tournament_reads).stream()
+        return [Tournament.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
+
+    def save_tournament_registration(self, registration: TournamentRegistration) -> TournamentRegistration:
+        reference = self.client.collection("tournament_registrations").document(registration.id)
+        reference.set(self._write_model(registration))
+        return registration
+
+    def list_tournament_registrations(self, tournament_id: str) -> list[TournamentRegistration]:
+        documents = self.client.collection("tournament_registrations").where("tournament_id", "==", tournament_id).limit(100).stream()
+        return [TournamentRegistration.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
+
+    def save_tournament_match(self, match: TournamentMatch) -> TournamentMatch:
+        reference = self.client.collection("tournament_matches").document(match.id)
+        reference.set(self._write_model(match))
+        return match
+
+    def get_tournament_match(self, match_id: str) -> TournamentMatch | None:
+        document = self.client.collection("tournament_matches").document(match_id).get()
+        return TournamentMatch.model_validate({**(document.to_dict() or {}), "id": document.id}) if document.exists else None
+
+    def list_tournament_matches(self, tournament_id: str) -> list[TournamentMatch]:
+        documents = self.client.collection("tournament_matches").where("tournament_id", "==", tournament_id).limit(500).stream()
+        matches = [TournamentMatch.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
+        return sorted(matches, key=lambda item: (item.round_number, item.match_number))
 
 
 def create_repository() -> Repository:

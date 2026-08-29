@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-Sport = Literal["pickleball", "badminton", "tennis", "padel", "squash", "table_tennis", "basketball", "volleyball"]
+Sport = Literal["pickleball", "badminton", "tennis", "padel", "squash", "table_tennis"]
 RatingSource = Literal["dupr", "organizer_confirmed", "synthetic", "self_reported", "unrated"]
 SkillLevel = Literal["beginner", "intermediate", "advanced"]
 
@@ -34,6 +34,7 @@ class SearchIntent(BaseModel):
 class Player(BaseModel):
     id: str
     display_name: str
+    profile_image_url: str | None = None
     area: str
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
@@ -119,6 +120,7 @@ class ProfileGameSummary(BaseModel):
 class PublicPlayerProfile(BaseModel):
     id: str
     display_name: str
+    profile_image_url: str | None = None
     area: str
     dupr_rating: float | None = Field(default=None, ge=1, le=8)
     rating_source: RatingSource = "unrated"
@@ -166,6 +168,10 @@ class ProfileUpdateRequest(BaseModel):
     availability: list[str] | None = None
 
 
+class ProfileImageUpdateRequest(BaseModel):
+    profile_image_url: str = Field(min_length=1, max_length=2048)
+
+
 class Session(BaseModel):
     id: str
     group_name: str
@@ -190,6 +196,95 @@ class Session(BaseModel):
     @property
     def open_slots(self) -> int:
         return max(self.capacity - len(self.confirmed_player_ids), 0)
+
+
+class TournamentRules(BaseModel):
+    score_label: str = "Points"
+    point_target: int = Field(ge=1, le=999, default=11)
+    win_by: int = Field(ge=1, le=99, default=2)
+    best_of: int = Field(ge=1, le=7, default=1)
+
+
+class Tournament(BaseModel):
+    id: str
+    name: str = Field(min_length=2, max_length=80)
+    sport: Sport = "pickleball"
+    organizer_id: str
+    area: str
+    venue_name: str | None = None
+    tournament_date: date_type
+    format: Literal["round_robin"] = "round_robin"
+    capacity: int = Field(ge=2, le=16)
+    status: Literal["registration", "in_progress", "completed", "cancelled"] = "registration"
+    registration_ids: list[str] = Field(default_factory=list)
+    created_at: datetime
+    rules: TournamentRules = Field(default_factory=TournamentRules)
+
+
+class TournamentRegistration(BaseModel):
+    id: str
+    tournament_id: str
+    player_id: str
+    display_name: str
+    status: Literal["registered", "waitlisted", "withdrawn"] = "registered"
+    cmr_rating: float | None = Field(default=None, ge=0, le=100)
+    created_at: datetime
+
+
+class TournamentMatch(BaseModel):
+    id: str
+    tournament_id: str
+    round_number: int = Field(ge=1)
+    match_number: int = Field(ge=1)
+    player_a_id: str
+    player_b_id: str
+    status: Literal["scheduled", "pending_confirmation", "completed"] = "scheduled"
+    score_a: int | None = Field(default=None, ge=0, le=999)
+    score_b: int | None = Field(default=None, ge=0, le=999)
+    winner_id: str | None = None
+    score_entered_by: str | None = None
+    confirmed_by: str | None = None
+
+
+class TournamentStanding(BaseModel):
+    rank: int
+    player_id: str
+    display_name: str
+    cmr_rating: float | None = Field(default=None, ge=0, le=100)
+    played: int = 0
+    wins: int = 0
+    losses: int = 0
+    draws: int = 0
+    points_for: int = 0
+    points_against: int = 0
+    table_points: int = 0
+
+
+class TournamentDetailsResponse(BaseModel):
+    tournament: Tournament
+    registrations: list[TournamentRegistration] = Field(default_factory=list)
+    matches: list[TournamentMatch] = Field(default_factory=list)
+    standings: list[TournamentStanding] = Field(default_factory=list)
+
+
+class TournamentListResponse(BaseModel):
+    tournaments: list[Tournament]
+
+
+class CreateTournamentRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    sport: Sport = "pickleball"
+    area: str = Field(min_length=2, max_length=80)
+    venue_name: str | None = Field(default=None, max_length=120)
+    tournament_date: date_type
+    capacity: int = Field(ge=2, le=16, default=8)
+    format: Literal["round_robin"] = "round_robin"
+
+
+class TournamentScoreRequest(BaseModel):
+    score_a: int = Field(ge=0, le=999)
+    score_b: int = Field(ge=0, le=999)
+    confirm: bool = False
 
 
 class RecommendationReason(BaseModel):

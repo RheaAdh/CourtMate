@@ -34,7 +34,7 @@ class GeminiIntentParser:
         return parsed.model_copy(update={"sport": sport}) if sport else parsed
 
     def _parse_with_gemini(self, query: str) -> SearchIntent:
-        prompt = """Extract a court-sport session search into JSON matching this schema: sport, area, date, start_time, end_time, skill_min, skill_max, style, open_slots_required. Supported sports are pickleball, badminton, tennis, padel, squash, table_tennis, basketball, and volleyball. Use null for unknown values. User request: """ + query
+        prompt = """Extract a racket-sport session search into JSON matching this schema: sport, area, date, start_time, end_time, skill_min, skill_max, style, open_slots_required. Supported sports are pickleball, badminton, tennis, padel, squash, and table_tennis. Use null for unknown values. User request: """ + query
         response = self._client.models.generate_content(model=self.model, contents=prompt, config={"response_mime_type": "application/json", "response_schema": SearchIntent.model_json_schema()})
         return SearchIntent.model_validate_json(response.text)
 
@@ -104,8 +104,6 @@ Firestore session snapshot: {snapshot}
             "padel": ("padel",),
             "squash": ("squash",),
             "table_tennis": ("table tennis", "table-tennis", "ping pong"),
-            "basketball": ("basketball",),
-            "volleyball": ("volleyball",),
         }
         sport = next((candidate for candidate, aliases in sport_aliases.items() if any(alias in lowered for alias in aliases)), "pickleball")
         style = "competitive" if "competitive" in lowered else "social" if "social" in lowered else "casual" if "casual" in lowered else "any"

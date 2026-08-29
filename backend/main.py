@@ -14,8 +14,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, CreateGroupRequest, CreatedGroupResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, Player, ProfileGameSummary, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, SearchIntent, SearchResponse, Session, Sport, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, SearchIntent, SearchResponse, Session, Sport, Tournament, TournamentDetailsResponse, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
+from .tournaments import calculate_standings, generate_round_robin_matches, rules_for_sport, validate_score
 
 
 load_dotenv()
@@ -234,6 +235,13 @@ def update_profile(request: ProfileUpdateRequest, player: Player = Depends(get_c
     return repository.save_player(updated)
 
 
+@app.post("/v1/me/profile-image", response_model=Player)
+def update_profile_image(request: ProfileImageUpdateRequest, player: Player = Depends(get_current_player)) -> Player:
+    if not re.match(r"^https://(?:firebasestorage\.googleapis\.com|storage\.googleapis\.com)/", request.profile_image_url):
+        raise HTTPException(status_code=422, detail="Profile image must be stored in Google Cloud Storage")
+    return repository.save_player(player.model_copy(update={"profile_image_url": request.profile_image_url}))
+
+
 def _profile_activity(player_id: str) -> tuple[list[ProfileGameSummary], dict[str, int]]:
     today = date.today()
     window_start = today - timedelta(days=83)
@@ -264,6 +272,7 @@ def _public_profile(player: Player, viewer_id: str | None = None) -> PublicPlaye
     return PublicPlayerProfile(
         id=player.id,
         display_name=player.display_name,
+        profile_image_url=player.profile_image_url,
         area=player.area,
         dupr_rating=player.dupr_rating,
         rating_source=player.rating_source,
@@ -446,7 +455,7 @@ def _notify_players_about_game(session: Session) -> None:
 
 
 def _query_group_name(query: str, intent: SearchIntent, style: str) -> str:
-    ignored_words = {"find", "me", "a", "an", "the", "show", "looking", "for", "create", "group", "game", "games", "near", "in", "at", "on", "this", "around", "please", "morning", "afternoon", "evening", "tonight", "beginner", "intermediate", "advanced", "casual", "social", "competitive", "pickleball", "badminton", "tennis", "padel", "squash", "table", "ping", "pong", "basketball", "volleyball"}
+    ignored_words = {"find", "me", "a", "an", "the", "show", "looking", "for", "create", "group", "game", "games", "near", "in", "at", "on", "this", "around", "please", "morning", "afternoon", "evening", "tonight", "beginner", "intermediate", "advanced", "casual", "social", "competitive", "pickleball", "badminton", "tennis", "padel", "squash", "table", "ping", "pong"}
     words = [word for word in re.findall(r"[a-zA-Z0-9]+", query.lower()) if word not in ignored_words]
     phrase = " ".join(word.title() for word in words[:5])
     if not phrase:
@@ -693,6 +702,153 @@ def group_view(session_id: str, player: Player = Depends(get_current_player)) ->
     players_by_id = {candidate.id: candidate for candidate in repository.list_players()}
     members = [_public_profile(players_by_id[player_id], player.id) for player_id in session.confirmed_player_ids if player_id in players_by_id]
     return GroupViewResponse(session=session, members=members)
+
+
+def _tournament_details(tournament: Tournament) -> TournamentDetailsResponse:
+    registrations = repository.list_tournament_registrations(tournament.id)
+    matches = repository.list_tournament_matches(tournament.id)
+    return TournamentDetailsResponse(
+        tournament=tournament,
+        registrations=sorted(registrations, key=lambda item: item.created_at),
+        matches=matches,
+        standings=calculate_standings(registrations, matches),
+    )
+
+
+@app.get("/v1/tournaments", response_model=TournamentListResponse)
+def list_tournaments(player: Player = Depends(get_current_player)) -> TournamentListResponse:
+    tournaments = [item for item in repository.list_tournaments() if item.status != "cancelled"]
+    tournaments.sort(key=lambda item: (item.tournament_date, item.created_at))
+    return TournamentListResponse(tournaments=tournaments)
+
+
+@app.post("/v1/tournaments", response_model=TournamentDetailsResponse)
+def create_tournament(request: CreateTournamentRequest, player: Player = Depends(get_current_player)) -> TournamentDetailsResponse:
+    try:
+        rules = rules_for_sport(request.sport)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    tournament_id = f"t-{uuid4().hex[:12]}"
+    tournament = Tournament(
+        id=tournament_id,
+        name=request.name.strip(),
+        sport=request.sport,
+        organizer_id=player.id,
+        area=request.area.strip(),
+        venue_name=request.venue_name.strip() if request.venue_name else None,
+        tournament_date=request.tournament_date,
+        capacity=request.capacity,
+        format=request.format,
+        rules=rules,
+        created_at=datetime.now(timezone.utc),
+    )
+    registration = TournamentRegistration(
+        id=f"{tournament.id}_{player.id}",
+        tournament_id=tournament.id,
+        player_id=player.id,
+        display_name=player.display_name,
+        cmr_rating=player.cmr_ratings.get(request.sport),
+        created_at=datetime.now(timezone.utc),
+    )
+    tournament.registration_ids.append(registration.id)
+    repository.save_tournament(tournament)
+    repository.save_tournament_registration(registration)
+    return _tournament_details(tournament)
+
+
+@app.get("/v1/tournaments/{tournament_id}", response_model=TournamentDetailsResponse)
+def tournament_details(tournament_id: str, player: Player = Depends(get_current_player)) -> TournamentDetailsResponse:
+    tournament = repository.get_tournament(tournament_id)
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    return _tournament_details(tournament)
+
+
+@app.post("/v1/tournaments/{tournament_id}/register", response_model=TournamentRegistration)
+def register_for_tournament(tournament_id: str, player: Player = Depends(get_current_player)) -> TournamentRegistration:
+    tournament = repository.get_tournament(tournament_id)
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    if tournament.status != "registration":
+        raise HTTPException(status_code=409, detail="Registration is closed for this tournament")
+    registration_id = f"{tournament.id}_{player.id}"
+    existing = next((item for item in repository.list_tournament_registrations(tournament.id) if item.player_id == player.id and item.status != "withdrawn"), None)
+    if existing:
+        return existing
+    registered_count = sum(item.status == "registered" for item in repository.list_tournament_registrations(tournament.id))
+    status = "registered" if registered_count < tournament.capacity else "waitlisted"
+    registration = TournamentRegistration(
+        id=registration_id,
+        tournament_id=tournament.id,
+        player_id=player.id,
+        display_name=player.display_name,
+        status=status,
+        cmr_rating=player.cmr_ratings.get(tournament.sport),
+        created_at=datetime.now(timezone.utc),
+    )
+    tournament.registration_ids.append(registration.id)
+    repository.save_tournament(tournament)
+    return repository.save_tournament_registration(registration)
+
+
+@app.post("/v1/tournaments/{tournament_id}/fixtures", response_model=TournamentDetailsResponse)
+def generate_tournament_fixtures(tournament_id: str, player: Player = Depends(get_current_player)) -> TournamentDetailsResponse:
+    tournament = repository.get_tournament(tournament_id)
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    if tournament.organizer_id != player.id:
+        raise HTTPException(status_code=403, detail="Only the organizer can generate fixtures")
+    if tournament.status != "registration":
+        raise HTTPException(status_code=409, detail="Fixtures have already been generated")
+    registrations = repository.list_tournament_registrations(tournament.id)
+    try:
+        matches = generate_round_robin_matches(tournament.id, registrations)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    for match in matches:
+        repository.save_tournament_match(match)
+    tournament.status = "in_progress"
+    repository.save_tournament(tournament)
+    return _tournament_details(tournament)
+
+
+@app.post("/v1/tournaments/{tournament_id}/matches/{match_id}/score", response_model=TournamentMatch)
+def enter_tournament_score(tournament_id: str, match_id: str, request: TournamentScoreRequest, player: Player = Depends(get_current_player)) -> TournamentMatch:
+    tournament = repository.get_tournament(tournament_id)
+    match = repository.get_tournament_match(match_id)
+    if not tournament or not match or match.tournament_id != tournament_id:
+        raise HTTPException(status_code=404, detail="Tournament match not found")
+    if tournament.status not in {"in_progress", "registration"}:
+        raise HTTPException(status_code=409, detail="This tournament is closed")
+    if player.id not in {match.player_a_id, match.player_b_id, tournament.organizer_id}:
+        raise HTTPException(status_code=403, detail="Only match players or the organizer can enter a score")
+    try:
+        validate_score(request.score_a, request.score_b, tournament.rules)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    if match.status == "completed":
+        raise HTTPException(status_code=409, detail="This match result is already locked")
+    if match.status == "pending_confirmation" and match.score_entered_by != player.id and player.id != tournament.organizer_id:
+        if match.score_a != request.score_a or match.score_b != request.score_b:
+            raise HTTPException(status_code=409, detail="The submitted score does not match the pending result")
+        match.status = "completed"
+        match.confirmed_by = player.id
+        match.winner_id = match.player_a_id if request.score_a > request.score_b else match.player_b_id
+    elif player.id == tournament.organizer_id or request.confirm:
+        match.status = "completed"
+        match.confirmed_by = player.id
+        match.winner_id = match.player_a_id if request.score_a > request.score_b else match.player_b_id
+    else:
+        match.status = "pending_confirmation"
+        match.score_entered_by = player.id
+    match.score_a = request.score_a
+    match.score_b = request.score_b
+    match.score_entered_by = match.score_entered_by or player.id
+    saved_match = repository.save_tournament_match(match)
+    if all(item.status == "completed" for item in repository.list_tournament_matches(tournament.id)):
+        tournament.status = "completed"
+        repository.save_tournament(tournament)
+    return saved_match
 
 
 @app.get("/v1/sessions/{session_id}/chat", response_model=ChatResponse)

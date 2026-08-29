@@ -1,6 +1,6 @@
 # CourtMate
 
-CourtMate is the intelligent group layer for court-sport organizers. The MVP helps players discover skill-compatible sessions across pickleball, badminton, tennis, padel, squash, table tennis, basketball, and volleyball, while helping organizers replace dropouts without replacing WhatsApp or court-booking platforms.
+CourtMate is the intelligent group layer for racket-sport organizers. The MVP helps players discover skill-compatible sessions across pickleball, badminton, tennis, padel, squash, and table tennis, while helping organizers replace dropouts without replacing WhatsApp or court-booking platforms.
 
 ## Backend MVP
 
@@ -20,6 +20,7 @@ The first implementation slice is a Python API with:
 - CMR calculated and displayed on a 0-100 scale, with compatibility conversion for existing 1-8 skill bands
 - A free-tier deployment profile with bounded Firestore reads and scale-to-zero Cloud Run
 - Post-game feedback with fun/fairness signals, broad player skill levels, and optional team/score context
+- Tournament desk for racket-sport registration, round-robin fixtures, score confirmation, and live standings
 
 ## Run locally
 
@@ -40,6 +41,8 @@ gcloud auth application-default login
 
 The API uses Firestore when `COURTMATE_DATASTORE=firestore`. Set `COURTMATE_DATASTORE=memory` for an offline local run. With `GEMINI_API_KEY`, intent extraction and search explanation use the model in `GEMINI_MODEL` (default `gemini-3.6-flash`) through the server-side adapter. Gemini receives only a bounded session snapshot; Python remains the authority for sport, skill, date, area, time, and open-slot eligibility. If Gemini is unavailable, the API falls back to deterministic parsing and decisions.
 
+The Tournament Desk is a racket-sport competition MVP. Open `Tournaments`, create a pickleball, badminton, tennis, padel, squash, or table-tennis event, register players, and generate a round-robin draw. A match player can submit a result and the opponent or organizer can confirm it; only confirmed results contribute to the live leaderboard. Tournament data is stored in `tournaments`, `tournament_registrations`, and `tournament_matches` in Firestore.
+
 For coordinate-aware locality matching, set `GOOGLE_MAPS_API_KEY` with the Google Maps Geocoding API enabled. The key stays server-side; the backend geocodes search localities and profile locality labels, while browser location permission can provide more precise coordinates. If the key is absent, textual locality matching remains available.
 
 ## Google sign-in setup
@@ -48,9 +51,16 @@ Firebase Authentication Google sign-in is used for identity; the backend verifie
 
 1. In the Firebase console, open project `mttn-portal`, add a Web app, and copy its Firebase configuration.
 2. In Authentication, enable the Google provider and add `localhost` to the authorized domains.
-3. Copy `.env.local.example` to `.env.local` and fill the `NEXT_PUBLIC_FIREBASE_*` values from the Web app configuration.
-4. Keep `COURTMATE_AUTH_REQUIRED=true` in `.env`.
-5. Install the updated dependencies and run both services:
+3. In Storage, create the default bucket, then deploy the profile-image rules from the repository root:
+
+```bash
+firebase use mttn-portal
+firebase deploy --only storage
+```
+
+4. Copy `.env.local.example` to `.env.local` and fill the `NEXT_PUBLIC_FIREBASE_*` values from the Web app configuration, including `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`.
+5. Keep `COURTMATE_AUTH_REQUIRED=true` in `.env`.
+6. Install the updated dependencies and run both services:
 
 ```bash
 source .venv/bin/activate
@@ -151,5 +161,7 @@ gcloud run deploy courtmate-api \
 ```
 
 The pasted Google Cloud free-tier limits are usage limits, not a spend cap. Set a billing budget alert in Cloud Billing and monitor Firestore reads/writes and Cloud Run requests.
+
+Profile photos use Firebase Storage, backed by Google Cloud Storage. Images are uploaded to `profile-images/{firebase_uid}` from the signed-in browser, while the corresponding download URL is saved on the Firestore player document through `POST /v1/me/profile-image`. No service-account key is needed in the frontend or in Cloud Run. The MVP accepts JPG, PNG, and WebP images up to 5 MB.
 
 If the traceback shows `/opt/homebrew/anaconda3/site-packages`, Uvicorn was started outside the project environment. Activate `.venv` first or run it explicitly with `.venv/bin/python -m uvicorn`.
