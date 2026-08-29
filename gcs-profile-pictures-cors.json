@@ -1,0 +1,16 @@
+[
+  {
+    "origin": [
+      "http://localhost:3000",
+      "https://court-mate-blr.vercel.app"
+    ],
+    "method": [
+      "PUT",
+      "OPTIONS"
+    ],
+    "responseHeader": [
+      "Content-Type"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]

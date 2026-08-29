@@ -1,7 +1,7 @@
 import os
 import re
 import json
-from urllib.parse import urlencode, urlparse
+from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 from datetime import date, datetime, time, timedelta, timezone
 from uuid import uuid4
@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import ActivityProof, ActivityProofRequest, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, SearchIntent, SearchResponse, Session, Sport, Tournament, TournamentDetailsResponse, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import ActivityProof, ActivityProofRequest, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, SearchIntent, SearchResponse, Session, Sport, Tournament, TournamentDetailsResponse, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
 from .tournaments import calculate_standings, generate_round_robin_matches, rules_for_sport, validate_score
 
@@ -235,10 +235,55 @@ def update_profile(request: ProfileUpdateRequest, player: Player = Depends(get_c
     return repository.save_player(updated)
 
 
+def _profile_storage_client():
+    """Return a GCS client that can sign URLs with local or Cloud Run credentials."""
+    from google.cloud import storage
+
+    project = os.getenv("GOOGLE_CLOUD_PROJECT")
+    client = storage.Client(project=project)
+    credentials = client._credentials
+    if hasattr(credentials, "sign_bytes"):
+        return client
+
+    from google.auth import iam
+    from google.auth.transport.requests import Request as GoogleAuthRequest
+
+    service_account_email = os.getenv("COURTMATE_SIGNING_SERVICE_ACCOUNT") or getattr(credentials, "service_account_email", None)
+    if not service_account_email:
+        raise RuntimeError("Set COURTMATE_SIGNING_SERVICE_ACCOUNT for signed GCS URLs")
+    signer = iam.Signer(GoogleAuthRequest(), credentials, service_account_email)
+    return storage.Client(project=project, credentials=signer)
+
+
+@app.post("/v1/me/profile-image/upload-url", response_model=ProfileImageUploadResponse)
+def create_profile_image_upload_url(request: ProfileImageUploadRequest, player: Player = Depends(get_current_player)) -> ProfileImageUploadResponse:
+    bucket_name = os.getenv("COURTMATE_PROFILE_BUCKET", "profile-pictures")
+    extension = "jpg" if request.content_type == "image/jpeg" else request.content_type.split("/", 1)[1]
+    object_name = f"profiles/{player.id}/{uuid4()}.{extension}"
+    try:
+        bucket = _profile_storage_client().bucket(bucket_name)
+        blob = bucket.blob(object_name)
+        upload_url = blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(minutes=10),
+            method="PUT",
+            content_type=request.content_type,
+        )
+    except ImportError as error:
+        raise HTTPException(status_code=500, detail="Install google-cloud-storage to upload profile pictures") from error
+    except Exception as error:
+        raise HTTPException(status_code=502, detail="Could not create a profile picture upload URL") from error
+    image_url = f"https://storage.googleapis.com/{bucket_name}/{quote(object_name, safe='/')}"
+    return ProfileImageUploadResponse(upload_url=upload_url, image_url=image_url, object_name=object_name, expires_in=600)
+
+
 @app.post("/v1/me/profile-image", response_model=Player)
 def update_profile_image(request: ProfileImageUpdateRequest, player: Player = Depends(get_current_player)) -> Player:
-    if not re.match(r"^https://(?:firebasestorage\.googleapis\.com|storage\.googleapis\.com)/", request.profile_image_url):
-        raise HTTPException(status_code=422, detail="Profile image must be stored in Google Cloud Storage")
+    bucket_name = os.getenv("COURTMATE_PROFILE_BUCKET", "profile-pictures")
+    parsed_url = urlparse(request.profile_image_url)
+    expected_prefix = f"/{bucket_name}/profiles/{player.id}/"
+    if parsed_url.scheme != "https" or parsed_url.hostname != "storage.googleapis.com" or not parsed_url.path.startswith(expected_prefix):
+        raise HTTPException(status_code=422, detail="Profile image must be uploaded to the CourtMate profile bucket")
     return repository.save_player(player.model_copy(update={"profile_image_url": request.profile_image_url}))
 
 

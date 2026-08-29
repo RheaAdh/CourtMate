@@ -9,6 +9,8 @@ import { PostGameFeedbackPanel } from "./post-game-feedback";
 import { TournamentHub } from "./tournament-hub";
 
 type Sport = "pickleball" | "badminton" | "tennis" | "padel" | "squash" | "table_tennis";
+type Gender = "woman" | "man" | "non_binary" | "prefer_not_to_say";
+type AgeRange = "any" | "18_24" | "25_34" | "35_44" | "45_plus";
 
 const sportOptions: { value: Sport; label: string }[] = [
   { value: "pickleball", label: "Pickleball" },
@@ -17,6 +19,20 @@ const sportOptions: { value: Sport; label: string }[] = [
   { value: "padel", label: "Padel" },
   { value: "squash", label: "Squash" },
   { value: "table_tennis", label: "Table tennis" },
+];
+
+const genderOptions: { value: Gender; label: string }[] = [
+  { value: "woman", label: "Women" },
+  { value: "man", label: "Men" },
+  { value: "non_binary", label: "Non-binary players" },
+];
+
+const ageRangeOptions: { value: AgeRange; label: string }[] = [
+  { value: "any", label: "Any age" },
+  { value: "18_24", label: "18–24" },
+  { value: "25_34", label: "25–34" },
+  { value: "35_44", label: "35–44" },
+  { value: "45_plus", label: "45+" },
 ];
 
 const sportLabel = (sport: Sport | string) => sportOptions.find((option) => option.value === sport)?.label ?? sport.replaceAll("_", " ");
@@ -89,6 +105,10 @@ type PlayerProfile = {
   display_name: string;
   profile_image_url?: string | null;
   area: string;
+  age?: number | null;
+  gender?: Gender | null;
+  preferred_age_range?: AgeRange;
+  preferred_genders?: Gender[];
   latitude?: number | null;
   longitude?: number | null;
   travel_radius_km?: number;
@@ -234,6 +254,10 @@ type GamesViewTab = "pending" | "upcoming" | "history" | "requested" | "confirme
 
 type ProfileDraft = {
   area: string;
+  age: string;
+  gender: Gender | "";
+  preferred_age_range: AgeRange;
+  preferred_genders: Gender[];
   latitude?: number | null;
   longitude?: number | null;
   travel_radius_km: string;
@@ -364,7 +388,7 @@ export default function Home() {
   const [createGroupLoading, setCreateGroupLoading] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
-  const [profileDraft, setProfileDraft] = useState<ProfileDraft>({ area: "Whitefield", travel_radius_km: "10", style: "casual", availability: [] });
+  const [profileDraft, setProfileDraft] = useState<ProfileDraft>({ area: "Whitefield", age: "", gender: "", preferred_age_range: "any", preferred_genders: [], travel_radius_km: "10", style: "casual", availability: [] });
   const [profilePictureUploading, setProfilePictureUploading] = useState(false);
   const [authReady, setAuthReady] = useState(false);
   const [managedGroupId, setManagedGroupId] = useState<string | null>(null);
@@ -392,6 +416,7 @@ export default function Home() {
   const [playerRatings, setPlayerRatings] = useState<Record<string, string>>({});
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [socialProfile, setSocialProfile] = useState<PublicPlayerProfile | null>(null);
   const [viewedProfile, setViewedProfile] = useState<PublicPlayerProfile | null>(null);
   const [profileLoadingId, setProfileLoadingId] = useState<string | null>(null);
@@ -400,6 +425,15 @@ export default function Home() {
   const [feedDate, setFeedDate] = useState(localDateInput());
   const [feedFilter, setFeedFilter] = useState("best");
   const [toast, setToast] = useState("");
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSettingsOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [settingsOpen]);
 
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get("tournament")) setActiveTab("tournaments");
@@ -456,10 +490,6 @@ export default function Home() {
 
   async function uploadProfilePicture(file: File) {
     if (!user) return;
-    if (!storage) {
-      setToast("Firebase Storage is not configured");
-      return;
-    }
     if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
       setToast("Choose a JPG, PNG, or WebP image");
       return;
@@ -470,14 +500,26 @@ export default function Home() {
     }
     try {
       setProfilePictureUploading(true);
-      const extension = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
-      const imageRef = ref(storage, `profile-images/${user.uid}/${crypto.randomUUID()}.${extension}`);
-      const upload = await uploadBytes(imageRef, file, { contentType: file.type });
-      const imageUrl = await getDownloadURL(upload.ref);
+      const uploadTicketResponse = await authorizedFetch(`${apiUrl}/v1/me/profile-image/upload-url`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content_type: file.type }),
+      });
+      if (!uploadTicketResponse.ok) {
+        const payload = await uploadTicketResponse.json().catch(() => ({})) as { detail?: string };
+        throw new Error(payload.detail ?? "Profile picture upload URL could not be created");
+      }
+      const uploadTicket = await uploadTicketResponse.json() as { upload_url: string; image_url: string };
+      const upload = await fetch(uploadTicket.upload_url, {
+        method: "PUT",
+        headers: { "Content-Type": file.type },
+        body: file,
+      });
+      if (!upload.ok) throw new Error("Profile picture could not be uploaded to Cloud Storage");
       const response = await authorizedFetch(`${apiUrl}/v1/me/profile-image`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ profile_image_url: imageUrl }),
+        body: JSON.stringify({ profile_image_url: uploadTicket.image_url }),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({})) as { detail?: string };
@@ -485,7 +527,7 @@ export default function Home() {
       }
       const savedProfile = await response.json() as PlayerProfile;
       setProfile(savedProfile);
-      setSocialProfile((current) => current ? { ...current, profile_image_url: imageUrl } : current);
+      setSocialProfile((current) => current ? { ...current, profile_image_url: uploadTicket.image_url } : current);
       setToast("Profile photo updated");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not upload profile photo");
@@ -634,7 +676,7 @@ export default function Home() {
       if (!response.ok) throw new Error("Profile unavailable");
       const nextProfile = await response.json() as PlayerProfile;
       setProfile(nextProfile);
-      setProfileDraft({ area: nextProfile.area, latitude: nextProfile.latitude, longitude: nextProfile.longitude, travel_radius_km: nextProfile.travel_radius_km?.toString() ?? "10", style: nextProfile.style as ProfileDraft["style"], availability: nextProfile.availability ?? [] });
+      setProfileDraft({ area: nextProfile.area, age: nextProfile.age?.toString() ?? "", gender: nextProfile.gender ?? "", preferred_age_range: nextProfile.preferred_age_range ?? "any", preferred_genders: nextProfile.preferred_genders ?? [], latitude: nextProfile.latitude, longitude: nextProfile.longitude, travel_radius_km: nextProfile.travel_radius_km?.toString() ?? "10", style: nextProfile.style as ProfileDraft["style"], availability: nextProfile.availability ?? [] });
     } catch {
       setToast("Could not load your CourtMate profile");
     }
@@ -655,7 +697,7 @@ export default function Home() {
   async function signOutUser() {
     if (auth) await signOut(auth);
     setProfile(null);
-    setProfileDraft({ area: "Whitefield", travel_radius_km: "10", style: "casual", availability: [] });
+    setProfileDraft({ area: "Whitefield", age: "", gender: "", preferred_age_range: "any", preferred_genders: [], travel_radius_km: "10", style: "casual", availability: [] });
     setManagedGroupId(null);
     setWorkspaceGroup(null);
     setChatPosts([]);
@@ -671,6 +713,7 @@ export default function Home() {
     setPastGames([]);
     setNotifications([]);
     setNotificationsOpen(false);
+    setSettingsOpen(false);
     setSocialProfile(null);
     setViewedProfile(null);
   }
@@ -686,12 +729,21 @@ export default function Home() {
       setToast("Travel radius must be between 1 and 100 km");
       return;
     }
-    const body: { area: string; style: string; availability: string[]; travel_radius_km: number; latitude?: number; longitude?: number } = {
+    const age = profileDraft.age.trim() ? Number(profileDraft.age) : undefined;
+    if (age !== undefined && (!Number.isInteger(age) || age < 13 || age > 100)) {
+      setToast("Age must be between 13 and 100");
+      return;
+    }
+    const body: { area: string; style: string; availability: string[]; travel_radius_km: number; preferred_age_range: AgeRange; preferred_genders: Gender[]; age?: number; gender?: Gender; latitude?: number; longitude?: number } = {
       area: profileDraft.area.trim() || "Whitefield",
       style: profileDraft.style,
       availability: profileDraft.availability,
       travel_radius_km: travelRadius,
+      preferred_age_range: profileDraft.preferred_age_range,
+      preferred_genders: profileDraft.preferred_genders,
     };
+    if (age !== undefined) body.age = age;
+    if (profileDraft.gender) body.gender = profileDraft.gender;
     if (profileDraft.latitude != null && profileDraft.longitude != null) {
       body.latitude = profileDraft.latitude;
       body.longitude = profileDraft.longitude;
@@ -701,8 +753,9 @@ export default function Home() {
       if (!response.ok) throw new Error("Profile update failed");
       const updatedProfile = await response.json() as PlayerProfile;
       setProfile(updatedProfile);
-      setProfileDraft({ area: updatedProfile.area, latitude: updatedProfile.latitude, longitude: updatedProfile.longitude, travel_radius_km: updatedProfile.travel_radius_km?.toString() ?? "10", style: updatedProfile.style as ProfileDraft["style"], availability: updatedProfile.availability ?? [] });
+      setProfileDraft({ area: updatedProfile.area, age: updatedProfile.age?.toString() ?? "", gender: updatedProfile.gender ?? "", preferred_age_range: updatedProfile.preferred_age_range ?? "any", preferred_genders: updatedProfile.preferred_genders ?? [], latitude: updatedProfile.latitude, longitude: updatedProfile.longitude, travel_radius_km: updatedProfile.travel_radius_km?.toString() ?? "10", style: updatedProfile.style as ProfileDraft["style"], availability: updatedProfile.availability ?? [] });
       setToast("Profile preferences saved");
+      setSettingsOpen(false);
     } catch {
       setToast("Could not save your profile preferences");
     }
@@ -710,6 +763,10 @@ export default function Home() {
 
   function toggleAvailability(slot: string) {
     setProfileDraft((draft) => ({ ...draft, availability: draft.availability.includes(slot) ? draft.availability.filter((item) => item !== slot) : [...draft.availability, slot] }));
+  }
+
+  function togglePreferredGender(gender: Gender) {
+    setProfileDraft((draft) => ({ ...draft, preferred_genders: draft.preferred_genders.includes(gender) ? draft.preferred_genders.filter((item) => item !== gender) : [...draft.preferred_genders, gender] }));
   }
 
   function useCurrentLocation() {
@@ -1150,10 +1207,10 @@ export default function Home() {
   }
 
   function openSettings() {
-    setActiveTab("profile");
+    setSettingsOpen(true);
+    setNotificationsOpen(false);
     setViewedGroup(null);
     setViewedProfile(null);
-    window.setTimeout(() => document.getElementById("profile-preferences")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
   }
 
   function selectFeedDate(nextDate: Date) {
@@ -1180,10 +1237,10 @@ export default function Home() {
   });
 
   return (
-    <main className="shell">
+    <main className={`shell ${settingsOpen ? "settings-open" : ""}`}>
       <nav className="nav">
         <div className="brand" aria-label="CourtMate">CourtMate</div>
-        <div className="nav-right"><button className={`about-link ${activeTab === "about" ? "active" : ""}`} onClick={() => selectTab("about")}>About</button><span className="location-pill"><span className="dot" /> Whitefield, Bengaluru</span>{user ? <><button className={`settings-button ${activeTab === "profile" ? "active" : ""}`} type="button" onClick={openSettings} aria-label="Open preferences" title="Preferences"><SettingsIcon /></button><div className="notification-wrap">
+        <div className="nav-right"><button className={`about-link ${activeTab === "about" ? "active" : ""}`} onClick={() => selectTab("about")}>About</button><span className="location-pill"><span className="dot" /> Whitefield, Bengaluru</span>{user ? <><button className={`settings-button ${settingsOpen ? "active" : ""}`} type="button" onClick={openSettings} aria-label="Open preferences" title="Preferences"><SettingsIcon /></button><div className="notification-wrap">
           <button className={`notification-button ${notificationsOpen ? "active" : ""}`} type="button" onClick={() => { setNotificationsOpen((open) => !open); if (!notifications.length) void loadNotifications(); }} aria-label={`Notifications${unreadNotifications ? `, ${unreadNotifications} unread` : ""}`} title="Notifications"><BellIcon />{unreadNotifications > 0 && <span className="notification-count">{unreadNotifications > 9 ? "9+" : unreadNotifications}</span>}</button>
           {notificationsOpen && <div className="notification-popover" role="dialog" aria-label="Notifications">
             <div className="notification-popover-heading"><div><span className="kicker">COURTMATE ALERTS</span><strong>Your activity</strong></div><button type="button" className="notification-close" onClick={() => setNotificationsOpen(false)} aria-label="Close notifications">×</button></div>
@@ -1195,7 +1252,6 @@ export default function Home() {
         <button className={activeTab === "home" ? "active" : ""} onClick={() => selectTab("home")} title="Home">Home</button>
         <button className={activeTab === "games" ? "active" : ""} onClick={() => selectTab("games")} title="Your games">Games</button>
         <button className={activeTab === "tournaments" ? "active" : ""} onClick={() => selectTab("tournaments")} title="Tournaments">Tournaments</button>
-        <button className={activeTab === "profile" ? "active" : ""} onClick={() => selectTab("profile")}>Profile</button>
       </nav>
       {activeTab === "home" && <>
       <section className="home-feed-toolbar" aria-label="Game feed filters">
@@ -1258,6 +1314,7 @@ export default function Home() {
         {user && profile && <form id="profile-preferences" className="profile-form" onSubmit={saveProfile}><div className="profile-form-grid"><label><span>Locality label</span><input value={profileDraft.area} onChange={(event) => setProfileDraft({ ...profileDraft, area: event.target.value })} placeholder="e.g. Whitefield" /></label><label><span>Travel radius (km)</span><input type="number" min="1" max="100" step="1" value={profileDraft.travel_radius_km} onChange={(event) => setProfileDraft({ ...profileDraft, travel_radius_km: event.target.value })} placeholder="10" /></label><label className="location-field"><span>Map coordinates</span><button className="location-button" type="button" onClick={useCurrentLocation}>{profileDraft.latitude != null && profileDraft.longitude != null ? "Location saved" : "Use my current location"}<span>⌖</span></button></label></div><label><span>How do you like to play?</span><select value={profileDraft.style} onChange={(event) => setProfileDraft({ ...profileDraft, style: event.target.value as ProfileDraft["style"] })}><option value="casual">Casual and easy-going</option><option value="social">Social and chatty</option><option value="competitive">Competitive and focused</option></select></label><fieldset><legend>When are you usually available?</legend><div className="availability-grid">{availabilityOptions.map((slot) => <label className={`availability-option ${profileDraft.availability.includes(slot) ? "selected" : ""}`} key={slot}><input type="checkbox" checked={profileDraft.availability.includes(slot)} onChange={() => toggleAvailability(slot)} /><span>{slot}</span></label>)}</div></fieldset><div className="profile-form-actions"><button className="dark-button" type="submit">Save profile <span>→</span></button><button className="text-button" type="button" onClick={() => void signOutUser()}>Sign out</button></div></form>}
       </section>}
 
+      {settingsOpen && user && profile && <div className="settings-backdrop" onClick={() => setSettingsOpen(false)}><section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(event) => event.stopPropagation()}><div className="settings-header"><div><span className="kicker">PREFERENCES</span><h2 id="settings-title">Your play setup</h2></div><button className="close-button" type="button" onClick={() => setSettingsOpen(false)} aria-label="Close preferences">×</button></div><form className="settings-form" onSubmit={saveProfile}><div className="profile-form-grid"><label><span>Age</span><input type="number" min="13" max="100" step="1" value={profileDraft.age} onChange={(event) => setProfileDraft({ ...profileDraft, age: event.target.value })} placeholder="Optional" /></label><label><span>Gender</span><select value={profileDraft.gender} onChange={(event) => setProfileDraft({ ...profileDraft, gender: event.target.value as ProfileDraft["gender"] })}><option value="">Prefer not to say</option>{genderOptions.map((gender) => <option value={gender.value} key={gender.value}>{gender.label}</option>)}</select></label><label><span>Locality</span><input value={profileDraft.area} onChange={(event) => setProfileDraft({ ...profileDraft, area: event.target.value })} placeholder="e.g. Whitefield" /></label><label><span>Travel radius (km)</span><input type="number" min="1" max="100" step="1" value={profileDraft.travel_radius_km} onChange={(event) => setProfileDraft({ ...profileDraft, travel_radius_km: event.target.value })} placeholder="10" /></label><label className="location-field"><span>Map coordinates</span><button className="location-button" type="button" onClick={useCurrentLocation}>{profileDraft.latitude != null && profileDraft.longitude != null ? "Location saved" : "Use current location"}<span>⌖</span></button></label></div><fieldset className="settings-preference-fieldset"><legend>Who do you like to play with?</legend><label><span>Age range</span><select value={profileDraft.preferred_age_range} onChange={(event) => setProfileDraft({ ...profileDraft, preferred_age_range: event.target.value as AgeRange })}>{ageRangeOptions.map((range) => <option value={range.value} key={range.value}>{range.label}</option>)}</select></label><span className="settings-hint">Leave gender unselected to keep every group in the mix.</span><div className="gender-preference-grid">{genderOptions.map((gender) => <label className={`availability-option ${profileDraft.preferred_genders.includes(gender.value) ? "selected" : ""}`} key={gender.value}><input type="checkbox" checked={profileDraft.preferred_genders.includes(gender.value)} onChange={() => togglePreferredGender(gender.value)} /><span>{gender.label}</span></label>)}</div></fieldset><label><span>Play style</span><select value={profileDraft.style} onChange={(event) => setProfileDraft({ ...profileDraft, style: event.target.value as ProfileDraft["style"] })}><option value="casual">Casual and easy-going</option><option value="social">Social and chatty</option><option value="competitive">Competitive and focused</option></select></label><fieldset><legend>Usual availability</legend><div className="availability-grid">{availabilityOptions.map((slot) => <label className={`availability-option ${profileDraft.availability.includes(slot) ? "selected" : ""}`} key={slot}><input type="checkbox" checked={profileDraft.availability.includes(slot)} onChange={() => toggleAvailability(slot)} /><span>{slot}</span></label>)}</div></fieldset><div className="profile-form-actions"><button className="dark-button" type="submit">Save preferences <span>→</span></button></div></form></section></div>}
       {workspaceGroup && <div className="group-modal-backdrop" onClick={() => setWorkspaceGroup(null)}><section className="workspace-modal" onClick={(event) => event.stopPropagation()}><div className="group-modal-header"><div><span className="kicker">{sportLabel(workspaceGroup.sport).toUpperCase()} GROUP SPACE</span><h2>{workspaceGroup.group_name}</h2><p>{workspaceGroup.session_date} · {workspaceGroup.start_time}–{workspaceGroup.end_time} · {workspaceGroup.area}</p></div><button className="close-button" onClick={() => setWorkspaceGroup(null)}>×</button></div>{workspaceLoading ? <p className="page-loading">Loading group space...</p> : <div className="workspace-grid"><section className="workspace-panel chat-panel"><div className="workspace-panel-heading"><div><span className="kicker">LIVE POSTING CHAT</span><h3>Coordinate the session</h3></div><button className="workspace-refresh" onClick={() => void openGroupSpace(workspaceGroup)}>Refresh</button></div><div className="chat-feed">{chatPosts.length ? chatPosts.map((post) => <article className={`chat-post ${post.player_id === user?.uid ? "mine" : ""}`} key={post.id}><div className="chat-avatar">{post.player_display_name[0]}</div><div><strong>{post.player_display_name}</strong><p>{post.message}</p><small>{new Date(post.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</small></div></article>) : <p className="activity-empty">No posts yet. Start coordinating the game.</p>}</div><form className="chat-composer" onSubmit={postChat}><input value={chatDraft} onChange={(event) => setChatDraft(event.target.value)} maxLength={500} placeholder="Post an update to the group..." aria-label="Group chat message" /><button className="dark-button" type="submit" disabled={!chatDraft.trim()}>Post</button></form></section><section className="workspace-panel leaderboard-panel"><div className="workspace-panel-heading"><div><span className="kicker">{sportLabel(workspaceGroup.sport).toUpperCase()} LEADERBOARD</span><h3>Local legends in this group</h3></div></div><div className="leaderboard-list">{groupLeaderboard.length ? groupLeaderboard.map((entry) => <div className="leaderboard-row" key={entry.player.id}><span className="rank">{entry.rank}</span><div><strong>{entry.player.display_name}</strong><small>{entry.ratings_count ? `${entry.ratings_count} community rating(s)` : `${sportLabel(workspaceGroup.sport)} skill rating ${entry.score.toFixed(1)}`}</small></div><b>{entry.score.toFixed(1)}</b></div>) : <p className="activity-empty">Leaderboard scores appear after players have ratings.</p>}</div><div className="local-leaderboard"><span className="kicker">{workspaceGroup.area.toUpperCase()} · {sportLabel(workspaceGroup.sport).toUpperCase()} LEADERBOARD</span>{localLeaderboard.slice(0, 5).map((entry) => <div className="local-row" key={entry.player.id}><span>#{entry.rank}</span><strong>{entry.player.display_name}</strong><b>{entry.score.toFixed(1)}</b></div>)}</div></section><form className="workspace-panel legacy-feedback-panel" onSubmit={submitGroupFeedback}><div className="workspace-panel-heading"><div><span className="kicker">POST-GAME FEEDBACK</span><h3>Was this a fun, fair group?</h3></div></div><div className="feedback-fields"><label><span>Fun</span><select value={feedbackFun} onChange={(event) => setFeedbackFun(event.target.value)}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}/5</option>)}</select></label><label><span>Fairness</span><select value={feedbackFairness} onChange={(event) => setFeedbackFairness(event.target.value)}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}/5</option>)}</select></label></div><label className="return-check"><input type="checkbox" checked={feedbackWouldReturn} onChange={(event) => setFeedbackWouldReturn(event.target.checked)} /><span>Would you play with this group again?</span></label><fieldset className="player-rating-fields"><legend>Rate other players</legend>{groupMembers.filter((member) => member.id !== user?.uid).map((member) => <label key={member.id}><span>{member.display_name}</span><select value={playerRatings[member.id] ?? ""} onChange={(event) => setPlayerRatings({ ...playerRatings, [member.id]: event.target.value })}><option value="">Skip</option>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}/5</option>)}</select></label>)}</fieldset><button className="dark-button" type="submit">Save feedback <span>→</span></button></form></div>}{workspaceGroup.status === "completed" && <PostGameFeedbackPanel sessionId={workspaceGroup.id} members={groupMembers} currentUserId={user?.uid} apiUrl={apiUrl} authorizedFetch={authorizedFetch} activityProofs={activityProofs} onAnalyzeActivityProof={(file) => analyzeActivityScreenshot(file, workspaceGroup.id)} onSaved={() => void openGroupSpace(workspaceGroup)} onToast={setToast} />}</section></div>}
       {viewedGroup && <div className="group-modal-backdrop" onClick={() => setViewedGroup(null)}><section className="group-modal" onClick={(event) => event.stopPropagation()}><div className="group-modal-header"><div><span className="kicker">{sportLabel(viewedGroup.session.sport).toUpperCase()} GROUP PREVIEW</span><h2>{viewedGroup.session.group_name}</h2><p>{viewedGroup.session.start_time} – {viewedGroup.session.end_time} · {viewedGroup.session.area}</p></div><button className="close-button" onClick={() => setViewedGroup(null)}>×</button></div><div className="group-summary"><span><strong>{viewedGroup.members.length}/{viewedGroup.session.capacity}</strong><small>PLAYERS</small></span><span><strong>{viewedGroup.session.skill_min.toFixed(1)}–{viewedGroup.session.skill_max.toFixed(1)}</strong><small>SKILL BAND</small></span><span><strong>{viewedGroup.session.style}</strong><small>INTENSITY</small></span></div><div className="member-grid">{viewedGroup.members.map((member) => { const memberCmr = member.cmr_ratings?.[viewedGroup.session.sport]; const memberRating = memberCmr ?? member.sport_ratings?.[viewedGroup.session.sport] ?? (viewedGroup.session.sport === "pickleball" ? member.dupr_rating : undefined); return <button type="button" className="member-profile profile-link" key={member.id} onClick={() => void viewPlayerProfile(member.id)} disabled={profileLoadingId === member.id}><div className="member-profile-avatar">{member.display_name[0]}</div><div className="member-profile-copy"><h3>{member.display_name}</h3><p>{member.area} · {member.style}</p><div className="member-profile-meta"><strong>{memberCmr != null ? `CMR ${memberCmr.toFixed(1)} / 100` : memberRating ? `${sportLabel(viewedGroup.session.sport)} ${memberRating.toFixed(1)}` : "Rating not set"}</strong><span>{member.is_following ? "Following" : "View profile"}</span></div></div></button>; })}</div>{viewedGroup.session.organizer_id === user?.uid ? <span className="status-badge approved modal-join">You created this group</span> : <button className="dark-button modal-join" onClick={() => void joinSession(viewedGroup.session.id, viewedGroup.session.group_name, viewedGroup.session.organizer_id)}>Request to join <span>→</span></button>}</section></div>}
       {viewedProfile && <div className="group-modal-backdrop" onClick={() => setViewedProfile(null)}><section className="group-modal profile-modal" onClick={(event) => event.stopPropagation()}><div className="group-modal-header"><div className="profile-modal-heading"><div className="profile-modal-avatar">{viewedProfile.profile_image_url ? <img src={viewedProfile.profile_image_url} alt="" /> : viewedProfile.display_name[0]}</div><div><span className="kicker">PLAYER PROFILE</span><h2>{viewedProfile.display_name}</h2><p>{viewedProfile.area} · {viewedProfile.style}</p></div></div><button className="close-button" onClick={() => setViewedProfile(null)} aria-label="Close profile">×</button></div><div className="social-profile-stats"><span><strong>{viewedProfile.followers_count}</strong><small>FOLLOWERS</small></span><span><strong>{viewedProfile.following_count}</strong><small>FOLLOWING</small></span><span><strong>{Math.round(viewedProfile.reliability * 100)}%</strong><small>RELIABILITY</small></span></div><div className="profile-activity-grid"><section className="profile-activity-card"><div className="profile-activity-heading"><div><span className="kicker">ACTIVITY</span><h2>Show up streak</h2></div><span>Last 12 weeks</span></div><ActivityHeatmap activity={viewedProfile.activity_by_date} /></section><section className="profile-activity-card"><div className="profile-activity-heading"><div><span className="kicker">RECENT GAMES</span><h2>Where they played</h2></div><span>{viewedProfile.recent_games.length} shown</span></div><RecentGames games={viewedProfile.recent_games} /></section></div><div className="profile-sport-ratings"><span className="kicker">SPORT RATINGS</span>{Object.entries(viewedProfile.cmr_ratings ?? {}).length ? <div className="profile-rating-list">{Object.entries(viewedProfile.cmr_ratings ?? {}).map(([sport, rating]) => <span key={sport}><strong>{sportLabel(sport)}</strong><b>{rating.toFixed(1)} / 100</b></span>)}</div> : <p>No CMR ratings yet. Play a completed game to build one.</p>}</div>{viewedProfile.id === user?.uid ? <span className="status-badge approved modal-join">This is your profile</span> : <div className="profile-modal-actions"><button className={`dark-button ${viewedProfile.is_following ? "following-button" : ""}`} onClick={() => void toggleFollowProfile()}>{viewedProfile.is_following ? "Following" : "Follow"}<span>{viewedProfile.is_following ? "✓" : "+"}</span></button>{viewedProfile.follows_you && <span className="follows-you">Follows you</span>}</div>}</section></div>}

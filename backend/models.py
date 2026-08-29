@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field
 Sport = Literal["pickleball", "badminton", "tennis", "padel", "squash", "table_tennis"]
 RatingSource = Literal["dupr", "organizer_confirmed", "synthetic", "self_reported", "unrated"]
 SkillLevel = Literal["beginner", "intermediate", "advanced"]
+Gender = Literal["woman", "man", "non_binary", "prefer_not_to_say"]
+AgeRange = Literal["any", "18_24", "25_34", "35_44", "45_plus"]
 
 
 class CMRHistoryPoint(BaseModel):
@@ -36,6 +38,10 @@ class Player(BaseModel):
     display_name: str
     profile_image_url: str | None = None
     area: str
+    age: int | None = Field(default=None, ge=13, le=100)
+    gender: Gender | None = None
+    preferred_age_range: AgeRange = "any"
+    preferred_genders: list[Gender] = Field(default_factory=list)
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     travel_radius_km: float = Field(default=10.0, ge=1, le=100)
@@ -156,6 +162,10 @@ class PublicPlayerProfilesResponse(BaseModel):
 
 class ProfileUpdateRequest(BaseModel):
     area: str | None = None
+    age: int | None = Field(default=None, ge=13, le=100)
+    gender: Gender | None = None
+    preferred_age_range: AgeRange | None = None
+    preferred_genders: list[Gender] | None = None
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     travel_radius_km: float | None = Field(default=None, ge=1, le=100)
@@ -170,6 +180,17 @@ class ProfileUpdateRequest(BaseModel):
 
 class ProfileImageUpdateRequest(BaseModel):
     profile_image_url: str = Field(min_length=1, max_length=2048)
+
+
+class ProfileImageUploadRequest(BaseModel):
+    content_type: Literal["image/jpeg", "image/png", "image/webp"]
+
+
+class ProfileImageUploadResponse(BaseModel):
+    upload_url: str
+    image_url: str
+    object_name: str
+    expires_in: int
 
 
 class Session(BaseModel):

@@ -62,6 +62,31 @@ def _profile_availability_fit(session: Session, player: Player | None) -> float:
     return 1.0 if f"{day_type} {day_part}" in player.availability else 0.25
 
 
+_AGE_RANGE_BOUNDS = {
+    "18_24": (18, 24),
+    "25_34": (25, 34),
+    "35_44": (35, 44),
+    "45_plus": (45, 100),
+}
+
+
+def preference_fit(player: Player | None, members: list[Player]) -> float:
+    """Score a group's fit with the player's optional age and gender preferences."""
+    if not player:
+        return 0.7
+    signals: list[float] = []
+    if player.preferred_age_range != "any":
+        minimum, maximum = _AGE_RANGE_BOUNDS[player.preferred_age_range]
+        ages = [member.age for member in members if member.age is not None]
+        if ages:
+            signals.append(sum(minimum <= age <= maximum for age in ages) / len(ages))
+    if player.preferred_genders:
+        genders = [member.gender for member in members if member.gender is not None]
+        if genders:
+            signals.append(sum(gender in player.preferred_genders for gender in genders) / len(genders))
+    return round(sum(signals) / len(signals), 3) if signals else 0.7
+
+
 def search_sessions(sessions: list[Session], query: SearchIntent, players: list[Player] | None = None, player: Player | None = None, exact: bool = False) -> list[SessionRecommendation]:
     results: list[SessionRecommendation] = []
     for session in sessions:
@@ -99,7 +124,8 @@ def search_sessions(sessions: list[Session], query: SearchIntent, players: list[
             member_reliability = round(sum(member.reliability for member in members) / len(members), 3) if members else 0.0
             if player:
                 familiarity = 1.0 if any(player.id in member.friends for member in members) else 0.0
-        score = .35 * skill_fit + .25 * time_fit + .2 * area_fit + .1 * style_fit + .1 * member_reliability
+        demographic_fit = preference_fit(player, members if players else [])
+        score = .30 * skill_fit + .22 * time_fit + .18 * area_fit + .1 * style_fit + .1 * member_reliability + .1 * demographic_fit
         rating_label = "DUPR" if query.sport == "pickleball" else "skill rating"
         location_message = f"about {distance:.1f} km away" if distance is not None else f"in {session.area}"
         reasons = RecommendationReason(skill_fit=skill_fit, availability_fit=time_fit, area_fit=area_fit, style_fit=style_fit, reliability=member_reliability, familiarity=familiarity, distance_km=round(distance, 1) if distance is not None else None, explanation=f"{session.group_name} is {location_message} and matches your requested time and {rating_label} band with {session.open_slots} open slot(s).")
@@ -121,7 +147,9 @@ def suggest_replacements(session: Session, players: list[Player]) -> list[Player
         else:
             area_fit = _area_fit(session.area, player.area)
         style_fit = 1.0 if player.style == session.style else 0.55
-        score = .5 * skill_fit + .2 * area_fit + .2 * player.reliability + .1 * style_fit
+        members = [candidate for candidate in players if candidate.id in session.confirmed_player_ids]
+        demographic_fit = preference_fit(player, members)
+        score = .45 * skill_fit + .18 * area_fit + .17 * player.reliability + .1 * style_fit + .1 * demographic_fit
         rating_label = f"{session.sport.replace('_', ' ').title()} {player_rating:.1f}" if player_rating else "unrated / provisional"
         candidates.append(PlayerRecommendation(player=player, score=round(score, 3), explanation=f"{rating_label}; {player.area}; {int(player.reliability * 100)}% attendance reliability; {player.style} style."))
     return sorted(candidates, key=lambda item: item.score, reverse=True)

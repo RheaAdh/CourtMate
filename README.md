@@ -154,7 +154,7 @@ python3 -m unittest discover -s tests -v
 - Deploy one Cloud Run service in `us-central1` with scale-to-zero and a maximum of one instance for the MVP.
 - Keep Firestore reads bounded with `COURTMATE_MAX_SESSION_READS` and `COURTMATE_MAX_PLAYER_READS`.
 - Use the Gemini API key server-side only; do not expose it in the frontend.
-- Do not enable Pub/Sub, BigQuery, Cloud Storage, or other paid services for the MVP.
+- Keep Pub/Sub and BigQuery optional for the MVP; Cloud Storage is required only for profile pictures.
 
 Example Cloud Run deployment profile:
 
@@ -166,11 +166,29 @@ gcloud run deploy courtmate-api \
   --max 1 \
   --memory 512Mi \
   --cpu 1 \
-  --set-env-vars COURTMATE_DATASTORE=firestore,GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID,GOOGLE_MAPS_API_KEY=YOUR_MAPS_KEY,COURTMATE_MAX_SESSION_READS=100,COURTMATE_MAX_PLAYER_READS=500
+  --set-env-vars COURTMATE_DATASTORE=firestore,GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID,COURTMATE_PROFILE_BUCKET=profile-pictures,COURTMATE_SIGNING_SERVICE_ACCOUNT=YOUR_CLOUD_RUN_SERVICE_ACCOUNT,GOOGLE_MAPS_API_KEY=YOUR_MAPS_KEY,COURTMATE_MAX_SESSION_READS=100,COURTMATE_MAX_PLAYER_READS=500
 ```
 
 The pasted Google Cloud free-tier limits are usage limits, not a spend cap. Set a billing budget alert in Cloud Billing and monitor Firestore reads/writes and Cloud Run requests.
 
-Profile photos use Firebase Storage, backed by Google Cloud Storage. Images are uploaded to `profile-images/{firebase_uid}` from the signed-in browser, while the corresponding download URL is saved on the Firestore player document through `POST /v1/me/profile-image`. No service-account key is needed in the frontend or in Cloud Run. The MVP accepts JPG, PNG, and WebP images up to 5 MB.
+Profile photos use signed Google Cloud Storage uploads. The API creates a short-lived PUT URL for `gs://profile-pictures/profiles/{firebase_uid}/...`, the browser uploads directly to the bucket, and the resulting object URL is saved on the Firestore player document through `POST /v1/me/profile-image`. No service-account key is needed in the frontend. Cloud Run needs permission to create objects and sign URLs; set `COURTMATE_PROFILE_BUCKET=profile-pictures` and `COURTMATE_SIGNING_SERVICE_ACCOUNT` to the Cloud Run service account email. The MVP accepts JPG, PNG, and WebP images up to 5 MB.
+
+Configure the profile bucket once (the bucket name must be globally available):
+
+```bash
+gcloud storage buckets create gs://profile-pictures --project=mttn-portal --location=us-central1
+gcloud storage buckets update gs://profile-pictures --cors-file=gcs-profile-pictures-cors.json
+gcloud storage buckets add-iam-policy-binding gs://profile-pictures \
+  --member=allUsers \
+  --role=roles/storage.objectViewer
+gcloud storage buckets add-iam-policy-binding gs://profile-pictures \
+  --member=serviceAccount:YOUR_CLOUD_RUN_SERVICE_ACCOUNT \
+  --role=roles/storage.objectCreator
+gcloud iam service-accounts add-iam-policy-binding YOUR_CLOUD_RUN_SERVICE_ACCOUNT \
+  --member=serviceAccount:YOUR_CLOUD_RUN_SERVICE_ACCOUNT \
+  --role=roles/iam.serviceAccountTokenCreator
+```
+
+The profile object URL is intentionally stable and is meant to be readable by the app. If the bucket is not publicly readable, add an authenticated image proxy before production; the signed URL in this MVP protects the upload operation, not long-term object reads.
 
 If the traceback shows `/opt/homebrew/anaconda3/site-packages`, Uvicorn was started outside the project environment. Activate `.venv` first or run it explicitly with `.venv/bin/python -m uvicorn`.

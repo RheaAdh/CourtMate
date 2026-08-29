@@ -56,12 +56,14 @@ def make_history(player_id: str, ratings: dict[str, float], games: int) -> dict[
     return history
 
 
-def make_player(player_id: str, name: str, area: str, ratings: dict[str, float], style: str, reliability: float, history_games: int = 4, avatar_number: int | None = None) -> Player:
+def make_player(player_id: str, name: str, area: str, ratings: dict[str, float], style: str, reliability: float, history_games: int = 4, avatar_number: int | None = None, age: int | None = None, gender: str | None = None) -> Player:
     return Player(
         id=player_id,
         display_name=name,
         profile_image_url=f"https://i.pravatar.cc/160?img={avatar_number}" if avatar_number else None,
         area=area,
+        age=age,
+        gender=gender,
         latitude=COORDINATES[area][0],
         longitude=COORDINATES[area][1],
         travel_radius_km=12,
@@ -220,15 +222,15 @@ def seed() -> None:
     now = datetime.now(timezone.utc)
 
     players = [
-        make_player(rhea_id, "Rhea Adhikari", "Whitefield", {"pickleball": 3.9, "tennis": 4.3, "badminton": 3.6, "padel": 3.2}, "casual", 0.95, history_games=8, avatar_number=47),
-        make_player("demo-organizer-wf", "Demo Ananya", "Whitefield", {"pickleball": 3.4, "tennis": 3.8}, "casual", 0.96, avatar_number=44),
-        make_player("demo-kavya", "Demo Kavya", "Whitefield", {"pickleball": 3.2, "tennis": 3.5}, "casual", 0.91, avatar_number=45),
-        make_player("demo-rohit", "Demo Rohit", "Brookefield", {"pickleball": 3.5, "badminton": 4.1}, "social", 0.88, avatar_number=12),
-        make_player("demo-meera", "Demo Meera", "Varthur", {"pickleball": 3.8, "tennis": 4.2}, "competitive", 0.94, avatar_number=32),
-        make_player("demo-sana", "Demo Sana", "Whitefield", {"pickleball": 2.9, "badminton": 3.6}, "social", 0.86, avatar_number=25),
-        make_player("demo-vikram", "Demo Vikram", "Marathahalli", {"pickleball": 4.4, "tennis": 4.6}, "competitive", 0.90, avatar_number=13),
-        make_player("demo-pooja", "Demo Pooja", "Whitefield", {"pickleball": 2.5, "badminton": 2.8}, "casual", 0.82, avatar_number=5),
-        make_player("demo-neil", "Demo Neil", "Brookefield", {"tennis": 3.2, "padel": 3.0}, "social", 0.84, avatar_number=11),
+        make_player(rhea_id, "Rhea Adhikari", "Whitefield", {"pickleball": 3.9, "tennis": 4.3, "badminton": 3.6, "padel": 3.2}, "casual", 0.95, history_games=8, avatar_number=47, age=29, gender="woman"),
+        make_player("demo-organizer-wf", "Demo Ananya", "Whitefield", {"pickleball": 3.4, "tennis": 3.8}, "casual", 0.96, avatar_number=44, age=31, gender="woman"),
+        make_player("demo-kavya", "Demo Kavya", "Whitefield", {"pickleball": 3.2, "tennis": 3.5}, "casual", 0.91, avatar_number=45, age=27, gender="woman"),
+        make_player("demo-rohit", "Demo Rohit", "Brookefield", {"pickleball": 3.5, "badminton": 4.1}, "social", 0.88, avatar_number=12, age=34, gender="man"),
+        make_player("demo-meera", "Demo Meera", "Varthur", {"pickleball": 3.8, "tennis": 4.2}, "competitive", 0.94, avatar_number=32, age=30, gender="woman"),
+        make_player("demo-sana", "Demo Sana", "Whitefield", {"pickleball": 2.9, "badminton": 3.6}, "social", 0.86, avatar_number=25, age=24, gender="woman"),
+        make_player("demo-vikram", "Demo Vikram", "Marathahalli", {"pickleball": 4.4, "tennis": 4.6}, "competitive", 0.90, avatar_number=13, age=38, gender="man"),
+        make_player("demo-pooja", "Demo Pooja", "Whitefield", {"pickleball": 2.5, "badminton": 2.8}, "casual", 0.82, avatar_number=5, age=42, gender="woman"),
+        make_player("demo-neil", "Demo Neil", "Brookefield", {"tennis": 3.2, "padel": 3.0}, "social", 0.84, avatar_number=11, age=46, gender="man"),
     ]
     for player in players:
         repository.save_player(player)
@@ -257,7 +259,7 @@ def seed() -> None:
 
     requests = [
         JoinRequest(id="demo-pb-sat-evening:demo-rohit", session_id="demo-pb-sat-evening", player_id="demo-rohit", player_display_name="Demo Rohit", status="pending", created_at=now - timedelta(hours=2)),
-        JoinRequest(id="demo-pb-sat-evening:demo-pooja", session_id="demo-pb-sat-evening", player_id="demo-pooja", player_display_name="Demo Pooja", status="waitlisted", created_at=now - timedelta(hours=5)),
+        JoinRequest(id="demo-pb-sat-evening:demo-pooja:waitlist", session_id="demo-pb-sat-evening", player_id="demo-pooja", player_display_name="Demo Pooja", status="waitlisted", created_at=now - timedelta(hours=5)),
         JoinRequest(id="demo-pb-sun-morning:demo-kavya", session_id="demo-pb-sun-morning", player_id="demo-kavya", player_display_name="Demo Kavya", status="approved", created_at=now - timedelta(days=1)),
         JoinRequest(id="demo-tennis-evening:demo-meera", session_id="demo-tennis-evening", player_id="demo-meera", player_display_name="Demo Meera", status="pending", created_at=now - timedelta(hours=1)),
         JoinRequest(id=f"demo-pb-sun-competitive:{rhea_id}", session_id="demo-pb-sun-competitive", player_id=rhea_id, player_display_name="Rhea Adhikari", status="approved", created_at=now - timedelta(days=2)),

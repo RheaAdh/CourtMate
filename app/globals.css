@@ -1102,3 +1102,303 @@ body::before { border-color: rgba(117, 140, 31, .18); }
   .tournament-hero { padding: 18px; }
   .tournament-hero h1 { font-size: 28px; }
 }
+
+.settings-backdrop {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(16, 27, 24, .52);
+  backdrop-filter: blur(8px);
+}
+
+.settings-modal {
+  width: min(560px, 100%);
+  max-height: min(760px, calc(100vh - 40px));
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid rgba(255, 255, 255, .55);
+  border-radius: 22px;
+  background: var(--paper);
+  box-shadow: 0 30px 90px rgba(16, 27, 24, .28);
+}
+
+.settings-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.settings-header h2 {
+  margin: 7px 0 0;
+  font-size: 28px;
+  letter-spacing: -.06em;
+}
+
+.settings-form {
+  padding-top: 2px;
+}
+
+.settings-form .profile-form-grid {
+  grid-template-columns: 1fr 1fr;
+}
+
+.settings-form .profile-form-actions {
+  margin-top: 4px;
+}
+
+@media (max-width: 600px) {
+  .settings-backdrop {
+    align-items: end;
+    padding: 10px;
+  }
+
+  .settings-modal {
+    width: 100%;
+    max-height: calc(100vh - 20px);
+    padding: 18px;
+    border-radius: 18px 18px 0 0;
+  }
+
+  .settings-header h2 {
+    font-size: 23px;
+  }
+
+  .settings-form .profile-form-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .settings-form .profile-form-actions .dark-button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 600px) {
+  .app-tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* Use quiet separators for content-heavy lists instead of stacking cards. */
+.session-list,
+.game-list {
+  gap: 0;
+}
+
+.session-card,
+.session-card.featured,
+.game-row {
+  margin-bottom: 0;
+  padding: 19px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.session-card::before,
+.tournament-card::before {
+  display: none;
+}
+
+.session-card:hover,
+.game-row:hover {
+  border-color: var(--line);
+  background: rgba(255, 255, 255, .22);
+  box-shadow: none;
+}
+
+.page-empty {
+  padding: 25px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+
+.profile-photo-card,
+.profile-insights,
+.profile-sport-overview,
+.profile-form,
+.profile-activity-card,
+.about-grid article,
+.tournament-card,
+.tournament-panel,
+.tournament-create-card,
+.tournament-detail-header,
+.tournament-waiting {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.profile-photo-card {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.profile-insights {
+  padding: 22px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.profile-sport-overview {
+  padding: 22px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.profile-sport-overview-grid {
+  gap: 0;
+}
+
+.profile-sport-stat,
+.cmr-sport-card {
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.profile-sport-stat:hover,
+.profile-sport-stat.selected,
+.cmr-sport-card:hover,
+.cmr-sport-card.selected {
+  background: rgba(216, 245, 107, .16);
+  box-shadow: none;
+  transform: none;
+}
+
+.profile-form {
+  margin-top: 0;
+  padding: 22px 0 0;
+}
+
+.profile-activity-grid {
+  gap: 0;
+}
+
+.profile-activity-card {
+  padding: 18px 0;
+  border-top: 1px solid var(--line);
+}
+
+.about-grid {
+  gap: 0;
+}
+
+.about-grid article {
+  min-height: 0;
+  padding: 21px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.tournament-list {
+  gap: 0;
+}
+
+.tournament-card {
+  border-bottom: 1px solid var(--line);
+  box-shadow: none;
+}
+
+.tournament-stat-row span {
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+@media (max-width: 600px) {
+  .session-card,
+  .session-card.featured,
+  .game-row {
+    padding: 16px 0;
+  }
+
+  .profile-insights,
+  .profile-sport-overview {
+    padding: 18px 0;
+  }
+
+  .about-grid article {
+    padding: 17px 0;
+  }
+}
+
+/* Preferences live in Settings; keep the Profile screen focused on identity and stats. */
+.profile-page > #profile-preferences {
+  display: none;
+}
+
+.settings-form label,
+.settings-form fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 18px;
+}
+
+.settings-form label > span,
+.settings-form legend {
+  color: #647269;
+  font: 10px 'DM Mono';
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.settings-form input,
+.settings-form select {
+  width: 100%;
+  border: 1px solid #d2ddd0;
+  border-radius: 8px;
+  background: #fbfcf7;
+  color: var(--ink);
+  outline: 0;
+  padding: 12px;
+  font-size: 13px;
+}
+
+.settings-form input:focus,
+.settings-form select:focus {
+  border-color: #a9c42b;
+  box-shadow: 0 0 0 3px rgba(169, 196, 43, .15);
+}
+
+.settings-form fieldset {
+  border: 0;
+  padding: 0;
+}
+
+.settings-preference-fieldset {
+  padding-top: 16px !important;
+  border-top: 1px solid var(--line) !important;
+}
+
+.settings-hint {
+  display: block;
+  margin: -8px 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.gender-preference-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+@media (max-width: 600px) {
+  .gender-preference-grid {
+    grid-template-columns: 1fr;
+  }
+}
