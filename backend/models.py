@@ -308,6 +308,13 @@ class TournamentScoreRequest(BaseModel):
     confirm: bool = False
 
 
+class TournamentFixtureUpdateRequest(BaseModel):
+    round_number: int = Field(ge=1)
+    match_number: int = Field(ge=1)
+    player_a_id: str = Field(min_length=1, max_length=120)
+    player_b_id: str = Field(min_length=1, max_length=120)
+
+
 class RecommendationReason(BaseModel):
     skill_fit: float
     availability_fit: float

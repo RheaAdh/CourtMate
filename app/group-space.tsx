@@ -98,6 +98,10 @@ function memberNames(ids: string[], members: GroupSpaceMember[]) {
   return ids.map((id) => members.find((member) => member.id === id)?.display_name ?? "Player").join(" + ");
 }
 
+function MicrophoneIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="12" rx="4" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" /></svg>;
+}
+
 export function GroupSpace({ group, members, waitlist, posts, leaderboard, localLeaderboard, currentUserId, apiUrl, authorizedFetch, onClose, onRefresh, onToast, activityProofs = [], onAnalyzeActivityProof }: GroupSpaceProps) {
   const [draft, setDraft] = useState("");
   const [listening, setListening] = useState(false);
@@ -169,12 +173,12 @@ export function GroupSpace({ group, members, waitlist, posts, leaderboard, local
   return <div className="group-space-v2-backdrop" onClick={onClose}>
     <section className="group-space-v2" onClick={(event) => event.stopPropagation()} aria-label={`${group.group_name} group space`}>
       <header className="group-space-v2-header">
-        <div><span className="kicker">{group.sport.replaceAll("_", " ").toUpperCase()} GROUP SPACE</span><h2>{group.group_name}</h2><p>{group.session_date} · {group.start_time}–{group.end_time} · {group.area}</p></div>
+        <div><span className="kicker">PRIVATE {group.sport.replaceAll("_", " ").toUpperCase()} GROUP</span><h2>{group.group_name}</h2><p>{group.session_date} · {group.start_time}–{group.end_time} · {group.area}</p></div>
         <button className="close-button" type="button" onClick={onClose} aria-label="Close group space">×</button>
       </header>
       <div className="group-space-v2-grid">
         <section className="group-space-v2-chat">
-          <div className="group-space-v2-heading"><div><span className="kicker">LIVE CHAT</span><h3>Coordinate the game</h3></div><button className="workspace-refresh" type="button" onClick={onRefresh}>Refresh</button></div>
+          <div className="group-space-v2-heading"><div><span className="kicker">PRIVATE CHAT</span><h3>Plan it together</h3><p className="group-space-v2-subtitle">Venue, time, payments, scores, and feedback.</p></div><button className="workspace-refresh" type="button" onClick={onRefresh}>Refresh</button></div>
           <div className="group-space-v2-feed">
             {posts.length ? posts.map((post) => {
               const resultPlayers = post.teams?.flatMap((team) => team.player_ids) ?? [];
@@ -190,11 +194,11 @@ export function GroupSpace({ group, members, waitlist, posts, leaderboard, local
             }) : <p className="activity-empty">No posts yet. Coordinate the session here.</p>}
           </div>
           <form className="chat-composer group-space-v2-composer" onSubmit={postChat}>
-            <input value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={500} placeholder="Post an update or match score" aria-label="Group chat message" />
-            <button className={`chat-voice-button ${listening ? "listening" : ""}`} type="button" onClick={startVoice} aria-label={listening ? "Listening" : "Dictate a group update"} title="Dictate a group update"><span>◉</span></button>
+            <input value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={500} placeholder="Message the group" aria-label="Private group chat message" />
+            <button className={`chat-voice-button ${listening ? "listening" : ""}`} type="button" onClick={startVoice} aria-label={listening ? "Listening" : "Use voice to message the group"} title={listening ? "Listening" : "Use voice to message the group"}><MicrophoneIcon /></button>
             <button className="dark-button" type="submit" disabled={!draft.trim() || posting}>{posting ? "..." : "Post"}</button>
           </form>
-          <p className="group-space-v2-hint">Try: “Rhea and Ananya beat Kavya and Meera 11-8”. Everyone in the result can agree before CMR updates.</p>
+          <p className="group-space-v2-hint">Say the venue, time, payment split, score, or feedback. Example: "Ananya and Kavya beat Rohit and Sana 11-8".</p>
         </section>
         <section className="workspace-panel group-waitlist-panel"><div className="workspace-panel-heading"><div><span className="kicker">THE LINE-UP</span><h3>Playing now</h3></div><span>{members.length} confirmed</span></div><div className="group-roster-list">{members.map((member) => <div className="group-roster-row" key={member.id}><span className="chat-avatar">{initials(member.display_name)}</span><strong>{member.display_name}</strong><b>{member.cmr_ratings?.[group.sport]?.toFixed(1) ?? "-"}</b></div>)}</div><div className="group-waitlist-heading"><span className="kicker">NEXT UP</span><strong>Waitlist · {waitlist.length}</strong></div>{waitlist.length ? <div className="group-waitlist-list">{waitlist.map((member, index) => <div className="group-waitlist-row" key={member.id}><span>#{index + 1}</span><div><strong>{member.display_name}</strong><small>{member.area} · {member.style}</small></div><b>{member.cmr_ratings?.[group.sport]?.toFixed(1) ?? "-"}</b></div>)}</div> : <p className="activity-empty">No one is waiting. A player who backs out will release the next spot here.</p>}</section>
         <section className="workspace-panel leaderboard-panel"><div className="workspace-panel-heading"><div><span className="kicker">{group.sport.replaceAll("_", " ").toUpperCase()} LEADERBOARD</span><h3>Group rankings</h3></div></div>{leaderboard.length ? <div className="leaderboard-list">{leaderboard.map((entry) => <div className="leaderboard-row" key={entry.player.id}><span className="rank">{entry.rank}</span><div><strong>{entry.player.display_name}</strong><small>{entry.ratings_count} rated game{entry.ratings_count === 1 ? "" : "s"}</small></div><b>{entry.score.toFixed(1)}</b></div>)}</div> : <p className="activity-empty">Confirmed results will build this leaderboard.</p>}<div className="local-leaderboard"><span className="kicker">{group.area.toUpperCase()} · LOCAL</span>{localLeaderboard.slice(0, 5).map((entry) => <div className="local-row" key={entry.player.id}><span>#{entry.rank}</span><strong>{entry.player.display_name}</strong><b>{entry.score.toFixed(1)}</b></div>)}</div></section>

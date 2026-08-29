@@ -632,6 +632,42 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(winner["wins"], 1)
         self.assertEqual(winner["table_points"], 3)
 
+    def test_tournament_organizer_can_edit_fixture_pairing(self):
+        created = self.client.post(
+            "/v1/tournaments",
+            json={
+                "name": "Local Fixture Test",
+                "sport": "badminton",
+                "area": "Whitefield",
+                "tournament_date": str(date.today() + timedelta(days=7)),
+                "capacity": 4,
+                "format": "round_robin",
+            },
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        tournament_id = created.json()["tournament"]["id"]
+        for player_id in ("p2", "p3"):
+            self.client.post(f"/v1/tournaments/{tournament_id}/register", headers={"X-CourtMate-Player-ID": player_id})
+        fixtures = self.client.post(f"/v1/tournaments/{tournament_id}/fixtures", headers={"X-CourtMate-Player-ID": "p1"})
+        match = fixtures.json()["matches"][0]
+
+        denied = self.client.put(
+            f"/v1/tournaments/{tournament_id}/matches/{match['id']}",
+            json={"round_number": 4, "match_number": 1, "player_a_id": "p1", "player_b_id": "p2"},
+            headers={"X-CourtMate-Player-ID": "p2"},
+        )
+        self.assertEqual(denied.status_code, 403)
+
+        updated = self.client.put(
+            f"/v1/tournaments/{tournament_id}/matches/{match['id']}",
+            json={"round_number": 4, "match_number": 1, "player_a_id": "p1", "player_b_id": "p2"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["round_number"], 4)
+        self.assertEqual(updated.json()["player_a_id"], "p1")
+        self.assertEqual(updated.json()["status"], "scheduled")
+
 
 if __name__ == "__main__":
     unittest.main()

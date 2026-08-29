@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialPost, SocialPostCreateRequest, SocialPostView, Sport, Tournament, TournamentDetailsResponse, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialPost, SocialPostCreateRequest, SocialPostView, Sport, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
 from .tournaments import calculate_standings, generate_round_robin_matches, rules_for_sport, validate_score
 
@@ -1091,6 +1091,44 @@ def enter_tournament_score(tournament_id: str, match_id: str, request: Tournamen
     if all(item.status == "completed" for item in repository.list_tournament_matches(tournament.id)):
         tournament.status = "completed"
         repository.save_tournament(tournament)
+    return saved_match
+
+
+@app.put("/v1/tournaments/{tournament_id}/matches/{match_id}", response_model=TournamentMatch)
+def update_tournament_fixture(tournament_id: str, match_id: str, request: TournamentFixtureUpdateRequest, player: Player = Depends(get_current_player)) -> TournamentMatch:
+    tournament = repository.get_tournament(tournament_id)
+    match = repository.get_tournament_match(match_id)
+    if not tournament or not match or match.tournament_id != tournament_id:
+        raise HTTPException(status_code=404, detail="Tournament match not found")
+    if tournament.organizer_id != player.id:
+        raise HTTPException(status_code=403, detail="Only the organizer can edit fixtures")
+    if request.player_a_id == request.player_b_id:
+        raise HTTPException(status_code=422, detail="A fixture needs two different players")
+    registrations = repository.list_tournament_registrations(tournament.id)
+    registered_ids = {registration.player_id for registration in registrations if registration.status == "registered"}
+    if request.player_a_id not in registered_ids or request.player_b_id not in registered_ids:
+        raise HTTPException(status_code=422, detail="Both fixture players must be registered")
+    for other in repository.list_tournament_matches(tournament.id):
+        if other.id == match.id:
+            continue
+        if other.round_number == request.round_number and {other.player_a_id, other.player_b_id} & {request.player_a_id, request.player_b_id}:
+            raise HTTPException(status_code=409, detail="A player can only appear once in a round")
+        if other.round_number == request.round_number and other.match_number == request.match_number:
+            raise HTTPException(status_code=409, detail="That match slot is already used in this round")
+    pairing_or_round_changed = (
+        match.round_number != request.round_number
+        or {match.player_a_id, match.player_b_id} != {request.player_a_id, request.player_b_id}
+    )
+    updated = match.model_copy(update={
+        "round_number": request.round_number,
+        "match_number": request.match_number,
+        "player_a_id": request.player_a_id,
+        "player_b_id": request.player_b_id,
+        **({"status": "scheduled", "score_a": None, "score_b": None, "winner_id": None, "score_entered_by": None, "confirmed_by": None} if pairing_or_round_changed else {}),
+    })
+    saved_match = repository.save_tournament_match(updated)
+    if pairing_or_round_changed and tournament.status == "completed":
+        repository.save_tournament(tournament.model_copy(update={"status": "in_progress"}))
     return saved_match
 
 
