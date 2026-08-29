@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import date
+from datetime import date, timedelta
 import logging
 
 from .models import ActivityProofAnalysis, Player, SearchDecision, SearchIntent, Session, SessionRecommendation, Sport, rating_for_sport
@@ -23,7 +23,16 @@ class GeminiIntentParser:
     )
     _DISCOVERY_ACTIONS = (
         "find", "search", "join", "invite", "organize", "organise", "create",
-        "available", "availability", "reserve",
+        "available", "availability", "reserve", "book", "show", "get",
+    )
+    _TIME_TERMS = (
+        "today", "tomorrow", "tonight", "morning", "afternoon", "evening", "weekend",
+        "weekday", "saturday", "sunday", "monday", "tuesday", "wednesday", "thursday",
+        "friday", "next week", "after work",
+    )
+    _NON_COURT_TERMS = (
+        "weather", "recipe", "restaurant", "movie", "news", "stock price", "politics",
+        "capital of", "python", "javascript", "code", "translate", "joke", "flight",
     )
 
     def __init__(self) -> None:
@@ -42,32 +51,60 @@ class GeminiIntentParser:
         return self._client is not None
 
     @classmethod
-    def is_in_scope(cls, query: str) -> bool:
+    def is_in_scope(cls, query: str, context: str | None = None) -> bool:
         """Allow only court-sport discovery requests into the search workflow."""
-        lowered = " ".join(query.lower().split())
-        if not lowered:
+        current = " ".join(query.lower().split())
+        if not current:
             return False
+        # A new unrelated question must never inherit discovery context from a
+        # previous message. Context is only for short follow-ups such as
+        # "make it more casual" or "this weekend".
+        if any(term in current for term in cls._NON_COURT_TERMS):
+            return False
+        lowered = f"{current} {context or ''}".strip()
         has_sport = any(term in lowered for term in cls._SPORT_TERMS)
         has_court_object = any(term in lowered for term in cls._DISCOVERY_TERMS)
-        if has_court_object:
-            return True
         has_action = any(term in lowered for term in cls._DISCOVERY_ACTIONS)
-        # A sport plus a time expression is an implicit request to find a game.
-        has_time_context = bool(re.search(r"\b(today|tomorrow|tonight|morning|afternoon|evening|weekend|weekday|saturday|sunday|monday|tuesday|wednesday|thursday|friday)\b", lowered))
-        return has_sport and (has_action or has_time_context)
+        has_time_context = any(term in lowered for term in cls._TIME_TERMS)
+        has_location_context = bool(re.search(r"\b(near|nearby|around|local|area|location|within)\b", lowered))
+        has_play_intent = any(term in lowered for term in ("want to play", "looking to play", "people to play", "where can i play", "who can i play"))
 
-    def parse(self, query: str, sport: Sport | None = None) -> SearchIntent:
+        # Object words alone are not enough. This prevents questions such as
+        # "explain the rules of tennis" or "what is a club?" from becoming a
+        # fabricated session search.
+        if re.search(r"\b(explain|what is|what are|why is|how does|rules? of|how to play)\b", current) and not re.search(r"\b(near|nearby|around|find|search|join|open|available)\b", current):
+            return False
+        if has_action and has_court_object:
+            return True
+        if has_court_object and has_location_context:
+            return True
+        if re.search(r"\b(similar|like me|compatible|best fit|good fit|match me|matching)\b", current) and has_court_object:
+            return True
+        if has_play_intent:
+            return True
+        # Resolve terse follow-ups against the previous discovery request.
+        if context and (has_time_context or has_location_context or any(term in current for term in ("same", "another", "more", "only", "instead", "after", "before"))):
+            return True
+        # A sport plus timing, location, skill, or a clear wish to play is an
+        # implicit request to discover a game.
+        return has_sport and (has_time_context or has_location_context or has_play_intent)
+
+    def parse(self, query: str, sport: Sport | None = None, context: str | None = None) -> SearchIntent:
         if self._client:
             try:
-                parsed = self._parse_with_gemini(query)
+                parsed = self._parse_with_gemini(query, context)
                 return parsed.model_copy(update={"sport": sport}) if sport else parsed
             except Exception as error:
                 logger.warning("Gemini intent parsing failed (%s); using deterministic fallback", error)
-        parsed = self._fallback_parse(query)
+        parsed = self._fallback_parse(f"{query} {context or ''}")
         return parsed.model_copy(update={"sport": sport}) if sport else parsed
 
-    def _parse_with_gemini(self, query: str) -> SearchIntent:
-        prompt = """Extract a racket-sport session search into JSON matching this schema: sport, area, date, start_time, end_time, skill_min, skill_max, style, open_slots_required. Supported sports are pickleball, badminton, tennis, padel, squash, and table_tennis. Use null for unknown values. User request: """ + query
+    def _parse_with_gemini(self, query: str, context: str | None = None) -> SearchIntent:
+        prompt = """You are a strict intent parser for CourtMate, a racket-sport game discovery app.
+Extract only a session-search request into JSON matching this schema: sport, area, date, start_time, end_time, skill_min, skill_max, style, open_slots_required.
+Supported sports are pickleball, badminton, tennis, padel, squash, and table_tennis. Use null for unknown values. Never answer the user, invent requirements, or infer a date, location, skill, or sport that is not stated. The result will be used only to filter a database.
+Use the previous request only to resolve a reference such as "same time" or "make it more casual". Do not copy a previous requirement when the current request changes it.
+Current request: """ + query + "\nPrevious request context: " + (context or "none")
         response = self._client.models.generate_content(model=self.model, contents=prompt, config={"response_mime_type": "application/json", "response_schema": SearchIntent.model_json_schema()})
         return SearchIntent.model_validate_json(response.text)
 
@@ -82,52 +119,17 @@ class GeminiIntentParser:
             ranked_session_ids=[item.session.id for item in recommendations],
             proposed_group_name=fallback_name,
         )
-        if not self._client:
-            return fallback
-
-        score_by_id = {item.session.id: item.score for item in recommendations}
-        snapshot = [
-            {
-                "id": session.id,
-                "group_name": session.group_name,
-                "sport": session.sport,
-                "area": session.area,
-                "date": session.session_date.isoformat(),
-                "start_time": session.start_time.isoformat(),
-                "end_time": session.end_time.isoformat(),
-                "skill_band": f"{session.skill_min:.1f}-{session.skill_max:.1f}",
-                "style": session.style,
-                "open_slots": session.open_slots,
-                "status": session.status,
-                "deterministic_score": score_by_id.get(session.id),
-            }
-            for session in sessions
-        ]
-        user_rating = rating_for_sport(player, intent.sport) if player else None
-        prompt = f"""You are CourtMate's multi-sport court group concierge. The database snapshot below is the only source of truth; do not invent groups or players.
-Return JSON matching this schema: action (join_existing or create_group), summary, ranked_session_ids, proposed_group_name.
-The Python matcher has already filtered the snapshot for sport, area, date, availability, skill compatibility, and open slots. Explain the best existing groups, or explain why the user should start a new group. Never include an id not present in the snapshot.
-User request: {query}
-Parsed intent: {intent.model_dump_json()}
-User sport rating: {user_rating if user_rating is not None else "unknown"}
-Firestore session snapshot: {snapshot}
-"""
-        try:
-            response = self._client.models.generate_content(
-                model=self.model,
-                contents=prompt,
-                config={"response_mime_type": "application/json", "response_schema": SearchDecision.model_json_schema()},
-            )
-            decision = SearchDecision.model_validate_json(response.text)
-            allowed_ids = {item.session.id for item in recommendations}
-            decision.ranked_session_ids = [session_id for session_id in decision.ranked_session_ids if session_id in allowed_ids]
-            decision.action = fallback_action
-            if not recommendations:
-                decision.ranked_session_ids = []
-            return decision
-        except Exception as error:
-            logger.warning("Gemini search decision failed (%s); using deterministic decision", error)
-            return fallback
+        # Keep the final answer grounded in the Python-filtered records. Gemini
+        # extracts language above; it must not override availability, ranking,
+        # or the explanation shown to the player.
+        if recommendations:
+            lead = recommendations[0].session
+            date_label = lead.session_date.strftime("%a %d %b")
+            time_label = f"{lead.start_time.strftime('%I:%M %p').lstrip('0')}–{lead.end_time.strftime('%I:%M %p').lstrip('0')}"
+            return fallback.model_copy(update={
+                "summary": f"I found {len(recommendations)} {sport_name} game{'s' if len(recommendations) != 1 else ''} that fit. Best fit: {lead.group_name} on {date_label}, {time_label} in {lead.area}, with {lead.open_slots} spot{'s' if lead.open_slots != 1 else ''} open.",
+            })
+        return fallback
 
     def analyze_activity_image(self, image_bytes: bytes, mime_type: str) -> ActivityProofAnalysis:
         """Extract only visible tracker metrics; never invent values that are not shown."""
@@ -149,7 +151,16 @@ This screenshot is being attached to a completed racket-sport game."""
     @classmethod
     def is_performance_query(cls, query: str) -> bool:
         lowered = " ".join(query.lower().split())
-        return bool(re.search(r"\b(performance|history|cmr|rating|ratings|stats|statistics|calories|steps|heart rate|distance|wearable|progress|trend|improve|played|games|activity|fitness|form)\b", lowered))
+        if not lowered:
+            return False
+        # Search requests mentioning games or skill should stay in discovery.
+        discovery_request = bool(re.search(r"\b(find|search|show|join|invite|create|book|nearby|around)\b", lowered)) and bool(re.search(r"\b(game|games|group|groups|session|sessions|player|players|court|courts|venue|venues|match|matches)\b", lowered))
+        own_history_context = bool(re.search(r"\b(my|mine|i've|i have)\b", lowered)) and bool(re.search(r"\b(last|recent|history|played|games|game|activity)\b", lowered))
+        if discovery_request and not own_history_context:
+            return False
+        explicit_metric = bool(re.search(r"\b(cmr|rating|ratings|stats|statistics|calories|steps|heart rate|distance|wearable|progress|trend|fitness|form)\b", lowered))
+        personal_history = bool(re.search(r"\b(my|mine|i've|i have)\b", lowered)) and bool(re.search(r"\b(performance|history|played|games|activity|progress|trend|form|improve|rating|stats|fitness)\b", lowered))
+        return explicit_metric or personal_history
 
     def discuss_performance(self, query: str, player: Player, history: dict, activity_proofs: list[dict]) -> str:
         """Answer only from the player's stored game and wearable evidence."""
@@ -165,6 +176,8 @@ This screenshot is being attached to a completed racket-sport game."""
                 (sport, rating, player.cmr_game_counts.get(sport, 0))
                 for sport, rating in player.cmr_ratings.items()
             ]
+            if re.search(r"\bwhat is cmr\b|\bwhat does cmr mean\b|\bexplain cmr\b", query.lower()):
+                return "CMR means CourtMate Rating. It is a sport-specific score from 0 to 100 that updates from confirmed match results. It is a guide to progress, not a permanent label."
             if not ratings:
                 return "You do not have a CMR history yet. Play a completed racket-sport game and check in to start tracking your form."
             sport, rating, games = max(ratings, key=lambda item: item[1])
@@ -199,7 +212,6 @@ Stored player context: {context}
         sport = next((candidate for candidate, aliases in sport_aliases.items() if any(alias in lowered for alias in aliases)), "pickleball")
         style = "competitive" if "competitive" in lowered else "social" if "social" in lowered else "casual" if "casual" in lowered else "any"
         area = next((candidate for candidate in ["Whitefield", "Brookefield", "Kadugodi", "Indiranagar", "Koramangala"] if candidate.lower() in lowered), "Whitefield")
-        numbers = [float(value) for value in re.findall(r"\b([1-8](?:\.\d)?)\b", lowered)]
         skill_bands = {
             "beginner": (1.0, 2.9),
             "intermediate": (3.0, 3.5),
@@ -207,9 +219,14 @@ Stored player context: {context}
         }
         skill_level = next((level for level in skill_bands if level in lowered), "")
         skill_min, skill_max = skill_bands.get(skill_level, (None, None))
-        if numbers:
-            skill_min = min(numbers)
-            skill_max = max(numbers) if len(numbers) > 1 else skill_min
+        numeric_range = re.search(r"\b([1-8](?:\.\d)?)\s*(?:-|to)\s*([1-8](?:\.\d)?)\b", lowered)
+        numeric_rating = re.search(r"\b(?:skill|level|rating|cmr)\s*(?:of|is|at|around|:)?\s*([1-8](?:\.\d)?)\b", lowered)
+        if numeric_range:
+            skill_min = float(numeric_range.group(1))
+            skill_max = float(numeric_range.group(2))
+        elif numeric_rating:
+            skill_min = float(numeric_rating.group(1))
+            skill_max = skill_min
         start_time = None
         for hour, meridiem in re.findall(r"\b(\d{1,2})\s*(am|pm)\b", lowered):
             hour = int(hour) % 12 + (12 if meridiem == "pm" else 0)
@@ -217,4 +234,20 @@ Stored player context: {context}
             break
         if start_time is None:
             start_time = "08:00" if "morning" in lowered else "14:00" if "afternoon" in lowered else "19:00" if "evening" in lowered or "tonight" in lowered else None
-        return SearchIntent(sport=sport, area=area, style=style, skill_min=skill_min, skill_max=skill_max, start_time=start_time, date=date(2026, 8, 30) if "sunday" in lowered else None)
+        parsed_date = None
+        today = date.today()
+        if "today" in lowered:
+            parsed_date = today
+        elif "tomorrow" in lowered:
+            parsed_date = today + timedelta(days=1)
+        else:
+            weekday_names = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+            weekday_match = re.search(r"\b(this|next)?\s*(mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b", lowered)
+            if weekday_match:
+                target = next(index for index, name in enumerate(weekday_names) if name.startswith(weekday_match.group(2)))
+                days_ahead = (target - today.weekday()) % 7
+                prefix = weekday_match.group(1)
+                if prefix == "next" or (prefix is None and days_ahead == 0):
+                    days_ahead += 7
+                parsed_date = today + timedelta(days=days_ahead)
+        return SearchIntent(sport=sport, area=area, style=style, skill_min=skill_min, skill_max=skill_max, start_time=start_time, date=parsed_date)

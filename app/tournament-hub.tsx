@@ -316,20 +316,21 @@ export function TournamentHub({ apiUrl, currentUserId, authorizedFetch, onToast,
           {selected.matches.length > 0 ? (
             <div className="tournament-layout">
               <section className="tournament-panel">
-                <div className="tournament-panel-heading"><div><span className="kicker">THE DRAW</span><h3>Round-robin fixtures</h3></div><span>{selected.tournament.rules.score_label} · win by {selected.tournament.rules.win_by}</span></div>
+                <div className="tournament-panel-heading"><div><span className="kicker">THE DRAW</span><h3>Draw sheet</h3></div><span>{selected.tournament.rules.score_label} · win by {selected.tournament.rules.win_by}</span></div>
+                <p className="draw-sheet-help">Enter a score on any match. The live leaderboard recalculates after the result is confirmed.</p>
                 <div className="fixture-rounds">
                   {rounds.map((round) => (
                     <div className="fixture-round" key={round}>
                       <strong>Round {round}</strong>
                       {selected.matches.filter((match) => match.round_number === round).map((match) => {
-                        const canScore = match.status !== "completed" && (Boolean(isOrganizer) || currentUserId === match.player_a_id || currentUserId === match.player_b_id);
+                        const canScore = Boolean(isOrganizer) || (match.status !== "completed" && (currentUserId === match.player_a_id || currentUserId === match.player_b_id));
                         const canConfirm = match.status === "pending_confirmation" && currentUserId !== match.score_entered_by && (Boolean(isOrganizer) || currentUserId === match.player_a_id || currentUserId === match.player_b_id);
                         const draft = scores[match.id] ?? { a: String(match.score_a ?? ""), b: String(match.score_b ?? "") };
                         return (
                           <article className={`fixture-card fixture-${match.status}`} key={match.id}>
                             <div className="fixture-top"><span>Match {match.match_number}</span><small>{match.status === "pending_confirmation" ? "Needs confirmation" : match.status}</small></div>
                             <div className="fixture-players"><strong className={match.winner_id === match.player_a_id ? "winner" : ""}>{playerName(match.player_a_id)}</strong><b>{match.score_a ?? "-"}</b><strong className={match.winner_id === match.player_b_id ? "winner" : ""}>{playerName(match.player_b_id)}</strong><b>{match.score_b ?? "-"}</b></div>
-                            {canScore && <div className="fixture-score-entry"><input type="number" min="0" value={draft.a} onChange={(event) => setScores({ ...scores, [match.id]: { ...draft, a: event.target.value } })} placeholder="0" aria-label={`${playerName(match.player_a_id)} score`} /><span>:</span><input type="number" min="0" value={draft.b} onChange={(event) => setScores({ ...scores, [match.id]: { ...draft, b: event.target.value } })} placeholder="0" aria-label={`${playerName(match.player_b_id)} score`} /><button className="score-button" onClick={() => void submitScore(match, canConfirm)} disabled={busyId === match.id}>{canConfirm ? "Confirm" : "Save"}</button></div>}
+                            {canScore && <div className="fixture-score-entry"><input type="number" min="0" value={draft.a} onChange={(event) => setScores({ ...scores, [match.id]: { ...draft, a: event.target.value } })} placeholder="0" aria-label={`${playerName(match.player_a_id)} score`} /><span>:</span><input type="number" min="0" value={draft.b} onChange={(event) => setScores({ ...scores, [match.id]: { ...draft, b: event.target.value } })} placeholder="0" aria-label={`${playerName(match.player_b_id)} score`} /><button className="score-button" onClick={() => void submitScore(match, canConfirm)} disabled={busyId === match.id}>{match.status === "completed" ? "Update" : canConfirm ? "Confirm" : "Save"}</button></div>}
                             {match.status === "pending_confirmation" && !canConfirm && <p className="fixture-note">Waiting for the opponent to confirm this score.</p>}
                           </article>
                         );

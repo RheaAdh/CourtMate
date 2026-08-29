@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialPost, SocialPostCreateRequest, SocialPostView, Sport, Tournament, TournamentDetailsResponse, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialPost, SocialPostCreateRequest, SocialPostView, Sport, Tournament, TournamentDetailsResponse, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
 from .tournaments import calculate_standings, generate_round_robin_matches, rules_for_sport, validate_score
 
@@ -116,12 +116,17 @@ def _geocode_area(area: str) -> tuple[float, float] | None:
     return coordinates
 
 
-def _parse_intent(query: str, sport: Sport | None = None, player: Player | None = None) -> SearchIntent:
-    intent = intent_parser.parse(query, sport)
-    lowered_query = query.lower()
-    locality_match = re.search(r"\b(?:near|around|in)\s+(.+?)(?=\s+(?:this|next|on|at|for|today|tomorrow|sun(?:day)?|mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|weekday|weekend|morning|afternoon|evening|tonight)\b|$)", lowered_query)
+def _parse_intent(query: str, sport: Sport | None = None, player: Player | None = None, context: str | None = None) -> SearchIntent:
+    intent = intent_parser.parse(query, sport, context)
+    lowered_query = f"{query} {context or ''}".lower()
+    locality_match = re.search(r"\b(?:near|around|in)\s+(.+?)(?=\s+(?:this|next|on|at|for|with|and|today|tomorrow|sun(?:day)?|mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|weekday|weekend|morning|afternoon|evening|tonight|skill|level|rating|cmr)\b|$)", lowered_query)
     requested_locality = locality_match.group(1).strip(" ,.") if locality_match else ""
-    has_explicit_locality = bool(requested_locality and not requested_locality.startswith(("my location", "my area", "my locality", "the ")))
+    has_explicit_locality = bool(
+        requested_locality
+        and requested_locality not in {"me", "here", "my location", "my area", "my locality"}
+        and not requested_locality.startswith("my ")
+        and not requested_locality.startswith("the ")
+    )
     if has_explicit_locality:
         intent = intent.model_copy(update={"area": requested_locality.title(), "latitude": None, "longitude": None})
     if not has_explicit_locality and player:
@@ -143,7 +148,7 @@ def health() -> dict[str, str]:
 
 @app.post("/v1/intent/parse", response_model=SearchIntent)
 def parse_intent(request: ParseRequest) -> SearchIntent:
-    return _parse_intent(request.query, request.sport)
+    return _parse_intent(request.query, request.sport, context=request.context)
 
 
 @app.get("/v1/me", response_model=Player)
@@ -554,7 +559,7 @@ def _refresh_cmr_ratings() -> None:
     sessions_by_id = {session.id: session for session in repository.list_sessions() if session.status == "completed"}
     for session in sessions_by_id.values():
         for post in repository.list_chat_posts(session.id):
-            if post.post_type != "match_result":
+            if post.post_type != "match_result" or post.result_status not in {None, "confirmed"}:
                 continue
             for player_id, game_rating in _relative_match_ratings(session, post.teams).items():
                 ratings_by_player.setdefault((player_id, session.sport), {}).setdefault(session.id, []).append(game_rating)
@@ -667,7 +672,18 @@ def _query_group_name(query: str, intent: SearchIntent, style: str) -> str:
     return f"{phrase} {intent.sport.replace('_', ' ').title()}"[:64]
 
 
+def _move_past_proposal_forward(intent: SearchIntent) -> SearchIntent:
+    """Keep a conversationally proposed game in the future when today's slot has passed."""
+    if intent.date is None or intent.start_time is None:
+        return intent
+    proposed_start = datetime.combine(intent.date, intent.start_time, tzinfo=local_timezone)
+    if proposed_start <= datetime.now(local_timezone):
+        return intent.model_copy(update={"date": intent.date + timedelta(days=7)})
+    return intent
+
+
 def _group_proposal(intent: SearchIntent, player_id: str, proposed_name: str | None = None, query: str = "") -> GroupProposal:
+    intent = _move_past_proposal_forward(intent)
     player = repository.get_player(player_id)
     rating = rating_for_sport(player, intent.sport) if player else None
     rating = rating if rating is not None else 3.25
@@ -696,7 +712,7 @@ def search(request: ParseRequest, player: Player = Depends(get_current_player)) 
     query = request.query.strip()
     if not query:
         raise HTTPException(status_code=422, detail="Search query is required")
-    if not intent_parser.is_in_scope(query):
+    if not intent_parser.is_in_scope(query, request.context):
         return SearchResponse(
             intent=SearchIntent(
                 sport=request.sport or "pickleball",
@@ -709,7 +725,7 @@ def search(request: ParseRequest, player: Player = Depends(get_current_player)) 
             message="I can help you find racket-sport courts, games, groups, and players. Try: \"find an intermediate tennis game near Whitefield this Saturday\".",
             scope="out_of_scope",
         )
-    intent = _parse_intent(request.query, request.sport, player)
+    intent = _parse_intent(request.query, request.sport, player, request.context)
     sessions = repository.list_sessions()
     recommendations = search_sessions(sessions, intent, repository.list_players(), player, exact=request.mode == "exact")
     decision = intent_parser.decide(request.query, intent, sessions, recommendations, player)
@@ -921,7 +937,8 @@ def group_view(session_id: str, player: Player = Depends(get_current_player)) ->
         raise HTTPException(status_code=404, detail="Session not found")
     players_by_id = {candidate.id: candidate for candidate in repository.list_players()}
     members = [_public_profile(players_by_id[player_id], player.id) for player_id in session.confirmed_player_ids if player_id in players_by_id]
-    return GroupViewResponse(session=session, members=members, activity_proofs=repository.list_activity_proofs(session_id=session.id))
+    waitlist = [_public_profile(players_by_id[player_id], player.id) for player_id in session.waitlist_player_ids if player_id in players_by_id]
+    return GroupViewResponse(session=session, members=members, waitlist=waitlist, activity_proofs=repository.list_activity_proofs(session_id=session.id))
 
 
 def _tournament_details(tournament: Tournament) -> TournamentDetailsResponse:
@@ -1038,7 +1055,8 @@ def enter_tournament_score(tournament_id: str, match_id: str, request: Tournamen
     match = repository.get_tournament_match(match_id)
     if not tournament or not match or match.tournament_id != tournament_id:
         raise HTTPException(status_code=404, detail="Tournament match not found")
-    if tournament.status not in {"in_progress", "registration"}:
+    is_organizer = player.id == tournament.organizer_id
+    if tournament.status not in {"in_progress", "registration"} and not is_organizer:
         raise HTTPException(status_code=409, detail="This tournament is closed")
     if player.id not in {match.player_a_id, match.player_b_id, tournament.organizer_id}:
         raise HTTPException(status_code=403, detail="Only match players or the organizer can enter a score")
@@ -1047,14 +1065,19 @@ def enter_tournament_score(tournament_id: str, match_id: str, request: Tournamen
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     if match.status == "completed":
-        raise HTTPException(status_code=409, detail="This match result is already locked")
-    if match.status == "pending_confirmation" and match.score_entered_by != player.id and player.id != tournament.organizer_id:
+        if not is_organizer:
+            raise HTTPException(status_code=409, detail="This match result is already locked")
+        match.status = "completed"
+        match.confirmed_by = player.id
+        match.score_entered_by = player.id
+        match.winner_id = match.player_a_id if request.score_a > request.score_b else match.player_b_id
+    elif match.status == "pending_confirmation" and match.score_entered_by != player.id and not is_organizer:
         if match.score_a != request.score_a or match.score_b != request.score_b:
             raise HTTPException(status_code=409, detail="The submitted score does not match the pending result")
         match.status = "completed"
         match.confirmed_by = player.id
         match.winner_id = match.player_a_id if request.score_a > request.score_b else match.player_b_id
-    elif player.id == tournament.organizer_id or request.confirm:
+    elif is_organizer or request.confirm:
         match.status = "completed"
         match.confirmed_by = player.id
         match.winner_id = match.player_a_id if request.score_a > request.score_b else match.player_b_id
@@ -1071,6 +1094,68 @@ def enter_tournament_score(tournament_id: str, match_id: str, request: Tournamen
     return saved_match
 
 
+def _parse_chat_match_result(message: str, session: Session) -> list[MatchTeam]:
+    """Extract two sides and a score from a natural group-chat update."""
+    score_match = re.search(r"(?<!\d)(\d{1,3})\s*(?:-|:|to)\s*(\d{1,3})(?!\d)", message, re.IGNORECASE)
+    if not score_match:
+        return []
+    without_score = f"{message[:score_match.start()]} {message[score_match.end():]}"
+    connector = re.search(r"\b(?:beat|beats|won against|won over|defeated|versus|vs)\b", without_score, re.IGNORECASE)
+    if connector:
+        left_text = without_score[:connector.start()]
+        right_text = without_score[connector.end():]
+    else:
+        left_text = message[:score_match.start()]
+        right_text = message[score_match.end():]
+
+    players = repository.list_players()
+
+    def player_ids(text: str) -> list[str]:
+        matches: list[tuple[int, str]] = []
+        first_name_counts: dict[str, int] = {}
+        for candidate in players:
+            first_name = candidate.display_name.split()[0].lower()
+            first_name_counts[first_name] = first_name_counts.get(first_name, 0) + 1
+        for candidate in players:
+            full_name_pattern = rf"(?<![\w]){re.escape(candidate.display_name)}(?![\w])"
+            first_name = candidate.display_name.split()[0].lower()
+            first_name_pattern = rf"(?<![\w]){re.escape(candidate.display_name.split()[0])}(?![\w])"
+            name_match = re.search(full_name_pattern, text, re.IGNORECASE)
+            if not name_match and first_name_counts[first_name] == 1:
+                name_match = re.search(first_name_pattern, text, re.IGNORECASE)
+            if name_match:
+                matches.append((name_match.start(), candidate.id))
+        return [player_id for _, player_id in sorted(matches)]
+
+    left_ids = player_ids(left_text)
+    right_ids = player_ids(right_text)
+    if not left_ids or not right_ids or len(left_ids) > 2 or len(right_ids) > 2 or set(left_ids) & set(right_ids):
+        return []
+    if any(player_id not in session.confirmed_player_ids for player_id in [*left_ids, *right_ids]):
+        return []
+    return [
+        MatchTeam(name="Pair A", player_ids=left_ids, score=int(score_match.group(1))),
+        MatchTeam(name="Pair B", player_ids=right_ids, score=int(score_match.group(2))),
+    ]
+
+
+def _validate_chat_match_teams(teams: list[MatchTeam], session: Session) -> None:
+    if len(teams) != 2:
+        raise HTTPException(status_code=422, detail="Mention who played on both sides and include the score, for example: Rhea and Ananya beat Kavya and Meera 11-8")
+    if any(len(team.player_ids) > 2 or not team.player_ids for team in teams):
+        raise HTTPException(status_code=422, detail="Each side can include one or two confirmed players")
+    if any(team.score is None for team in teams):
+        raise HTTPException(status_code=422, detail="Include both scores, for example 11-8")
+    seen_team_players: set[str] = set()
+    for team in teams:
+        for player_id in team.player_ids:
+            if player_id not in session.confirmed_player_ids:
+                raise HTTPException(status_code=422, detail="Scores can only include players from this group")
+            if player_id in seen_team_players:
+                raise HTTPException(status_code=422, detail="A player can only be on one side")
+            seen_team_players.add(player_id)
+
+
 @app.get("/v1/sessions/{session_id}/chat", response_model=ChatResponse)
 def group_chat(session_id: str, player: Player = Depends(get_current_player)) -> ChatResponse:
     session = _member_session(session_id, player)
@@ -1081,25 +1166,18 @@ def group_chat(session_id: str, player: Player = Depends(get_current_player)) ->
 def post_group_chat(session_id: str, request: ChatPostRequest, player: Player = Depends(get_current_player)) -> ChatPost:
     session = _member_session(session_id, player)
     message = request.message.strip()
-    if request.post_type == "message":
-        _require_active_session(session)
+    post_type = request.post_type
+    teams = request.teams
+    if post_type == "message":
         if not message:
             raise HTTPException(status_code=422, detail="Chat message is required")
-    else:
-        if len(request.teams) != 2:
-            raise HTTPException(status_code=422, detail="Add the two sides that played")
-        if any(len(team.player_ids) > 2 or not team.player_ids for team in request.teams):
-            raise HTTPException(status_code=422, detail="Each side must include one or two players")
-        if any(team.score is None for team in request.teams):
-            raise HTTPException(status_code=422, detail="Enter both scores")
-        seen_team_players: set[str] = set()
-        for team in request.teams:
-            for player_id in team.player_ids:
-                if player_id not in session.confirmed_player_ids:
-                    raise HTTPException(status_code=422, detail="Scores can only include players from this group")
-                if player_id in seen_team_players:
-                    raise HTTPException(status_code=422, detail="A player can only be on one side")
-                seen_team_players.add(player_id)
+        teams = _parse_chat_match_result(message, session)
+        if teams:
+            post_type = "match_result"
+        else:
+            _require_active_session(session)
+    if post_type == "match_result":
+        _validate_chat_match_teams(teams, session)
         if not message:
             def team_label(team) -> str:
                 names = []
@@ -1110,10 +1188,42 @@ def post_group_chat(session_id: str, request: ChatPostRequest, player: Player = 
                 return f"{team.name} ({' + '.join(names)})"
 
             message = f"Match result: {team_label(request.teams[0])} {request.teams[0].score}–{request.teams[1].score} {team_label(request.teams[1])}"
-    post = repository.save_chat_post(ChatPost(id=uuid4().hex, session_id=session_id, player_id=player.id, player_display_name=player.display_name, message=message, post_type=request.post_type, teams=request.teams, created_at=datetime.now(timezone.utc)))
-    if request.post_type == "match_result" and session.status == "completed":
-        _refresh_cmr_ratings()
+    post = repository.save_chat_post(ChatPost(
+        id=uuid4().hex,
+        session_id=session_id,
+        player_id=player.id,
+        player_display_name=player.display_name,
+        message=message,
+        post_type=post_type,
+        teams=teams,
+        result_status="pending_confirmation" if post_type == "match_result" else None,
+        confirmation_ids=[player.id] if post_type == "match_result" else [],
+        created_at=datetime.now(timezone.utc),
+    ))
     return post
+
+
+@app.post("/v1/sessions/{session_id}/chat/{post_id}/decision", response_model=ChatPost)
+def decide_chat_match_result(session_id: str, post_id: str, request: ChatResultDecisionRequest, player: Player = Depends(get_current_player)) -> ChatPost:
+    session = _member_session(session_id, player)
+    post = next((candidate for candidate in repository.list_chat_posts(session_id) if candidate.id == post_id), None)
+    if not post or post.post_type != "match_result":
+        raise HTTPException(status_code=404, detail="Match result not found")
+    if post.result_status in {"confirmed", "disputed"}:
+        return post
+    if player.id not in {player_id for team in post.teams for player_id in team.player_ids}:
+        raise HTTPException(status_code=403, detail="Only players in this result can confirm it")
+    if not request.agree:
+        return repository.save_chat_post(post.model_copy(update={"result_status": "disputed"}))
+    if player.id in post.confirmation_ids:
+        return post
+    confirmation_ids = [*post.confirmation_ids, player.id]
+    result_player_ids = {player_id for team in post.teams for player_id in team.player_ids}
+    result_status = "confirmed" if result_player_ids.issubset(confirmation_ids) else "pending_confirmation"
+    updated = repository.save_chat_post(post.model_copy(update={"confirmation_ids": confirmation_ids, "result_status": result_status}))
+    if result_status == "confirmed":
+        _refresh_cmr_ratings()
+    return updated
 
 
 @app.get("/v1/sessions/{session_id}/leaderboard", response_model=LeaderboardResponse)
@@ -1158,6 +1268,8 @@ def create_group(request: CreateGroupRequest, player: Player = Depends(get_curre
     end_time = proposal.end_time or (datetime.combine(session_date, start_time) + timedelta(hours=2)).time()
     if session_date < date.today():
         raise HTTPException(status_code=422, detail="Choose today or a future date")
+    if session_date == date.today() and datetime.combine(session_date, start_time, tzinfo=local_timezone) <= datetime.now(local_timezone):
+        session_date += timedelta(days=7)
     if end_time <= start_time:
         raise HTTPException(status_code=422, detail="End time must be after start time")
     if proposal.skill_min > proposal.skill_max:

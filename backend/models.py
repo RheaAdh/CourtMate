@@ -370,10 +370,11 @@ class ReplacementResponse(BaseModel):
 
 
 class ParseRequest(BaseModel):
-    query: str
+    query: str = Field(min_length=1, max_length=500)
     player_id: str | None = None
     sport: Sport | None = None
     mode: Literal["exact", "profile"] = "exact"
+    context: str | None = Field(default=None, max_length=500)
 
 
 class JoinRequestRequest(BaseModel):
@@ -487,6 +488,7 @@ class PerformanceChatResponse(BaseModel):
 class GroupViewResponse(BaseModel):
     session: Session
     members: list[PublicPlayerProfile]
+    waitlist: list[PublicPlayerProfile] = Field(default_factory=list)
     activity_proofs: list[ActivityProof] = Field(default_factory=list)
 
 
@@ -494,6 +496,10 @@ class ChatPostRequest(BaseModel):
     message: str = Field(default="", max_length=500)
     post_type: Literal["message", "match_result"] = "message"
     teams: list["MatchTeam"] = Field(default_factory=list, max_length=2)
+
+
+class ChatResultDecisionRequest(BaseModel):
+    agree: bool
 
 
 class ChatPost(BaseModel):
@@ -504,6 +510,8 @@ class ChatPost(BaseModel):
     message: str
     post_type: Literal["message", "match_result"] = "message"
     teams: list["MatchTeam"] = Field(default_factory=list)
+    result_status: Literal["pending_confirmation", "confirmed", "disputed"] | None = None
+    confirmation_ids: list[str] = Field(default_factory=list)
     created_at: datetime
 
 

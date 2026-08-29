@@ -13,11 +13,23 @@ class MatchingTests(unittest.TestCase):
         parser = GeminiIntentParser()
         self.assertTrue(parser.is_in_scope("What courts are nearby?"))
         self.assertTrue(parser.is_in_scope("Find players around me for tennis tomorrow"))
+        self.assertTrue(parser.is_in_scope("show groups with people like me"))
+        self.assertTrue(parser.is_in_scope("make it more casual", "Find a tennis game near Whitefield this Saturday"))
+        self.assertTrue(parser.is_in_scope("this weekend", "Find a pickleball game near Whitefield"))
 
     def test_scope_guard_rejects_unrelated_questions(self):
         parser = GeminiIntentParser()
         self.assertFalse(parser.is_in_scope("What is the weather near me?"))
         self.assertFalse(parser.is_in_scope("Explain the rules of tennis"))
+        self.assertFalse(parser.is_in_scope("What is the capital of France?"))
+        self.assertFalse(parser.is_in_scope("What is a pickleball rating?"))
+        self.assertFalse(parser.is_in_scope("What is the weather?", "Find a tennis game near Whitefield this Saturday"))
+        self.assertTrue(parser.is_in_scope("Show me tennis games near Whitefield"))
+
+    def test_performance_guard_does_not_steal_game_discovery_questions(self):
+        parser = GeminiIntentParser()
+        self.assertFalse(parser.is_performance_query("Find games near me"))
+        self.assertTrue(parser.is_performance_query("How is my CMR changing?"))
 
     def test_cmr_uses_100_scale_and_preserves_legacy_matching(self):
         player = Player(

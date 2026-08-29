@@ -26,6 +26,68 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(payload["action"], "join_existing")
         self.assertEqual(payload["recommendations"][0]["session"]["id"], "s1")
 
+    def test_chat_followup_keeps_previous_game_context(self):
+        original = "Find a pickleball game near Whitefield this Sunday morning"
+        first = self.client.post("/v1/sessions/search", json={"query": original})
+        self.assertEqual(first.status_code, 200)
+
+        followup = self.client.post(
+            "/v1/sessions/search",
+            json={"query": "make it more casual", "context": original},
+        )
+        self.assertEqual(followup.status_code, 200)
+        self.assertEqual(followup.json()["scope"], "court_discovery")
+        self.assertEqual(followup.json()["intent"]["sport"], "pickleball")
+        self.assertEqual(followup.json()["intent"]["area"], "Whitefield")
+        self.assertEqual(followup.json()["recommendations"][0]["session"]["id"], "s1")
+        self.assertIn("Sunday Rally Crew", followup.json()["message"])
+
+    def test_unrelated_followup_does_not_inherit_game_context(self):
+        response = self.client.post(
+            "/v1/sessions/search",
+            json={
+                "query": "What is the weather?",
+                "context": "Find a pickleball game near Whitefield this Sunday morning",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["scope"], "out_of_scope")
+        self.assertEqual(response.json()["recommendations"], [])
+
+    def test_chat_search_keeps_clock_time_out_of_skill_rating(self):
+        response = self.client.post(
+            "/v1/sessions/search",
+            json={"query": "Find an advanced tennis game near Indiranagar this Saturday at 8 AM"},
+        )
+        intent = response.json()["intent"]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(intent["area"], "Indiranagar")
+        this_saturday = date.today() + timedelta(days=(5 - date.today().weekday()) % 7)
+        self.assertEqual(intent["date"], str(this_saturday))
+        self.assertEqual(intent["skill_min"], 3.5)
+        self.assertEqual(intent["skill_max"], 5.0)
+
+    def test_chat_search_uses_profile_area_for_around_me(self):
+        response = self.client.post(
+            "/v1/sessions/search",
+            json={"query": "Show me games around me this weekend"},
+        )
+        intent = response.json()["intent"]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(intent["area"], "Whitefield")
+        self.assertEqual([item["session"]["id"] for item in response.json()["recommendations"]], ["s1", "s2"])
+
+    def test_chat_search_keeps_skill_phrase_out_of_locality(self):
+        response = self.client.post(
+            "/v1/sessions/search",
+            json={"query": "Find a tennis game near Whitefield with skill 3.6-4.2 at 7 PM"},
+        )
+        intent = response.json()["intent"]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(intent["area"], "Whitefield")
+        self.assertEqual(intent["skill_min"], 3.6)
+        self.assertEqual(intent["skill_max"], 4.2)
+
     def test_nearby_court_query_returns_contextual_suggestions(self):
         response = self.client.post("/v1/sessions/search", json={"query": "What courts are nearby?", "player_id": "p1"})
         payload = response.json()
@@ -62,17 +124,24 @@ class ApiFlowTests(unittest.TestCase):
         result = self.client.post(
             "/v1/sessions/s1/chat",
             json={
-                "post_type": "match_result",
-                "teams": [
-                    {"name": "Pair A", "player_ids": ["p1", "p2"], "score": 11},
-                    {"name": "Pair B", "player_ids": ["p3", "p6"], "score": 8},
-                ],
+                "message": "Ananya and Kavya beat Rohit and Sana 11-8",
             },
             headers={"X-CourtMate-Player-ID": "p1"},
         )
         self.assertEqual(result.status_code, 200)
         self.assertIn("Ananya", result.json()["message"])
         self.assertIn("Rohit", result.json()["message"])
+        self.assertEqual(result.json()["result_status"], "pending_confirmation")
+        post_id = result.json()["id"]
+
+        for player_id in ("p2", "p3", "p6"):
+            confirmation = self.client.post(
+                f"/v1/sessions/s1/chat/{post_id}/decision",
+                json={"agree": True},
+                headers={"X-CourtMate-Player-ID": player_id},
+            )
+            self.assertEqual(confirmation.status_code, 200)
+        self.assertEqual(confirmation.json()["result_status"], "confirmed")
 
         profile = self.client.get("/v1/me", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertIsNotNone(profile.json()["cmr_ratings"].get("pickleball"))
@@ -88,6 +157,14 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(payload["recommendations"], [])
         self.assertIsNone(payload["group_proposal"])
         self.assertIn("find racket-sport", payload["message"])
+
+    def test_general_question_is_redirected_without_random_session_results(self):
+        response = self.client.post("/v1/sessions/search", json={"query": "What is the capital of France?", "player_id": "p1"})
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["scope"], "out_of_scope")
+        self.assertEqual(payload["recommendations"], [])
+        self.assertIsNone(payload["group_proposal"])
 
     def test_social_feed_supports_session_posts_likes_comments_and_shares(self):
         created = self.client.post(
@@ -446,6 +523,9 @@ class ApiFlowTests(unittest.TestCase):
         waitlist = self.client.post("/v1/sessions/s7/join", headers={"X-CourtMate-Player-ID": "p4"})
         self.assertEqual(waitlist.status_code, 200)
         self.assertEqual(waitlist.json()["status"], "waitlisted")
+        group_view = self.client.get("/v1/sessions/s7/group", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(group_view.status_code, 200)
+        self.assertEqual([player["id"] for player in group_view.json()["waitlist"]], ["p4"])
         leave = self.client.post("/v1/sessions/s7/leave", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(leave.status_code, 200)
         self.assertIn("p4", leave.json()["confirmed_player_ids"])
@@ -532,13 +612,23 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(confirmed.status_code, 200)
         self.assertEqual(confirmed.json()["status"], "completed")
 
+        corrected = self.client.post(
+            f"/v1/tournaments/{tournament_id}/matches/{player_match['id']}/score",
+            json={"score_a": 9, "score_b": 11, "confirm": True},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(corrected.status_code, 200)
+        self.assertEqual(corrected.json()["status"], "completed")
+        self.assertEqual(corrected.json()["score_a"], 9)
+        self.assertEqual(corrected.json()["score_b"], 11)
+
         details = self.client.get(
             f"/v1/tournaments/{tournament_id}",
             headers={"X-CourtMate-Player-ID": "p1"},
         )
         self.assertEqual(details.status_code, 200)
         standings = details.json()["standings"]
-        winner = next(entry for entry in standings if entry["player_id"] == player_match["player_a_id"])
+        winner = next(entry for entry in standings if entry["player_id"] == player_match["player_b_id"])
         self.assertEqual(winner["wins"], 1)
         self.assertEqual(winner["table_points"], 3)
 
