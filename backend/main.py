@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import ActivityProof, ActivityProofRequest, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, SearchIntent, SearchResponse, Session, Sport, Tournament, TournamentDetailsResponse, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import ActivityProof, ActivityProofRequest, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialPost, SocialPostCreateRequest, SocialPostView, Sport, Tournament, TournamentDetailsResponse, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
 from .tournaments import calculate_standings, generate_round_robin_matches, rules_for_sport, validate_score
 
@@ -215,6 +215,91 @@ def my_followers(player: Player = Depends(get_current_player)) -> PublicPlayerPr
     return _social_profiles(player, following=False)
 
 
+@app.get("/v1/social/feed", response_model=SocialFeedResponse)
+def social_feed(feed: str = "all", sport: Sport | None = None, player: Player = Depends(get_current_player)) -> SocialFeedResponse:
+    if feed not in {"all", "following"}:
+        raise HTTPException(status_code=422, detail="Feed must be all or following")
+    following_ids = {record.following_id for record in repository.list_following(player.id)}
+    posts = repository.list_social_posts()
+    if feed == "following":
+        following_ids.add(player.id)
+        posts = [post for post in posts if post.player_id in following_ids]
+    if sport:
+        posts = [post for post in posts if post.sport == sport]
+    return SocialFeedResponse(posts=[_social_post_view(post, player.id) for post in posts[:50]])
+
+
+@app.post("/v1/social/posts", response_model=SocialPostView)
+def create_social_post(request: SocialPostCreateRequest, player: Player = Depends(get_current_player)) -> SocialPostView:
+    caption = request.caption.strip()
+    if not caption:
+        raise HTTPException(status_code=422, detail="Post caption is required")
+    if request.media_url and not request.media_type:
+        raise HTTPException(status_code=422, detail="Media type is required with an attachment")
+    if request.session_id:
+        session = _get_session(request.session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Tagged game not found")
+        if session.sport != request.sport:
+            raise HTTPException(status_code=422, detail="Post sport must match the tagged game")
+        if player.id != session.organizer_id and player.id not in session.confirmed_player_ids:
+            raise HTTPException(status_code=403, detail="Only players in this game can tag it in a post")
+    post = repository.save_social_post(SocialPost(
+        id=f"social-{uuid4().hex}",
+        player_id=player.id,
+        player_display_name=player.display_name,
+        profile_image_url=player.profile_image_url,
+        sport=request.sport,
+        session_id=request.session_id,
+        caption=caption,
+        media_url=request.media_url,
+        media_type=request.media_type,
+        created_at=datetime.now(timezone.utc),
+    ))
+    return _social_post_view(post, player.id)
+
+
+@app.post("/v1/social/posts/{post_id}/like", response_model=SocialPostView)
+def toggle_social_like(post_id: str, player: Player = Depends(get_current_player)) -> SocialPostView:
+    post = repository.toggle_social_like(post_id, player.id)
+    if not post:
+        raise HTTPException(status_code=404, detail="Social post not found")
+    return _social_post_view(post, player.id)
+
+
+@app.get("/v1/social/posts/{post_id}/comments", response_model=SocialCommentsResponse)
+def list_social_comments(post_id: str, player: Player = Depends(get_current_player)) -> SocialCommentsResponse:
+    if not repository.get_social_post(post_id):
+        raise HTTPException(status_code=404, detail="Social post not found")
+    return SocialCommentsResponse(comments=repository.list_social_comments(post_id))
+
+
+@app.post("/v1/social/posts/{post_id}/comments", response_model=SocialComment)
+def create_social_comment(post_id: str, request: SocialCommentCreateRequest, player: Player = Depends(get_current_player)) -> SocialComment:
+    if not repository.get_social_post(post_id):
+        raise HTTPException(status_code=404, detail="Social post not found")
+    message = request.message.strip()
+    if not message:
+        raise HTTPException(status_code=422, detail="Comment is required")
+    return repository.save_social_comment(SocialComment(
+        id=f"comment-{uuid4().hex}",
+        post_id=post_id,
+        player_id=player.id,
+        player_display_name=player.display_name,
+        profile_image_url=player.profile_image_url,
+        message=message,
+        created_at=datetime.now(timezone.utc),
+    ))
+
+
+@app.post("/v1/social/posts/{post_id}/share", response_model=SocialPostView)
+def share_social_post(post_id: str, player: Player = Depends(get_current_player)) -> SocialPostView:
+    post = repository.record_social_share(post_id)
+    if not post:
+        raise HTTPException(status_code=404, detail="Social post not found")
+    return _social_post_view(post, player.id)
+
+
 @app.post("/v1/me/profile", response_model=Player)
 def update_profile(request: ProfileUpdateRequest, player: Player = Depends(get_current_player)) -> Player:
     updates = request.model_dump(exclude_none=True, exclude={"sport", "skill_level", "skill_rating"})
@@ -236,23 +321,31 @@ def update_profile(request: ProfileUpdateRequest, player: Player = Depends(get_c
 
 
 def _profile_storage_client():
-    """Return a GCS client that can sign URLs with local or Cloud Run credentials."""
+    """Return a GCS client using the application's default credentials."""
     from google.cloud import storage
 
-    project = os.getenv("GOOGLE_CLOUD_PROJECT")
-    client = storage.Client(project=project)
-    credentials = client._credentials
-    if hasattr(credentials, "sign_bytes"):
-        return client
+    return storage.Client(project=os.getenv("GOOGLE_CLOUD_PROJECT"))
 
-    from google.auth import iam
-    from google.auth.transport.requests import Request as GoogleAuthRequest
 
-    service_account_email = os.getenv("COURTMATE_SIGNING_SERVICE_ACCOUNT") or getattr(credentials, "service_account_email", None)
-    if not service_account_email:
-        raise RuntimeError("Set COURTMATE_SIGNING_SERVICE_ACCOUNT for signed GCS URLs")
-    signer = iam.Signer(GoogleAuthRequest(), credentials, service_account_email)
-    return storage.Client(project=project, credentials=signer)
+def _generate_profile_upload_url(blob, content_type: str) -> str:
+    """Generate a signed URL using a key or IAM signBlob, depending on ADC."""
+    credentials = blob.bucket._client._credentials
+    signing_options = {}
+    if not hasattr(credentials, "sign_bytes"):
+        from google.auth.transport.requests import Request as GoogleAuthRequest
+
+        service_account_email = os.getenv("COURTMATE_SIGNING_SERVICE_ACCOUNT") or getattr(credentials, "service_account_email", None)
+        if not service_account_email:
+            raise RuntimeError("Set COURTMATE_SIGNING_SERVICE_ACCOUNT for signed GCS URLs")
+        credentials.refresh(GoogleAuthRequest())
+        signing_options = {"service_account_email": service_account_email, "access_token": credentials.token}
+    return blob.generate_signed_url(
+        version="v4",
+        expiration=timedelta(minutes=10),
+        method="PUT",
+        content_type=content_type,
+        **signing_options,
+    )
 
 
 @app.post("/v1/me/profile-image/upload-url", response_model=ProfileImageUploadResponse)
@@ -263,12 +356,7 @@ def create_profile_image_upload_url(request: ProfileImageUploadRequest, player: 
     try:
         bucket = _profile_storage_client().bucket(bucket_name)
         blob = bucket.blob(object_name)
-        upload_url = blob.generate_signed_url(
-            version="v4",
-            expiration=timedelta(minutes=10),
-            method="PUT",
-            content_type=request.content_type,
-        )
+        upload_url = _generate_profile_upload_url(blob, request.content_type)
     except ImportError as error:
         raise HTTPException(status_code=500, detail="Install google-cloud-storage to upload profile pictures") from error
     except Exception as error:
@@ -282,7 +370,18 @@ def update_profile_image(request: ProfileImageUpdateRequest, player: Player = De
     bucket_name = os.getenv("COURTMATE_PROFILE_BUCKET", "profile-pictures")
     parsed_url = urlparse(request.profile_image_url)
     expected_prefix = f"/{bucket_name}/profiles/{player.id}/"
-    if parsed_url.scheme != "https" or parsed_url.hostname != "storage.googleapis.com" or not parsed_url.path.startswith(expected_prefix):
+    is_new_profile_bucket_url = (
+        parsed_url.scheme == "https"
+        and parsed_url.hostname == "storage.googleapis.com"
+        and parsed_url.path.startswith(expected_prefix)
+    )
+    # Keep existing Firebase Storage profile photos valid while new uploads use GCS.
+    is_legacy_firebase_url = (
+        parsed_url.scheme == "https"
+        and parsed_url.hostname == "firebasestorage.googleapis.com"
+        and "/o/profile-images%2F" in parsed_url.path
+    )
+    if not (is_new_profile_bucket_url or is_legacy_firebase_url):
         raise HTTPException(status_code=422, detail="Profile image must be uploaded to the CourtMate profile bucket")
     return repository.save_player(player.model_copy(update={"profile_image_url": request.profile_image_url}))
 
@@ -338,6 +437,29 @@ def _public_profile(player: Player, viewer_id: str | None = None) -> PublicPlaye
         follows_you=bool(viewer_id and repository.is_following(player.id, viewer_id)),
         recent_games=recent_games,
         activity_by_date=activity_by_date,
+    )
+
+
+def _social_post_view(post: SocialPost, viewer_id: str) -> SocialPostView:
+    session = repository.get_session(post.session_id) if post.session_id else None
+    return SocialPostView(
+        id=post.id,
+        player_id=post.player_id,
+        player_display_name=post.player_display_name,
+        profile_image_url=post.profile_image_url,
+        sport=post.sport,
+        session_id=post.session_id,
+        session_name=session.group_name if session else None,
+        session_date=session.session_date if session else None,
+        session_area=session.area if session else None,
+        caption=post.caption,
+        media_url=post.media_url,
+        media_type=post.media_type,
+        like_count=len(post.liked_by),
+        comment_count=post.comment_count,
+        share_count=post.share_count,
+        liked_by_me=viewer_id in post.liked_by,
+        created_at=post.created_at,
     )
 
 
@@ -534,12 +656,28 @@ def _group_proposal(intent: SearchIntent, player_id: str, proposed_name: str | N
 @app.post("/v1/sessions/search", response_model=SearchResponse)
 def search(request: ParseRequest, player: Player = Depends(get_current_player)) -> SearchResponse:
     _refresh_all_session_statuses()
+    query = request.query.strip()
+    if not query:
+        raise HTTPException(status_code=422, detail="Search query is required")
+    if not intent_parser.is_in_scope(query):
+        return SearchResponse(
+            intent=SearchIntent(
+                sport=request.sport or "pickleball",
+                area=player.area,
+                latitude=player.latitude,
+                longitude=player.longitude,
+            ),
+            recommendations=[],
+            action="join_existing",
+            message="I can help you find racket-sport courts, games, groups, and players. Try: \"find an intermediate tennis game near Whitefield this Saturday\".",
+            scope="out_of_scope",
+        )
     intent = _parse_intent(request.query, request.sport, player)
     sessions = repository.list_sessions()
     recommendations = search_sessions(sessions, intent, repository.list_players(), player, exact=request.mode == "exact")
     decision = intent_parser.decide(request.query, intent, sessions, recommendations, player)
     proposal = _group_proposal(intent, player.id, decision.proposed_group_name, request.query) if not recommendations else None
-    return SearchResponse(intent=intent, recommendations=recommendations, action=decision.action, message=decision.summary, group_proposal=proposal)
+    return SearchResponse(intent=intent, recommendations=recommendations, action=decision.action, message=decision.summary, group_proposal=proposal, scope="court_discovery")
 
 
 @app.post("/v1/sessions/{session_id}/join", response_model=JoinRequest)

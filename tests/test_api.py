@@ -26,6 +26,62 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(payload["action"], "join_existing")
         self.assertEqual(payload["recommendations"][0]["session"]["id"], "s1")
 
+    def test_nearby_court_query_returns_contextual_suggestions(self):
+        response = self.client.post("/v1/sessions/search", json={"query": "What courts are nearby?", "player_id": "p1"})
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["scope"], "court_discovery")
+        self.assertTrue(payload["recommendations"])
+        self.assertIn("pickleball", payload["message"])
+
+    def test_unrelated_chat_query_is_redirected_without_results(self):
+        response = self.client.post("/v1/sessions/search", json={"query": "What is the weather near me?", "player_id": "p1"})
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["scope"], "out_of_scope")
+        self.assertEqual(payload["recommendations"], [])
+        self.assertIsNone(payload["group_proposal"])
+        self.assertIn("find racket-sport", payload["message"])
+
+    def test_social_feed_supports_session_posts_likes_comments_and_shares(self):
+        created = self.client.post(
+            "/v1/social/posts",
+            json={"caption": "Great Sunday rally with a really fun group.", "sport": "pickleball", "session_id": "s1"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(created.status_code, 200)
+        post_id = created.json()["id"]
+        self.assertEqual(created.json()["session_name"], "Sunday Rally Crew")
+
+        feed = self.client.get("/v1/social/feed", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(feed.status_code, 200)
+        self.assertEqual(feed.json()["posts"][0]["like_count"], 0)
+
+        liked = self.client.post(f"/v1/social/posts/{post_id}/like", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertTrue(liked.json()["liked_by_me"])
+        self.assertEqual(liked.json()["like_count"], 1)
+
+        comment = self.client.post(
+            f"/v1/social/posts/{post_id}/comments",
+            json={"message": "That game was a blast."},
+            headers={"X-CourtMate-Player-ID": "p2"},
+        )
+        self.assertEqual(comment.status_code, 200)
+        self.assertEqual(comment.json()["player_display_name"], "Kavya")
+
+        shared = self.client.post(f"/v1/social/posts/{post_id}/share", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(shared.json()["share_count"], 1)
+        comments = self.client.get(f"/v1/social/posts/{post_id}/comments", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(len(comments.json()["comments"]), 1)
+
+    def test_social_post_cannot_tag_a_game_the_player_did_not_play(self):
+        response = self.client.post(
+            "/v1/social/posts",
+            json={"caption": "Posting someone else's game", "sport": "pickleball", "session_id": "s1"},
+            headers={"X-CourtMate-Player-ID": "p5"},
+        )
+        self.assertEqual(response.status_code, 403)
+
     def test_exact_search_filters_requested_game_style(self):
         response = self.client.post(
             "/v1/sessions/search",

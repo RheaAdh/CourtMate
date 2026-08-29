@@ -361,6 +361,7 @@ class SearchResponse(BaseModel):
     action: Literal["join_existing", "create_group"] = "join_existing"
     message: str = ""
     group_proposal: GroupProposal | None = None
+    scope: Literal["court_discovery", "out_of_scope"] = "court_discovery"
 
 
 class ReplacementResponse(BaseModel):
@@ -485,6 +486,72 @@ class ChatPost(BaseModel):
     player_display_name: str
     message: str
     created_at: datetime
+
+
+class SocialPostCreateRequest(BaseModel):
+    caption: str = Field(min_length=1, max_length=500)
+    sport: Sport = "pickleball"
+    session_id: str | None = None
+    media_url: str | None = Field(default=None, max_length=2048)
+    media_type: Literal["image", "video"] | None = None
+
+
+class SocialPost(BaseModel):
+    id: str
+    player_id: str
+    player_display_name: str
+    profile_image_url: str | None = None
+    sport: Sport = "pickleball"
+    session_id: str | None = None
+    caption: str
+    media_url: str | None = None
+    media_type: Literal["image", "video"] | None = None
+    liked_by: list[str] = Field(default_factory=list)
+    comment_count: int = Field(default=0, ge=0)
+    share_count: int = Field(default=0, ge=0)
+    created_at: datetime
+
+
+class SocialCommentCreateRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=300)
+
+
+class SocialComment(BaseModel):
+    id: str
+    post_id: str
+    player_id: str
+    player_display_name: str
+    profile_image_url: str | None = None
+    message: str
+    created_at: datetime
+
+
+class SocialPostView(BaseModel):
+    id: str
+    player_id: str
+    player_display_name: str
+    profile_image_url: str | None = None
+    sport: Sport = "pickleball"
+    session_id: str | None = None
+    session_name: str | None = None
+    session_date: date_type | None = None
+    session_area: str | None = None
+    caption: str
+    media_url: str | None = None
+    media_type: Literal["image", "video"] | None = None
+    like_count: int = Field(default=0, ge=0)
+    comment_count: int = Field(default=0, ge=0)
+    share_count: int = Field(default=0, ge=0)
+    liked_by_me: bool = False
+    created_at: datetime
+
+
+class SocialFeedResponse(BaseModel):
+    posts: list[SocialPostView] = Field(default_factory=list)
+
+
+class SocialCommentsResponse(BaseModel):
+    comments: list[SocialComment] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):

@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 from typing import Protocol
 
-from .models import ActivityProof, AppNotification, ChatPost, Feedback, FollowRecord, JoinRequest, Player, Session, Tournament, TournamentMatch, TournamentRegistration, normalize_cmr_player
+from .models import ActivityProof, AppNotification, ChatPost, Feedback, FollowRecord, JoinRequest, Player, Session, SocialComment, SocialPost, Tournament, TournamentMatch, TournamentRegistration, normalize_cmr_player
 
 
 class Repository(Protocol):
@@ -17,6 +17,13 @@ class Repository(Protocol):
     def list_activity_proofs(self, session_id: str | None = None, player_id: str | None = None) -> list[ActivityProof]: ...
     def save_chat_post(self, post: ChatPost) -> ChatPost: ...
     def list_chat_posts(self, session_id: str) -> list[ChatPost]: ...
+    def save_social_post(self, post: SocialPost) -> SocialPost: ...
+    def get_social_post(self, post_id: str) -> SocialPost | None: ...
+    def list_social_posts(self) -> list[SocialPost]: ...
+    def toggle_social_like(self, post_id: str, player_id: str) -> SocialPost | None: ...
+    def save_social_comment(self, comment: SocialComment) -> SocialComment: ...
+    def list_social_comments(self, post_id: str) -> list[SocialComment]: ...
+    def record_social_share(self, post_id: str) -> SocialPost | None: ...
     def save_join_request(self, join_request: JoinRequest) -> JoinRequest: ...
     def list_join_requests(self, session_id: str) -> list[JoinRequest]: ...
     def list_join_requests_for_player(self, player_id: str) -> list[JoinRequest]: ...
@@ -50,6 +57,8 @@ class InMemoryRepository:
         self.feedback: list[Feedback] = []
         self.activity_proofs: dict[str, ActivityProof] = {}
         self.chat_posts: dict[str, ChatPost] = {}
+        self.social_posts: dict[str, SocialPost] = {}
+        self.social_comments: dict[str, SocialComment] = {}
         self.join_requests: dict[str, JoinRequest] = {}
         self.notifications: dict[str, AppNotification] = {}
         self.follows: dict[str, FollowRecord] = {}
@@ -102,6 +111,39 @@ class InMemoryRepository:
 
     def list_chat_posts(self, session_id: str) -> list[ChatPost]:
         return sorted((post for post in self.chat_posts.values() if post.session_id == session_id), key=lambda post: post.created_at)
+
+    def save_social_post(self, post: SocialPost) -> SocialPost:
+        self.social_posts[post.id] = post
+        return post
+
+    def get_social_post(self, post_id: str) -> SocialPost | None:
+        return self.social_posts.get(post_id)
+
+    def list_social_posts(self) -> list[SocialPost]:
+        return sorted(self.social_posts.values(), key=lambda post: post.created_at, reverse=True)
+
+    def toggle_social_like(self, post_id: str, player_id: str) -> SocialPost | None:
+        post = self.social_posts.get(post_id)
+        if not post:
+            return None
+        liked_by = [item for item in post.liked_by if item != player_id]
+        if len(liked_by) == len(post.liked_by):
+            liked_by.append(player_id)
+        return self.save_social_post(post.model_copy(update={"liked_by": liked_by}))
+
+    def save_social_comment(self, comment: SocialComment) -> SocialComment:
+        self.social_comments[comment.id] = comment
+        post = self.social_posts.get(comment.post_id)
+        if post:
+            self.save_social_post(post.model_copy(update={"comment_count": post.comment_count + 1}))
+        return comment
+
+    def list_social_comments(self, post_id: str) -> list[SocialComment]:
+        return sorted((comment for comment in self.social_comments.values() if comment.post_id == post_id), key=lambda comment: comment.created_at)
+
+    def record_social_share(self, post_id: str) -> SocialPost | None:
+        post = self.social_posts.get(post_id)
+        return self.save_social_post(post.model_copy(update={"share_count": post.share_count + 1})) if post else None
 
     def save_join_request(self, join_request: JoinRequest) -> JoinRequest:
         self.join_requests[join_request.id] = join_request
@@ -271,6 +313,59 @@ class FirestoreRepository:
         documents = self.client.collection("chat_posts").where("session_id", "==", session_id).limit(100).stream()
         posts = [ChatPost.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
         return sorted(posts, key=lambda post: post.created_at)
+
+    @staticmethod
+    def _as_social_post(document) -> SocialPost:
+        return SocialPost.model_validate({**(document.to_dict() or {}), "id": document.id})
+
+    def save_social_post(self, post: SocialPost) -> SocialPost:
+        reference = self.client.collection("social_posts").document(post.id)
+        reference.set(self._write_model(post))
+        return post
+
+    def get_social_post(self, post_id: str) -> SocialPost | None:
+        document = self.client.collection("social_posts").document(post_id).get()
+        return self._as_social_post(document) if document.exists else None
+
+    def list_social_posts(self) -> list[SocialPost]:
+        documents = self.client.collection("social_posts").limit(100).stream()
+        return sorted((self._as_social_post(document) for document in documents), key=lambda post: post.created_at, reverse=True)
+
+    def toggle_social_like(self, post_id: str, player_id: str) -> SocialPost | None:
+        reference = self.client.collection("social_posts").document(post_id)
+        document = reference.get()
+        if not document.exists:
+            return None
+        post = self._as_social_post(document)
+        liked_by = [item for item in post.liked_by if item != player_id]
+        if len(liked_by) == len(post.liked_by):
+            liked_by.append(player_id)
+        updated = post.model_copy(update={"liked_by": liked_by})
+        reference.set(self._write_model(updated))
+        return updated
+
+    def save_social_comment(self, comment: SocialComment) -> SocialComment:
+        reference = self.client.collection("social_comments").document(comment.id)
+        reference.set(self._write_model(comment))
+        post = self.get_social_post(comment.post_id)
+        if post:
+            self.save_social_post(post.model_copy(update={"comment_count": post.comment_count + 1}))
+        return comment
+
+    def list_social_comments(self, post_id: str) -> list[SocialComment]:
+        documents = self.client.collection("social_comments").where("post_id", "==", post_id).limit(100).stream()
+        comments = [SocialComment.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
+        return sorted(comments, key=lambda comment: comment.created_at)
+
+    def record_social_share(self, post_id: str) -> SocialPost | None:
+        reference = self.client.collection("social_posts").document(post_id)
+        document = reference.get()
+        if not document.exists:
+            return None
+        post = self._as_social_post(document)
+        updated = post.model_copy(update={"share_count": post.share_count + 1})
+        reference.set(self._write_model(updated))
+        return updated
 
     def save_join_request(self, join_request: JoinRequest) -> JoinRequest:
         reference = self.client.collection("join_requests").document(join_request.id)

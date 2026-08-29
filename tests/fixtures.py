@@ -87,6 +87,8 @@ def load_repository_fixture(repository: InMemoryRepository) -> None:
     repository.feedback.clear()
     repository.activity_proofs.clear()
     repository.chat_posts.clear()
+    repository.social_posts.clear()
+    repository.social_comments.clear()
     repository.join_requests.clear()
     repository.notifications.clear()
     repository.follows.clear()

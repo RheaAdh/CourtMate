@@ -12,6 +12,20 @@ logger = logging.getLogger(__name__)
 class GeminiIntentParser:
     """Gemini adapter with a deterministic fallback when no key is configured."""
 
+    _SPORT_TERMS = (
+        "pickleball", "pickle ball", "badminton", "tennis", "padel", "squash",
+        "table tennis", "table-tennis", "ping pong", "racket", "racquet",
+    )
+    _DISCOVERY_TERMS = (
+        "court", "venue", "club", "group", "game", "match", "session", "player",
+        "partner", "teammate", "opponent", "tournament", "people to play", "open spot", "skill", "level",
+        "waitlist", "play with", "looking to play", "want to play",
+    )
+    _DISCOVERY_ACTIONS = (
+        "find", "search", "join", "invite", "organize", "organise", "create",
+        "available", "availability", "reserve",
+    )
+
     def __init__(self) -> None:
         self.api_key = os.getenv("GEMINI_API_KEY")
         self.model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
@@ -26,6 +40,21 @@ class GeminiIntentParser:
     @property
     def image_analysis_available(self) -> bool:
         return self._client is not None
+
+    @classmethod
+    def is_in_scope(cls, query: str) -> bool:
+        """Allow only court-sport discovery requests into the search workflow."""
+        lowered = " ".join(query.lower().split())
+        if not lowered:
+            return False
+        has_sport = any(term in lowered for term in cls._SPORT_TERMS)
+        has_court_object = any(term in lowered for term in cls._DISCOVERY_TERMS)
+        if has_court_object:
+            return True
+        has_action = any(term in lowered for term in cls._DISCOVERY_ACTIONS)
+        # A sport plus a time expression is an implicit request to find a game.
+        has_time_context = bool(re.search(r"\b(today|tomorrow|tonight|morning|afternoon|evening|weekend|weekday|saturday|sunday|monday|tuesday|wednesday|thursday|friday)\b", lowered))
+        return has_sport and (has_action or has_time_context)
 
     def parse(self, query: str, sport: Sport | None = None) -> SearchIntent:
         if self._client:
@@ -45,9 +74,11 @@ class GeminiIntentParser:
     def decide(self, query: str, intent: SearchIntent, sessions: list[Session], recommendations: list[SessionRecommendation], player: Player | None = None) -> SearchDecision:
         fallback_action = "join_existing" if recommendations else "create_group"
         fallback_name = f"{intent.area} {intent.style.title()} {intent.sport.replace('_', ' ').title()}" if not recommendations else None
+        sport_name = intent.sport.replace("_", " ")
+        location_clause = f" near {intent.area}" if intent.area else " nearby"
         fallback = SearchDecision(
             action=fallback_action,
-            summary=(f"Found {len(recommendations)} existing group(s) that fit your request." if recommendations else "No open group matches all of those requirements. You can create the first group and invite nearby players."),
+            summary=(f"Found {len(recommendations)} {sport_name} group(s){location_clause} that fit your request." if recommendations else f"No open {sport_name} group matches all of those requirements. You can create the first group and invite nearby players."),
             ranked_session_ids=[item.session.id for item in recommendations],
             proposed_group_name=fallback_name,
         )

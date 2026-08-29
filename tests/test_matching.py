@@ -9,6 +9,16 @@ from tests.fixtures import load_repository_fixture
 
 
 class MatchingTests(unittest.TestCase):
+    def test_scope_guard_accepts_court_discovery_language(self):
+        parser = GeminiIntentParser()
+        self.assertTrue(parser.is_in_scope("What courts are nearby?"))
+        self.assertTrue(parser.is_in_scope("Find players around me for tennis tomorrow"))
+
+    def test_scope_guard_rejects_unrelated_questions(self):
+        parser = GeminiIntentParser()
+        self.assertFalse(parser.is_in_scope("What is the weather near me?"))
+        self.assertFalse(parser.is_in_scope("Explain the rules of tennis"))
+
     def test_cmr_uses_100_scale_and_preserves_legacy_matching(self):
         player = Player(
             id="cmr-player",
