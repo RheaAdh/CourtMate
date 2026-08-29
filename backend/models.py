@@ -179,7 +179,7 @@ class ProfileUpdateRequest(BaseModel):
 
 
 class ProfileImageUpdateRequest(BaseModel):
-    profile_image_url: str = Field(min_length=1, max_length=2048)
+    profile_image_url: str | None = Field(default=None, max_length=2048)
 
 
 class ProfileImageUploadRequest(BaseModel):

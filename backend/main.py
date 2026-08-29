@@ -367,6 +367,9 @@ def create_profile_image_upload_url(request: ProfileImageUploadRequest, player: 
 
 @app.post("/v1/me/profile-image", response_model=Player)
 def update_profile_image(request: ProfileImageUpdateRequest, player: Player = Depends(get_current_player)) -> Player:
+    if request.profile_image_url is None:
+        return repository.save_player(player.model_copy(update={"profile_image_url": None}))
+
     bucket_name = os.getenv("COURTMATE_PROFILE_BUCKET", "profile-pictures")
     parsed_url = urlparse(request.profile_image_url)
     expected_prefix = f"/{bucket_name}/profiles/{player.id}/"

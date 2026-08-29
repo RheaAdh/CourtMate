@@ -34,6 +34,26 @@ class ApiFlowTests(unittest.TestCase):
         self.assertTrue(payload["recommendations"])
         self.assertIn("pickleball", payload["message"])
 
+    def test_performance_chat_uses_player_history_without_gemini(self):
+        response = self.client.post(
+            "/v1/me/performance-chat",
+            json={"query": "How is my pickleball performance trending?"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["scope"], "performance")
+        self.assertIn("CMR", response.json()["answer"])
+
+    def test_performance_chat_keeps_unrelated_questions_out_of_scope(self):
+        response = self.client.post(
+            "/v1/me/performance-chat",
+            json={"query": "What is the weather today?"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["scope"], "out_of_scope")
+        self.assertIn("racket-sport history", response.json()["answer"])
+
     def test_group_chat_can_log_pairs_and_update_relative_cmr(self):
         session = repository.get_session("s1")
         session.status = "completed"
@@ -224,6 +244,14 @@ class ApiFlowTests(unittest.TestCase):
             headers={"X-CourtMate-Player-ID": "p2"},
         )
         self.assertEqual(rejected.status_code, 422)
+
+        removed = self.client.post(
+            "/v1/me/profile-image",
+            json={"profile_image_url": None},
+            headers={"X-CourtMate-Player-ID": "p2"},
+        )
+        self.assertEqual(removed.status_code, 200)
+        self.assertIsNone(removed.json()["profile_image_url"])
 
     def test_profile_preferences_update_includes_availability(self):
         response = self.client.post(
