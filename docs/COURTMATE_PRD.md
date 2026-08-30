@@ -1,81 +1,58 @@
 # CourtMate Product Requirements
 
-**Version:** Hackathon MVP
-**Market:** Bangalore, beginning with Whitefield and nearby localities
-**Category:** Racket-sports community, game discovery, and tournament operations
+**Version:** Hackathon MVP, August 2026
+**Market:** Bengaluru, beginning with Whitefield
+**Category:** Racket-sports discovery, community, CMR, and local tournaments
 
 ## 1. Product Thesis
 
-CourtMate helps a player turn "I want to play" into a game with people they will enjoy. It is the intelligent group layer between social distribution channels such as WhatsApp and Instagram and booking platforms such as Playo, Hudle, or a venue's own system.
+CourtMate turns “I want to play” into a compatible real-world game. It solves the social coordination gap between a booking platform and a chat group: finding people at a similar level, keeping attendance reliable, recording what happened, and helping players return.
 
-CourtMate does not replace court booking. It solves the harder social problem: finding a compatible group, keeping it alive as attendance changes, and creating a record of enjoyable play.
+CourtMate is not a general-purpose chatbot or a court-booking replacement. Its assistant is intentionally limited to racket sports, courts, games, players, groups, tournaments, and the authenticated player’s own performance.
 
-> **CourtMate: find your people, find your game, make every court count.**
+## 2. Users And Problems
 
-## 2. Problem
+- **Solo player:** wants a credible nearby game without joining many groups.
+- **Organizer:** wants approvals, waitlist replacement, coordination, scores, and feedback in one place.
+- **Tournament organizer:** needs request-based registration, editable local fixtures, draw sheets, and live standings.
+- **Regular player:** wants sport-specific CMR, activity history, rematches, and shareable results.
 
-- A player can find a court but not a reliable group at a similar level.
-- WhatsApp groups lose structured knowledge when members change.
-- Organizers manually collect confirmations, replace dropouts, and balance games.
-- Players cannot judge whether a session is casual, social, competitive, or beginner-friendly.
-- Scores, feedback, progress, rivalries, and tournament standings disappear after the game.
-- Venues want full, enjoyable sessions and repeat communities, not only isolated bookings.
+Today, attendance is scattered across WhatsApp, skill labels are inconsistent, dropouts are difficult to replace, and scores, feedback, progress, and tournament results disappear after play.
 
-## 3. Target Users
+## 3. Core Experience
 
-**Solo player:** wants a credible game nearby without joining many groups.
-**Organizer:** creates recurring or one-off sessions, approves players, and fills vacancies.
-**Venue or community lead:** runs open games, tournaments, ladders, and venue activity.
-**Regular competitor:** wants CMR progress, rematches, scores, and leaderboards.
+### Chat-first home
 
-## 4. MVP Experience
+The logged-in home is a clean chatbot, not a form. Players type or use voice to say what they want, for example: “Find a relaxed intermediate padel game near Whitefield Saturday morning.” The assistant asks only useful follow-ups, offers quick suggestion chips, shows a tennis-ball “Finding the best match” loader, and returns real game or tournament cards. Follow-up messages must preserve context and update the card, including when the player changes sport or area.
 
-### 4.1 Chat-first home
+The assistant must reject unrelated questions politely. It must never invent a venue, player, game, score, or rating.
 
-The home page is a conversational concierge, not a form. A player types or uses push-to-talk voice:
+### Match, join, or create
 
-> "Find a casual intermediate pickleball game near Whitefield this Sunday at 8 AM."
+Deterministic rules filter by sport, locality or travel radius, date, time, skill, style, capacity, privacy, and lifecycle. Cards support view group, request to join, join waitlist, and skip. A join request immediately appears as “Request sent” and is visible under Games.
 
-Gemini extracts sport, locality, date, time, skill, and mood. The assistant shows quick suggestions, a search loader, and result cards. It must understand follow-ups such as "make it more casual" or "show games after 7 PM." Questions unrelated to finding racket-sport games, players, courts, or the user's own performance are redirected without fabricated answers.
+When no suitable game exists, the assistant asks conversationally for missing sport, time, area, skill, and vibe. It shows a complete proposal and requires explicit confirmation before creating a game. After creation it confirms that the game is live and directs the player to Games. Creation must not depend on a structured form.
 
-### 4.2 Match or create
+### Groups and performance
 
-Python applies deterministic filters for sport, coordinates/travel radius, date, time, open spots, skill overlap, play style, reliability, and familiarity. Existing open games appear first with understandable reasons. If no suitable game exists, the assistant proposes a named game using the search request, asks for missing details conversationally, allows edits through chat, and posts only after explicit confirmation. Booking remains an external link.
+Every confirmed game has a private group space with member profiles, waitlist, venue/time/payment coordination, and voice-enabled chat. There is no “Log a match” form. Players can say who played and the score in the group chat or on Home after selecting an active game. Participants can agree or dispute the result. A separate conversational feedback mode collects fairness, fun, skill, and return intent after completion. Confirmed scores and feedback update sport-specific CMR.
 
-### 4.3 Group continuity
+### Social
 
-Each game has a persistent group space with confirmed players, pending requests, waitlist, member profiles, and a posting chat. Organizers approve requests, invite friends, and see replacements. Players can withdraw; the next waitlisted player can be promoted. A game closes after its end time.
+Social is a lightweight, responsive activity feed rather than a doomscrolling network. Completed sessions are published as leaderboard activity so followers can see who played. Players can add an optional photo or video, like, comment, follow, and share. Share generates a polished CourtMate image containing the game and leaderboard, similar to a workout recap. Player avatars and ranking rows are clickable; missing photos use initials. Recommended players and Following/Followers live in a Connections page.
 
-### 4.4 Play, score, and CMR
+### Tournaments
 
-In the group chat or home score flow, players can write who played and the score naturally, for example, "Ananya beat Kavya 11 to 8." Participating players confirm or dispute the result. Once confirmed, Python updates sport-specific CourtMate Rating (CMR) on a 0-100 scale. Players give qualitative feedback such as beginner, intermediate, or advanced rather than inventing a numeric skill rating. Profiles show active sports, CMR circles, green/red movement, recent games, activity calendar, and CMR history.
+The assistant searches tournaments as naturally as games. Tournaments have Explore, Upcoming, Pending, and History views. Organizers create tournaments from the tournament area, receive registration requests, maintain a waitlist, edit fixtures easily for local events, enter scores, and see the draw sheet and leaderboard update immediately.
 
-### 4.5 Social and tournaments
+## 4. Profile And Navigation
 
-Players may share completed sessions with photos or videos, then like, comment, follow, and share. A venue organizer can create a racket-sports tournament, accept registrations and waitlist players, generate round-robin fixtures, enter or confirm scores, view a draw sheet, and see live standings. The organizer can correct a result; the leaderboard recalculates immediately.
+Profiles show bio, follower/following counts, reliability, activity calendar, recent sessions, and sport-specific CMR circles with up/down movement. The horizontal sport selector contains only active CourtMate sports: pickleball, badminton, tennis, padel, squash, and table tennis. No strength-training categories are shown.
 
-## 5. Functional Requirements
+Settings, Notifications, Activity Calendar, Connections, and public player profiles are pages with back arrows and browser-history navigation, not modals, so mobile swipe-back works. Sign out sits at the end of the profile screen. The UI must remain elegant and usable on phones, tablets, and monitors, with a compact mobile navigation and desktop left rail.
 
-- Firebase Google sign-in and profile bootstrap.
-- Sport-aware support for pickleball, badminton, tennis, padel, squash, and table tennis.
-- Google Maps coordinates for locality matching; never expose exact home coordinates.
-- Responsive PWA behavior on phone, tablet, and desktop.
-- Upcoming, pending, and history game views.
-- In-app notifications for game matches, requests, approvals, follows, and tournament activity.
-- Profile photo upload through protected cloud storage URLs; initials when no photo exists.
-- Optional Gemini analysis of wearable screenshots attached to a completed game.
-- Chat, search, and score actions must be usable without structured creation or score forms.
+## 5. Trust And Success
 
-## 6. Safety and Trust
+Firebase sign-in, privacy controls, approximate locations, profile visibility, and session visibility protect players. AI cannot bypass authorization, capacity, privacy, approval, score confirmation, or tournament rules.
 
-AI cannot override capacity, privacy, approval, score confirmation, or tournament rules. It cannot invent players, games, ratings, or performance metrics. Profiles expose approximate locality and consent-based social information only. Users can hide, block, or report where those controls are available.
-
-## 7. Hackathon Demo and Success
-
-The demo should show one complete story: search by voice, view compatible groups, request to join, approve the request, coordinate in chat, record and confirm a score, see CMR and leaderboard movement, then register for or create a tournament draw.
-
-Primary signals are successful search-to-request conversion, organizer time to fill a game, confirmed attendance, repeat group participation, score completion, and tournament engagement.
-
-## 8. Monetization Direction
-
-Keep player discovery free. Monetize the organizer and venue layer first: recurring-group management, waitlist replacement, analytics, branded tournament pages, promoted open games, and retention insights. Avoid booking commissions until CourtMate has proven value independent of booking platforms.
+The demo success path is: voice search, inspect a fit, request to join, approve, coordinate, speak a score, confirm feedback, see CMR and leaderboard movement, and share the resulting activity image. Key signals are search-to-request conversion, confirmed attendance, repeat play, completed score/feedback, and tournament participation.

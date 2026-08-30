@@ -1,5 +1,5 @@
-const CACHE_NAME = "courtmate-shell-v1";
-const APP_SHELL = ["/", "/manifest.webmanifest", "/icon-192.svg", "/icon-512.svg"];
+const CACHE_NAME = "courtmate-shell-v2";
+const APP_SHELL = ["/", "/manifest.webmanifest", "/courtmate-icon-192.png", "/courtmate-icon-512.png", "/courtmate-logo.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

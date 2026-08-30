@@ -117,15 +117,16 @@ def _refresh_session_status(session: Session, refresh_cmr: bool = True, persist:
 
 def _get_session(session_id: str) -> Session | None:
     session = repository.get_session(session_id)
-    return _refresh_session_status(session) if session else None
+    return _refresh_session_status(session, refresh_cmr=False, index=False) if session else None
 
 
 def _refresh_all_session_statuses() -> list[Session]:
     sessions = repository.list_sessions()
-    # Discovery, feeds, and activity pages are read paths. Do not make them
-    # wait for a write, embedding request, or full CMR rebuild just because a
-    # scheduled game crossed its start/end time.
-    return [_refresh_session_status(session, refresh_cmr=False, persist=False, index=False) for session in sessions]
+    # Discovery, feeds, and activity pages are read paths. Persist only the
+    # lightweight status transition; never make them wait for an embedding
+    # request or full CMR rebuild just because a scheduled game crossed its
+    # start/end time.
+    return [_refresh_session_status(session, refresh_cmr=False, persist=True, index=False) for session in sessions]
 
 
 def _require_active_session(session: Session) -> None:
@@ -322,7 +323,7 @@ def social_feed(feed: str = "all", sport: Sport | None = None, player: Player = 
         if sport and session.sport != sport:
             continue
         session_activities.append(_session_social_view(session, players_by_id))
-    feed_items = [_social_post_view(post, player.id, sessions_by_id.get(post.session_id)) for post in posts] + session_activities
+    feed_items = [_social_post_view(post, player.id, sessions_by_id.get(post.session_id), players_by_id) for post in posts] + session_activities
     feed_items.sort(key=lambda item: item.created_at, reverse=True)
     return SocialFeedResponse(posts=feed_items[:50])
 
@@ -556,8 +557,39 @@ def _public_profile(player: Player, viewer_id: str | None = None) -> PublicPlaye
     )
 
 
-def _social_post_view(post: SocialPost, viewer_id: str, session: Session | None = None) -> SocialPostView:
+def _session_cmr_rating(candidate: Player, sport: str) -> float | None:
+    current = candidate.cmr_ratings.get(sport)
+    if current is not None:
+        return round(current, 1)
+    legacy = rating_for_sport(candidate, sport)
+    return round(cmr_from_legacy_rating(legacy), 1) if legacy is not None else None
+
+
+def _session_leaderboard(session: Session, players_by_id: dict[str, Player]) -> list[SocialLeaderboardEntry]:
+    players = [players_by_id[player_id] for player_id in session.confirmed_player_ids if player_id in players_by_id]
+    ranked_players = sorted(
+        players,
+        key=lambda candidate: (
+            -(_session_cmr_rating(candidate, session.sport) or -1),
+            -candidate.reliability,
+            candidate.display_name.lower(),
+        ),
+    )
+    return [
+        SocialLeaderboardEntry(
+            rank=index,
+            player_id=candidate.id,
+            display_name=candidate.display_name,
+            profile_image_url=candidate.profile_image_url,
+            cmr_rating=_session_cmr_rating(candidate, session.sport),
+        )
+        for index, candidate in enumerate(ranked_players, start=1)
+    ]
+
+
+def _social_post_view(post: SocialPost, viewer_id: str, session: Session | None = None, players_by_id: dict[str, Player] | None = None) -> SocialPostView:
     session = session if session is not None else repository.get_session(post.session_id) if post.session_id else None
+    players_by_id = players_by_id if players_by_id is not None else {candidate.id: candidate for candidate in repository.list_players()} if session else {}
     return SocialPostView(
         id=post.id,
         player_id=post.player_id,
@@ -576,6 +608,7 @@ def _social_post_view(post: SocialPost, viewer_id: str, session: Session | None 
         share_count=post.share_count,
         liked_by_me=viewer_id in post.liked_by,
         created_at=post.created_at,
+        session_leaderboard=_session_leaderboard(session, players_by_id) if session else [],
     )
 
 
@@ -583,32 +616,7 @@ def _session_social_view(session: Session, players_by_id: dict[str, Player] | No
     players_by_id = players_by_id or {candidate.id: candidate for candidate in repository.list_players()}
     participants = [players_by_id.get(player_id) for player_id in session.confirmed_player_ids]
     players = [candidate for candidate in participants if candidate]
-
-    def cmr_rating(candidate: Player) -> float | None:
-        current = candidate.cmr_ratings.get(session.sport)
-        if current is not None:
-            return round(current, 1)
-        legacy = rating_for_sport(candidate, session.sport)
-        return round(cmr_from_legacy_rating(legacy), 1) if legacy is not None else None
-
-    ranked_players = sorted(
-        players,
-        key=lambda candidate: (
-            -(cmr_rating(candidate) or -1),
-            -candidate.reliability,
-            candidate.display_name.lower(),
-        ),
-    )
-    leaderboard = [
-        SocialLeaderboardEntry(
-            rank=index,
-            player_id=candidate.id,
-            display_name=candidate.display_name,
-            profile_image_url=candidate.profile_image_url,
-            cmr_rating=cmr_rating(candidate),
-        )
-        for index, candidate in enumerate(ranked_players, start=1)
-    ]
+    leaderboard = _session_leaderboard(session, players_by_id)
     organizer = players_by_id.get(session.organizer_id) or (players[0] if players else None)
     organizer_name = organizer.display_name if organizer else "CourtMate player"
     return SocialPostView(
@@ -632,7 +640,7 @@ def _session_social_view(session: Session, players_by_id: dict[str, Player] | No
                 id=candidate.id,
                 display_name=candidate.display_name,
                 profile_image_url=candidate.profile_image_url,
-                cmr_rating=cmr_rating(candidate),
+                cmr_rating=_session_cmr_rating(candidate, session.sport),
             )
             for candidate in players
         ],

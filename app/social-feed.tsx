@@ -180,14 +180,16 @@ async function createShareCard(post: SocialPost): Promise<File | null> {
   context.fillRect(80, 184, 70, 10);
   context.fillStyle = "#192321";
   context.font = "700 23px 'DM Mono', monospace";
-  context.fillText(post.activity_type === "session" ? "SESSION LEADERBOARD" : "COURT MOMENT", 80, 245);
+  const hasLeaderboard = Boolean(post.session_leaderboard?.length);
+  const isLeaderboard = post.activity_type === "session" || hasLeaderboard;
+  context.fillText(isLeaderboard ? "SESSION LEADERBOARD" : "COURT MOMENT", 80, 245);
   context.font = "800 54px Manrope, sans-serif";
   wrapCanvasText(context, post.session_name ?? `${sportLabel(post.sport)} session`, 80, 325, 900, 66, 2);
   context.fillStyle = "#65736e";
   context.font = "500 25px Manrope, sans-serif";
-  wrapCanvasText(context, post.activity_type === "session" ? `${sportLabel(post.sport)} · ${post.session_date ?? "Today"} · ${post.session_area ?? "CourtMate"}` : post.caption, 80, post.activity_type === "session" ? 465 : 445, 900, 38, 4);
+  wrapCanvasText(context, isLeaderboard ? `${sportLabel(post.sport)} · ${post.session_date ?? "Today"} · ${post.session_area ?? "CourtMate"}` : post.caption, 80, isLeaderboard ? 465 : 445, 900, 38, 4);
 
-  if (post.activity_type === "session") {
+  if (isLeaderboard) {
     const entries = (post.session_leaderboard ?? []).slice(0, 5);
     entries.forEach((entry, index) => {
       const top = 650 + index * 105;

@@ -88,6 +88,49 @@ button { cursor:pointer; }
 .performance-chat-form { display:flex; gap:6px; margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }
 .performance-chat-form input { min-width:0; flex:1; border:1px solid #dce6c3; border-radius:8px; outline:0; background:#fff; padding:9px 10px; font-size:10px; }
 .performance-chat-form button { width:34px; border:0; border-radius:8px; background:var(--ink); color:var(--lime); font-weight:800; }
+
+.brand-icon { display:block; flex:none; width:31px; height:31px; object-fit:contain; }
+.brand > span { white-space:nowrap; }
+
+@media (max-width:600px) {
+  .brand-icon { width:28px; height:28px; }
+}
+
+/* Connections stay lightweight and list-first, with no modal chrome. */
+.connections-page { width:min(100%, 680px); }
+.connections-header { display:grid; grid-template-columns:42px minmax(0,1fr); align-items:center; gap:14px; padding-bottom:20px; border-bottom:1px solid var(--line); }
+.connections-header h1 { margin:0; font-size:clamp(30px,5vw,46px); letter-spacing:-.075em; }
+.connections-tabs { display:grid; grid-template-columns:1fr 1fr; border-bottom:1px solid var(--line); }
+.connections-tabs button { border:0; border-bottom:3px solid transparent; background:transparent; color:#7d887f; padding:17px 10px 14px; font-size:16px; font-weight:800; }
+.connections-tabs button.active { border-bottom-color:var(--coral); color:var(--ink); }
+.connections-tabs button:hover { color:var(--ink); }
+.connections-list { border-top:0; }
+.connection-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:14px; padding:17px 0; border-bottom:1px solid var(--line); }
+.connection-profile { display:flex; min-width:0; align-items:center; gap:13px; border:0; background:transparent; color:var(--ink); padding:0; text-align:left; }
+.connection-profile:disabled { cursor:wait; opacity:.7; }
+.connection-avatar { display:grid; flex:none; place-items:center; width:52px; height:52px; overflow:hidden; border-radius:50%; background:var(--lime); color:var(--ink); font-size:18px; font-weight:800; }
+.connection-avatar img { width:100%; height:100%; object-fit:cover; }
+.connection-profile > span:last-child { display:flex; min-width:0; flex-direction:column; gap:4px; }
+.connection-profile strong { overflow:hidden; font-size:15px; text-overflow:ellipsis; white-space:nowrap; }
+.connection-profile small { overflow:hidden; color:var(--muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+.connection-follow-button { min-width:105px; border:1px solid #d5dfb5; border-radius:999px; background:#fffef8; color:var(--ink); padding:10px 14px; font-size:11px; font-weight:800; }
+.connection-follow-button.following { background:#f1f8dc; color:#687d16; }
+.connection-follow-button:hover { border-color:#9db76d; background:#eaf5c5; }
+.connection-follow-button:disabled { cursor:wait; opacity:.55; }
+.connections-loader { display:grid; min-height:280px; place-items:center; }
+
+@media (max-width:600px) {
+  .connections-page { margin-top:24px; }
+  .connections-header { grid-template-columns:36px minmax(0,1fr); gap:10px; padding-bottom:16px; }
+  .connections-header h1 { font-size:30px; }
+  .connections-tabs button { padding:15px 8px 12px; font-size:14px; }
+  .connection-row { gap:9px; padding:14px 0; }
+  .connection-avatar { width:44px; height:44px; font-size:15px; }
+  .connection-profile { gap:10px; }
+  .connection-profile strong { font-size:13px; }
+  .connection-profile small { font-size:10px; }
+  .connection-follow-button { min-width:88px; padding:9px 10px; font-size:10px; }
+}
 .performance-chat-form button:disabled { cursor:not-allowed; opacity:.4; }
 .performance-proof-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
 .performance-proof-heading strong,.performance-proof-heading small { display:block; }
@@ -6123,5 +6166,65 @@ body::before { border-color: rgba(117, 140, 31, .18); }
     background: var(--ink);
     color: var(--lime);
     box-shadow: 0 6px 14px rgba(20, 34, 31, .16);
+  }
+}
+
+/* Strava-inspired navigation: recognizable icons first, labels second. */
+.app-tabs button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.app-tab-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+}
+
+.app-tab-icon svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.app-tabs button.active .app-tab-icon {
+  color: var(--lime);
+}
+
+.social-session-actions button:first-child {
+  border-color: #cbdc73;
+  background: #f4f8df;
+  color: #687d16;
+}
+
+@media (min-width: 1100px) {
+  .app-tabs button {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 600px) {
+  .app-tabs button {
+    flex-direction: column;
+    gap: 3px;
+    padding: 8px 2px;
+  }
+
+  .app-tab-icon {
+    width: 23px;
+    height: 23px;
+  }
+
+  .app-tab-icon svg {
+    width: 21px;
+    height: 21px;
   }
 }

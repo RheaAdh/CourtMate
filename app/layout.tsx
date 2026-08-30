@@ -7,6 +7,7 @@ export const metadata: Metadata = {
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [
+      { url: "/courtmate-icon.png", type: "image/png" },
       { url: "/courtmate-icon-192.png", type: "image/png", sizes: "192x192" },
       { url: "/courtmate-icon-512.png", type: "image/png", sizes: "512x512" },
     ],

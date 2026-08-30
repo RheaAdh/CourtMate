@@ -281,6 +281,7 @@ type CMRHistoryPoint = {
 type ActivityTab = "requests" | "groups" | "games" | "incoming";
 type AppTab = "home" | "social" | "games" | "profile" | "tournaments" | "about";
 type GamesViewTab = "explore" | "pending" | "upcoming" | "history" | "requested" | "confirmed" | "past" | "incoming";
+type ConnectionsTab = "following" | "followers";
 
 type ProfileDraft = {
   bio: string;
@@ -381,6 +382,22 @@ function SettingsIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z" /><path d="m19.4 15 .1.1a1.8 1.8 0 0 1-2.5 2.5l-.1-.1a1.8 1.8 0 0 0-3 .9v.2a1.8 1.8 0 0 1-3.6 0v-.2a1.8 1.8 0 0 0-3-.9l-.1.1a1.8 1.8 0 0 1-2.5-2.5l.1-.1a1.8 1.8 0 0 0-.9-3h-.2a1.8 1.8 0 0 1 0-3h.2a1.8 1.8 0 0 0 .9-3l-.1-.1a1.8 1.8 0 0 1 2.5-2.5l.1.1a1.8 1.8 0 0 0 3-.9v-.2a1.8 1.8 0 0 1 3.6 0v.2a1.8 1.8 0 0 0 3 .9l.1-.1a1.8 1.8 0 0 1 2.5 2.5l-.1.1a1.8 1.8 0 0 0 .9 3h.2a1.8 1.8 0 0 1 0 3h-.2a1.8 1.8 0 0 0-.9 3Z" /></svg>;
 }
 
+function HomeIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1V10Z" /></svg>;
+}
+
+function GamesIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h10a4 4 0 0 1 3.8 5.2l-1.3 4.3a3 3 0 0 1-5.3.8L13 14h-2l-1.2 1.3a3 3 0 0 1-5.3-.8l-1.3-4.3A4 4 0 0 1 7 5Z" /><path d="M7 8v4M5 10h4M17 9h.01M19 11h.01" /></svg>;
+}
+
+function TournamentIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h12v4a6 6 0 0 1-12 0V4ZM4 4h2v3a4 4 0 0 1-4-4v-1h4M20 4h2v-2h-4M12 14v5M8 21h8" /><path d="M18 5a4 4 0 0 0 4-4" /></svg>;
+}
+
+function SocialIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M8.5 15.5 15.5 8.5M9 9h.01M15 15h.01" /></svg>;
+}
+
 function activityDateKey(value: Date): string {
   const year = value.getFullYear();
   const month = String(value.getMonth() + 1).padStart(2, "0");
@@ -420,7 +437,8 @@ function RecentGames({ games, sport }: { games: ProfileGameSummary[]; sport?: Sp
 }
 
 function ProfileSportOverview({ profile, sports, selectedSport, onSelect }: { profile: PlayerProfile; sports: { value: Sport; label: string }[]; selectedSport: Sport; onSelect: (sport: Sport) => void }) {
-  const cards = sports.map((sport) => {
+  const courtSportValues = new Set(sportOptions.map((sport) => sport.value));
+  const cards = sports.filter((sport) => courtSportValues.has(sport.value)).map((sport) => {
     const history = profile.cmr_history?.[sport.value] ?? [];
     const ratedHistory = history.filter((point) => point.rating != null);
     const rating = profile.cmr_ratings?.[sport.value] ?? ratedHistory[ratedHistory.length - 1]?.rating ?? 0;
@@ -503,6 +521,11 @@ export default function Home() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [connectionsOpen, setConnectionsOpen] = useState(false);
+  const [connectionsTab, setConnectionsTab] = useState<ConnectionsTab>("following");
+  const [connections, setConnections] = useState<PublicPlayerProfile[]>([]);
+  const [connectionsLoading, setConnectionsLoading] = useState(false);
+  const [connectionsError, setConnectionsError] = useState("");
   const [socialProfile, setSocialProfile] = useState<PublicPlayerProfile | null>(null);
   const [viewedProfile, setViewedProfile] = useState<PublicPlayerProfile | null>(null);
   const [profileReturnTab, setProfileReturnTab] = useState<AppTab>("home");
@@ -514,13 +537,13 @@ export default function Home() {
   const [toast, setToast] = useState("");
 
   useEffect(() => {
-    if (!settingsOpen && !notificationsOpen) return;
+    if (!settingsOpen && !notificationsOpen && !connectionsOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") closeUtilityPage();
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [settingsOpen, notificationsOpen]);
+  }, [settingsOpen, notificationsOpen, connectionsOpen]);
 
   useEffect(() => {
     const syncUtilityPage = () => {
@@ -528,6 +551,7 @@ export default function Home() {
       setSettingsOpen(hash === "settings");
       setNotificationsOpen(hash === "notifications");
       setCalendarOpen(hash === "profile-calendar");
+      setConnectionsOpen(hash === "connections");
       if (!hash.startsWith("group-space-")) setWorkspaceGroup(null);
       if (!hash.startsWith("ranking-")) setRankingGame(null);
       if (!hash.startsWith("group-preview-")) setViewedGroup(null);
@@ -571,6 +595,7 @@ export default function Home() {
         setSettingsOpen(false);
         setNotificationsOpen(false);
         setCalendarOpen(false);
+        setConnectionsOpen(false);
         setViewedGroup(null);
         setViewedProfile(null);
       }
@@ -582,6 +607,11 @@ export default function Home() {
     const interval = window.setInterval(() => void loadNotifications(user), 30000);
     return () => window.clearInterval(interval);
   }, [user]);
+
+  useEffect(() => {
+    if (!connectionsOpen || !user) return;
+    void loadConnections(connectionsTab, user);
+  }, [connectionsOpen, connectionsTab, user]);
 
   useEffect(() => {
     if (!workspaceGroup && !viewedGroup) return;
@@ -808,6 +838,23 @@ export default function Home() {
     }
   }
 
+  async function loadConnections(tab: ConnectionsTab, authUser: User = user as User) {
+    if (!authUser) return;
+    try {
+      setConnectionsLoading(true);
+      setConnectionsError("");
+      const response = await authorizedFetch(`${apiUrl}/v1/me/${tab}`, {}, authUser);
+      if (!response.ok) throw new Error("Connections unavailable");
+      const payload = await response.json() as { profiles?: PublicPlayerProfile[] };
+      setConnections(payload.profiles ?? []);
+    } catch {
+      setConnections([]);
+      setConnectionsError("Could not load connections");
+    } finally {
+      setConnectionsLoading(false);
+    }
+  }
+
   async function viewPlayerProfile(playerId: string) {
     if (playerId === user?.uid) {
       setViewedProfile(null);
@@ -831,6 +878,7 @@ export default function Home() {
     setProfileLoadingId(null);
     setWorkspaceGroup(null);
     setViewedGroup(null);
+    setConnectionsOpen(false);
     setProfileReturnTab(activeTab);
     setViewedProfile(playerProfile);
     setActiveTab("profile");
@@ -857,6 +905,25 @@ export default function Home() {
     } catch {
       setToast(wasFollowing ? "Could not unfollow this player" : "Could not follow this player");
       window.setTimeout(() => setToast(""), 2600);
+    }
+  }
+
+  async function toggleConnection(connection: PublicPlayerProfile) {
+    if (!user || connection.id === user.uid) return;
+    const wasFollowing = connection.is_following;
+    try {
+      setProfileLoadingId(`connection-${connection.id}`);
+      const action = wasFollowing ? "unfollow" : "follow";
+      const response = await authorizedFetch(`${apiUrl}/v1/players/${connection.id}/${action}`, { method: "POST" });
+      if (!response.ok) throw new Error("Connection update failed");
+      const updated = await response.json() as PublicPlayerProfile;
+      setConnections((current) => connectionsTab === "following" && wasFollowing ? current.filter((item) => item.id !== connection.id) : current.map((item) => item.id === updated.id ? updated : item));
+      setSocialProfile((current) => current ? { ...current, following_count: Math.max(0, current.following_count + (wasFollowing ? -1 : 1)) } : current);
+    } catch {
+      setToast("Could not update this connection");
+      window.setTimeout(() => setToast(""), 2600);
+    } finally {
+      setProfileLoadingId(null);
     }
   }
 
@@ -953,6 +1020,8 @@ export default function Home() {
     setNotifications([]);
     setNotificationsOpen(false);
     setSettingsOpen(false);
+    setCalendarOpen(false);
+    setConnectionsOpen(false);
     window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
     setSocialProfile(null);
     setViewedProfile(null);
@@ -2110,6 +2179,7 @@ export default function Home() {
     setSettingsOpen(true);
     setNotificationsOpen(false);
     setCalendarOpen(false);
+    setConnectionsOpen(false);
     setViewedGroup(null);
     setViewedProfile(null);
   }
@@ -2123,6 +2193,7 @@ export default function Home() {
     setNotificationsOpen(true);
     setSettingsOpen(false);
     setCalendarOpen(false);
+    setConnectionsOpen(false);
     setViewedGroup(null);
     setViewedProfile(null);
     void loadNotifications();
@@ -2136,6 +2207,7 @@ export default function Home() {
     setSettingsOpen(false);
     setNotificationsOpen(false);
     setCalendarOpen(false);
+    setConnectionsOpen(false);
     setWorkspaceGroup(null);
     setRankingGame(null);
     setViewedGroup(null);
@@ -2147,6 +2219,18 @@ export default function Home() {
     setCalendarOpen(true);
     setSettingsOpen(false);
     setNotificationsOpen(false);
+    setConnectionsOpen(false);
+    setViewedGroup(null);
+    setViewedProfile(null);
+  }
+
+  function openConnections(tab: ConnectionsTab) {
+    setConnectionsTab(tab);
+    window.history.pushState({ courtMatePage: "connections" }, "", "#connections");
+    setConnectionsOpen(true);
+    setSettingsOpen(false);
+    setNotificationsOpen(false);
+    setCalendarOpen(false);
     setViewedGroup(null);
     setViewedProfile(null);
   }
@@ -2154,9 +2238,10 @@ export default function Home() {
   const requestedGames = myRequests.filter(({ request }) => request.status === "pending" || request.status === "waitlisted");
   const today = new Date().toISOString().slice(0, 10);
   const upcomingGames = Array.from(new Map([...approvedGames, ...myGroups.filter((group) => group.session_date >= today && group.status !== "completed" && group.status !== "cancelled")].map((game) => [game.id, game])).values()).sort((a, b) => `${a.session_date} ${a.start_time}`.localeCompare(`${b.session_date} ${b.start_time}`));
-  const ratedSports = sportOptions.filter((sport) => profile?.cmr_ratings?.[sport.value] != null);
-  const mostPlayedSport = [...ratedSports].sort((left, right) => (profile?.cmr_game_counts?.[right.value] ?? 0) - (profile?.cmr_game_counts?.[left.value] ?? 0))[0]?.value;
-  const profileSelectedSport = profileSport && ratedSports.some((sport) => sport.value === profileSport) ? profileSport : mostPlayedSport ?? "pickleball";
+  const activeSports = sportOptions.filter((sport) => profile?.cmr_ratings?.[sport.value] != null || (profile?.cmr_game_counts?.[sport.value] ?? 0) > 0);
+  const ratedSports = activeSports.filter((sport) => profile?.cmr_ratings?.[sport.value] != null);
+  const mostPlayedSport = [...activeSports].sort((left, right) => (profile?.cmr_game_counts?.[right.value] ?? 0) - (profile?.cmr_game_counts?.[left.value] ?? 0))[0]?.value;
+  const profileSelectedSport = profileSport && activeSports.some((sport) => sport.value === profileSport) ? profileSport : mostPlayedSport ?? "pickleball";
   const profileHistory = profile?.cmr_history?.[profileSelectedSport] ?? [];
   const currentCmr = profile?.cmr_ratings?.[profileSelectedSport];
   const profileRecentGames = socialProfile?.recent_games.filter((game) => game.sport === profileSelectedSport) ?? [];
@@ -2164,18 +2249,18 @@ export default function Home() {
   const unreadNotifications = notifications.filter((notification) => !notification.read).length;
 
   return (
-    <main className={`shell ${settingsOpen || notificationsOpen || calendarOpen ? "utility-page-open" : ""} ${workspaceGroup || viewedGroup ? "detail-page-open" : ""} ${rankingGame ? "ranking-page-open" : ""}`}>
+    <main className={`shell ${settingsOpen || notificationsOpen || calendarOpen || connectionsOpen ? "utility-page-open" : ""} ${workspaceGroup || viewedGroup ? "detail-page-open" : ""} ${rankingGame ? "ranking-page-open" : ""}`}>
       <nav className="nav">
-        <div className="brand" aria-label="CourtMate">CourtMate</div>
+        <div className="brand" aria-label="CourtMate"><img className="brand-icon" src="/courtmate-icon.png" alt="" /><span>CourtMate</span></div>
         <div className="nav-right"><button className={`about-link ${activeTab === "about" ? "active" : ""}`} onClick={() => selectTab("about")}>About</button><span className="location-pill"><span className="dot" /> Whitefield, Bengaluru</span>{user ? <><button className={`settings-button ${settingsOpen ? "active" : ""}`} type="button" onClick={openSettings} aria-label="Open preferences" title="Preferences"><SettingsIcon /></button><div className="notification-wrap">
           <button className={`notification-button ${notificationsOpen ? "active" : ""}`} type="button" onClick={openNotifications} aria-label={`Notifications${unreadNotifications ? `, ${unreadNotifications} unread` : ""}`} title="Notifications"><BellIcon />{unreadNotifications > 0 && <span className="notification-count">{unreadNotifications > 9 ? "9+" : unreadNotifications}</span>}</button>
         </div><span className="user-name">{user.displayName ?? user.email}</span><button className="avatar" onClick={() => selectTab("profile")} title="Open profile">{profile?.profile_image_url ? <img src={profile.profile_image_url} alt="" /> : initials(user.displayName ?? user.email ?? "CourtMate")}</button></> : <button className="sign-in-button" onClick={() => void signIn()}>{authReady ? "Sign in with Google" : "Loading auth"}</button>}</div>
       </nav>
       {user && <nav className="app-tabs" aria-label="CourtMate sections">
-        <button className={activeTab === "home" ? "active" : ""} onClick={() => selectTab("home")} title="Home">Home</button>
-        <button className={activeTab === "games" ? "active" : ""} onClick={() => selectTab("games")} title="Your games">Games</button>
-        <button className={activeTab === "tournaments" ? "active" : ""} onClick={() => selectTab("tournaments")} title="Tournaments">Tournaments</button>
-        <button className={activeTab === "social" ? "active" : ""} onClick={() => selectTab("social")} title="Social feed">Social</button>
+        <button className={activeTab === "home" ? "active" : ""} onClick={() => selectTab("home")} title="Home"><span className="app-tab-icon"><HomeIcon /></span><span>Home</span></button>
+        <button className={activeTab === "games" ? "active" : ""} onClick={() => selectTab("games")} title="Your games"><span className="app-tab-icon"><GamesIcon /></span><span>Games</span></button>
+        <button className={activeTab === "tournaments" ? "active" : ""} onClick={() => selectTab("tournaments")} title="Tournaments"><span className="app-tab-icon"><TournamentIcon /></span><span>Tournaments</span></button>
+        <button className={activeTab === "social" ? "active" : ""} onClick={() => selectTab("social")} title="Social feed"><span className="app-tab-icon"><SocialIcon /></span><span>Social</span></button>
       </nav>}
       {activeTab === "home" && !user && <section className="guest-home" aria-label="CourtMate introduction">
         <div className="guest-copy"><span className="eyebrow">PLAY BETTER TOGETHER</span><h1>Find a game.<br /><em>Find your people.</em></h1><p>CourtMate listens to how you want to play and finds groups that fit your pace, people, and place.</p><div className="guest-cta"><button className="guest-sign-in" type="button" onClick={() => void signIn()}>Continue with Google <span>↗</span></button><button className="guest-about" type="button" onClick={() => selectTab("about")}>How it works</button></div><div className="guest-trust"><span>VOICE + TEXT</span><span>BETTER-FIT GROUPS</span><span>CMR BY PLAYING</span></div></div>
@@ -2228,13 +2313,14 @@ export default function Home() {
       </section>}
 
       {activeTab === "profile" && !viewedProfile && <section className="page-view profile-page">
-        {user && profile && <section className="profile-photo-card"><div className="profile-photo-avatar profile-avatar-editor">{profile.profile_image_url ? <img src={profile.profile_image_url} alt={`${profile.display_name} profile`} /> : initials(profile.display_name)}<label className="profile-avatar-edit" title="Change profile photo"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadProfilePicture(file); event.currentTarget.value = ""; }} disabled={profilePictureUploading} /><span aria-hidden="true">{profilePictureUploading ? "..." : "✎"}</span></label></div><div className="profile-photo-copy"><strong>{profile.display_name}</strong><small className="profile-bio-line">{profile.bio?.trim() || "Add a short bio"}</small>{socialProfile && <div className="profile-photo-social-stats"><button type="button" onClick={() => void viewPlayerProfile(user.uid)}><strong>{socialProfile.followers_count}</strong><span>Followers</span></button><button type="button" onClick={() => void viewPlayerProfile(user.uid)}><strong>{socialProfile.following_count}</strong><span>Following</span></button><span><strong>{Math.round(profile.reliability * 100)}%</strong><span>Reliability</span></span></div>}<div className="profile-photo-actions"><button type="button" className="profile-edit-bio-button" onClick={() => setBioEditing((editing) => !editing)}>{bioEditing ? "Cancel" : "Edit bio"}</button>{profile.profile_image_url && <button type="button" className="profile-remove-photo" onClick={() => void removeProfilePicture()} disabled={profilePictureUploading}>Use initials</button>}<button type="button" className="profile-calendar-inline-button" onClick={openProfileCalendar}><span className="profile-calendar-inline-icon">▦</span><span>Activity calendar</span></button></div>{bioEditing && <form className="profile-bio-inline-editor" onSubmit={saveBio}><textarea value={profileDraft.bio} maxLength={240} placeholder="A line about how you like to play..." onChange={(event) => setProfileDraft({ ...profileDraft, bio: event.target.value })} aria-label="Profile bio" autoFocus /><button className="dark-button" type="submit" disabled={bioSaving}>{bioSaving ? "Saving..." : "Save bio"}<span>→</span></button></form>}</div></section>}
-        {user && profile && <ProfileSportOverview profile={profile} sports={ratedSports} selectedSport={profileSelectedSport} onSelect={setProfileSport} />}
-        {user && profile && <section className="profile-insights">{!ratedSports.length && <div className="cmr-no-ratings"><strong>No sport ratings yet.</strong><span>Complete a game and submit feedback to build your first CMR.</span></div>}{socialProfile && <div className="social-stats"><button type="button" onClick={() => void viewPlayerProfile(user.uid)}><strong>{socialProfile.followers_count}</strong><span>Followers</span></button><button type="button" onClick={() => void viewPlayerProfile(user.uid)}><strong>{socialProfile.following_count}</strong><span>Following</span></button><span><strong>{Math.round(profile.reliability * 100)}%</strong><span>Reliability</span></span></div>}{socialProfile && <div className="profile-activity-grid"><section className="profile-activity-card"><div className="profile-activity-heading"><div><span className="kicker">ACTIVITY</span><h2>Show up streak</h2></div><span>Last 12 weeks</span></div><ActivityHeatmap activity={socialProfile.activity_by_date} /></section><section className="profile-activity-card"><div className="profile-activity-heading"><div><span className="kicker">RECENT GAMES</span><h2>{sportLabel(profileSelectedSport)} sessions</h2></div><span>{profileRecentGames.length} shown</span></div><RecentGames games={socialProfile.recent_games} sport={profileSelectedSport} /></section></div>}{ratedSports.length > 0 && <><p className="cmr-summary">Current {sportLabel(profileSelectedSport)} CMR: <strong>{currentCmr?.toFixed(1) ?? "not built"} / 100</strong><span>{currentCmr ? ` · ${cmrLevelForRating(currentCmr)}` : " · Search by level to get started"}</span></p>{profileHistory.length ? <><div className="cmr-chart-heading"><div><span className="kicker">CMR JOURNEY · {sportLabel(profileSelectedSport).toUpperCase()}</span><h2>Rating trajectory</h2></div><span>{profileHistory.length} game{profileHistory.length === 1 ? "" : "s"}</span></div><div className="cmr-chart"><svg viewBox="0 0 560 190" role="img" aria-label={`CMR trend for ${sportLabel(profileSelectedSport)}`}><line x1="28" y1="28" x2="28" y2="162" /><line x1="28" y1="162" x2="532" y2="162" /><polyline points={cmrGraphPoints(profileHistory)} fill="none" /><g>{profileHistory.filter((point) => point.rating != null).map((point, index, ratedHistory) => { const x = ratedHistory.length === 1 ? 280 : 28 + (index * 504) / (ratedHistory.length - 1); const y = 162 - ((Math.max(0, Math.min(100, point.rating ?? 0)) * 134) / 100); return <circle key={point.session_id} cx={x} cy={y} r="5"><title>{`${point.group_name}: ${(point.rating ?? 0).toFixed(1)} CMR (${(point.delta ?? 0) >= 0 ? "+" : ""}${(point.delta ?? 0).toFixed(1)})`}</title></circle>; })}</g></svg><div className="cmr-chart-scale"><span>100</span><span>0</span></div></div><div className="cmr-history-list">{profileHistory.slice().reverse().map((point) => <article className="cmr-history-row" key={point.session_id}><div><strong>{point.group_name}</strong><small>{point.session_date} · {point.game_rating != null ? `game rating ${point.game_rating.toFixed(1)} / 100` : "awaiting player feedback"}</small></div><div>{point.rating != null ? <b>{point.rating.toFixed(1)}</b> : <b>--</b>}{point.delta != null ? <span className={`cmr-history-change ${point.delta >= 0 ? "positive" : "negative"}`}><span aria-hidden="true">{point.delta > 0 ? "↑" : point.delta < 0 ? "↓" : "•"}</span>{point.delta >= 0 ? "+" : ""}{point.delta.toFixed(1)}</span> : <span className="cmr-history-change pending"><span aria-hidden="true">•</span>Pending</span>}</div></article>)}</div></> : <div className="profile-empty-insight"><strong>Your {sportLabel(profileSelectedSport)} CMR starts after your first completed game.</strong><p>CMR changes will appear here after scores and player feedback are confirmed.</p></div>}</>}</section>}
+        {user && profile && <section className="profile-photo-card"><div className="profile-photo-avatar profile-avatar-editor">{profile.profile_image_url ? <img src={profile.profile_image_url} alt={`${profile.display_name} profile`} /> : initials(profile.display_name)}<label className="profile-avatar-edit" title="Change profile photo"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadProfilePicture(file); event.currentTarget.value = ""; }} disabled={profilePictureUploading} /><span aria-hidden="true">{profilePictureUploading ? "..." : "✎"}</span></label></div><div className="profile-photo-copy"><strong>{profile.display_name}</strong><small className="profile-bio-line">{profile.bio?.trim() || "Add a short bio"}</small>{socialProfile && <div className="profile-photo-social-stats"><button type="button" onClick={() => openConnections("followers")}><strong>{socialProfile.followers_count}</strong><span>Followers</span></button><button type="button" onClick={() => openConnections("following")}><strong>{socialProfile.following_count}</strong><span>Following</span></button><span><strong>{Math.round(profile.reliability * 100)}%</strong><span>Reliability</span></span></div>}<div className="profile-photo-actions"><button type="button" className="profile-edit-bio-button" onClick={() => setBioEditing((editing) => !editing)}>{bioEditing ? "Cancel" : "Edit bio"}</button>{profile.profile_image_url && <button type="button" className="profile-remove-photo" onClick={() => void removeProfilePicture()} disabled={profilePictureUploading}>Use initials</button>}<button type="button" className="profile-calendar-inline-button" onClick={openProfileCalendar}><span className="profile-calendar-inline-icon">▦</span><span>Activity calendar</span></button></div>{bioEditing && <form className="profile-bio-inline-editor" onSubmit={saveBio}><textarea value={profileDraft.bio} maxLength={240} placeholder="A line about how you like to play..." onChange={(event) => setProfileDraft({ ...profileDraft, bio: event.target.value })} aria-label="Profile bio" autoFocus /><button className="dark-button" type="submit" disabled={bioSaving}>{bioSaving ? "Saving..." : "Save bio"}<span>→</span></button></form>}</div></section>}
+        {user && profile && <ProfileSportOverview profile={profile} sports={activeSports} selectedSport={profileSelectedSport} onSelect={setProfileSport} />}
+        {user && profile && <section className="profile-insights">{!ratedSports.length && <div className="cmr-no-ratings"><strong>No sport ratings yet.</strong><span>Complete a game and submit feedback to build your first CMR.</span></div>}{socialProfile && <div className="social-stats"><button type="button" onClick={() => openConnections("followers")}><strong>{socialProfile.followers_count}</strong><span>Followers</span></button><button type="button" onClick={() => openConnections("following")}><strong>{socialProfile.following_count}</strong><span>Following</span></button><span><strong>{Math.round(profile.reliability * 100)}%</strong><span>Reliability</span></span></div>}{socialProfile && <div className="profile-activity-grid"><section className="profile-activity-card"><div className="profile-activity-heading"><div><span className="kicker">ACTIVITY</span><h2>Show up streak</h2></div><span>Last 12 weeks</span></div><ActivityHeatmap activity={socialProfile.activity_by_date} /></section><section className="profile-activity-card"><div className="profile-activity-heading"><div><span className="kicker">RECENT GAMES</span><h2>{sportLabel(profileSelectedSport)} sessions</h2></div><span>{profileRecentGames.length} shown</span></div><RecentGames games={socialProfile.recent_games} sport={profileSelectedSport} /></section></div>}{ratedSports.length > 0 && <><p className="cmr-summary">Current {sportLabel(profileSelectedSport)} CMR: <strong>{currentCmr?.toFixed(1) ?? "not built"} / 100</strong><span>{currentCmr ? ` · ${cmrLevelForRating(currentCmr)}` : " · Search by level to get started"}</span></p>{profileHistory.length ? <><div className="cmr-chart-heading"><div><span className="kicker">CMR JOURNEY · {sportLabel(profileSelectedSport).toUpperCase()}</span><h2>Rating trajectory</h2></div><span>{profileHistory.length} game{profileHistory.length === 1 ? "" : "s"}</span></div><div className="cmr-chart"><svg viewBox="0 0 560 190" role="img" aria-label={`CMR trend for ${sportLabel(profileSelectedSport)}`}><line x1="28" y1="28" x2="28" y2="162" /><line x1="28" y1="162" x2="532" y2="162" /><polyline points={cmrGraphPoints(profileHistory)} fill="none" /><g>{profileHistory.filter((point) => point.rating != null).map((point, index, ratedHistory) => { const x = ratedHistory.length === 1 ? 280 : 28 + (index * 504) / (ratedHistory.length - 1); const y = 162 - ((Math.max(0, Math.min(100, point.rating ?? 0)) * 134) / 100); return <circle key={point.session_id} cx={x} cy={y} r="5"><title>{`${point.group_name}: ${(point.rating ?? 0).toFixed(1)} CMR (${(point.delta ?? 0) >= 0 ? "+" : ""}${(point.delta ?? 0).toFixed(1)})`}</title></circle>; })}</g></svg><div className="cmr-chart-scale"><span>100</span><span>0</span></div></div><div className="cmr-history-list">{profileHistory.slice().reverse().map((point) => <article className="cmr-history-row" key={point.session_id}><div><strong>{point.group_name}</strong><small>{point.session_date} · {point.game_rating != null ? `game rating ${point.game_rating.toFixed(1)} / 100` : "awaiting player feedback"}</small></div><div>{point.rating != null ? <b>{point.rating.toFixed(1)}</b> : <b>--</b>}{point.delta != null ? <span className={`cmr-history-change ${point.delta >= 0 ? "positive" : "negative"}`}><span aria-hidden="true">{point.delta > 0 ? "↑" : point.delta < 0 ? "↓" : "•"}</span>{point.delta >= 0 ? "+" : ""}{point.delta.toFixed(1)}</span> : <span className="cmr-history-change pending"><span aria-hidden="true">•</span>Pending</span>}</div></article>)}</div></> : <div className="profile-empty-insight"><strong>Your {sportLabel(profileSelectedSport)} CMR starts after your first completed game.</strong><p>CMR changes will appear here after scores and player feedback are confirmed.</p></div>}</>}</section>}
         {!user && <div className="page-empty"><strong>Sign in to manage your profile.</strong><p>Your rating and preferences are saved securely to your CourtMate profile.</p><button className="dark-button" onClick={() => void signIn()}>Sign in with Google <span>→</span></button></div>}
         {user && profile && <form id="profile-preferences" className="profile-form" onSubmit={saveProfile}><div className="profile-form-grid"><label><span>Locality label</span><input value={profileDraft.area} onChange={(event) => setProfileDraft({ ...profileDraft, area: event.target.value })} placeholder="e.g. Whitefield" /></label><label><span>Travel radius (km)</span><input type="number" min="1" max="100" step="1" value={profileDraft.travel_radius_km} onChange={(event) => setProfileDraft({ ...profileDraft, travel_radius_km: event.target.value })} placeholder="10" /></label><label className="location-field"><span>Map coordinates</span><button className="location-button" type="button" onClick={useCurrentLocation}>{profileDraft.latitude != null && profileDraft.longitude != null ? "Location saved" : "Use my current location"}<span>⌖</span></button></label></div><label><span>How do you like to play?</span><select value={profileDraft.style} onChange={(event) => setProfileDraft({ ...profileDraft, style: event.target.value as ProfileDraft["style"] })}><option value="casual">Casual and easy-going</option><option value="social">Social and chatty</option><option value="competitive">Competitive and focused</option></select></label><fieldset><legend>When are you usually available?</legend><div className="availability-grid">{availabilityOptions.map((slot) => <label className={`availability-option ${profileDraft.availability.includes(slot) ? "selected" : ""}`} key={slot}><input type="checkbox" checked={profileDraft.availability.includes(slot)} onChange={() => toggleAvailability(slot)} /><span>{slot}</span></label>)}</div></fieldset><div className="profile-form-actions"><button className="dark-button" type="submit">Save profile <span>→</span></button><button className="text-button" type="button" onClick={() => void signOutUser()}>Sign out</button></div></form>}
       </section>}
 
+      {connectionsOpen && user && <section className="utility-page connections-page" aria-labelledby="connections-title"><div className="connections-header"><button className="utility-back-button" type="button" onClick={closeUtilityPage} aria-label="Go back">←</button><h1 id="connections-title">Connections</h1></div><div className="connections-tabs" role="tablist" aria-label="Connections"><button type="button" className={connectionsTab === "following" ? "active" : ""} onClick={() => setConnectionsTab("following")} role="tab" aria-selected={connectionsTab === "following"}>Following</button><button type="button" className={connectionsTab === "followers" ? "active" : ""} onClick={() => setConnectionsTab("followers")} role="tab" aria-selected={connectionsTab === "followers"}>Followers</button></div>{connectionsLoading ? <div className="connections-loader"><TennisBallLoader label="Loading connections" detail="Finding your people..." /></div> : connectionsError ? <div className="utility-empty"><h2>Could not load connections</h2><p>Try again and we&apos;ll fetch your latest following list.</p><button className="dark-button" type="button" onClick={() => void loadConnections(connectionsTab)}>Try again <span>→</span></button></div> : connections.length ? <div className="connections-list" role="tabpanel">{connections.map((connection) => <article className="connection-row" key={connection.id}><button type="button" className="connection-profile" onClick={() => void viewPlayerProfile(connection.id)} disabled={profileLoadingId === connection.id} aria-label={`View ${connection.display_name}'s profile`}><span className="connection-avatar">{connection.profile_image_url ? <img src={connection.profile_image_url} alt="" /> : initials(connection.display_name)}</span><span><strong>{connection.display_name}</strong><small>{connection.area || "CourtMate player"}</small></span></button><button type="button" className={`connection-follow-button ${connection.is_following ? "following" : ""}`} onClick={() => void toggleConnection(connection)} disabled={profileLoadingId === `connection-${connection.id}`}>{profileLoadingId === `connection-${connection.id}` ? "..." : connection.is_following ? "Following" : "Follow"}</button></article>)}</div> : <div className="utility-empty"><h2>No {connectionsTab} yet</h2><p>{connectionsTab === "following" ? "Follow players from games and social to see them here." : "When players follow you, they&apos;ll appear here."}</p></div>}</section>}
       {notificationsOpen && user && <section className="utility-page notifications-page" aria-labelledby="notifications-title"><div className="utility-page-header"><button className="utility-back-button" type="button" onClick={closeUtilityPage} aria-label="Go back">←</button><div><span className="kicker">COURTMATE ALERTS</span><h1 id="notifications-title">Notifications</h1><p>Requests, follows, and games that fit.</p></div><button className="utility-refresh-button" type="button" onClick={() => void loadNotifications()}>Refresh</button></div>{notifications.length ? <div className="utility-notification-list">{notifications.map((notification) => <div className={`notification-item ${notification.read ? "" : "unread"}`} key={notification.id}><button type="button" className="notification-item-main" onClick={() => openNotification(notification)}><span className="notification-mark"><BellIcon /></span><span><strong>{notification.title}</strong><small>{notification.message}</small><em>{new Date(notification.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</em></span></button>{notification.kind === "join_request" && notification.request_id && <div className="notification-actions"><button type="button" onClick={(event) => { event.stopPropagation(); void decideNotificationRequest(notification, "approved"); }}>Confirm</button><button type="button" onClick={(event) => { event.stopPropagation(); void decideNotificationRequest(notification, "declined"); }}>Decline</button></div>}</div>)}</div> : <div className="utility-empty"><span className="utility-empty-icon"><BellIcon /></span><h2>No alerts yet</h2><p>We&apos;ll let you know when a game fits your preferences or someone requests to join.</p></div>}</section>}
       {settingsOpen && user && profile && <section className="utility-page settings-page" aria-labelledby="settings-title"><div className="utility-page-header"><button className="utility-back-button" type="button" onClick={closeUtilityPage} aria-label="Go back">←</button><div><span className="kicker">PREFERENCES</span><h1 id="settings-title">Your play setup</h1><p>Set the details CourtMate uses to find better games.</p></div></div><form className="settings-form" onSubmit={saveProfile}><div className="profile-form-grid"><label><span>Age</span><input type="number" min="13" max="100" step="1" value={profileDraft.age} onChange={(event) => setProfileDraft({ ...profileDraft, age: event.target.value })} placeholder="Optional" /></label><label><span>Gender</span><select value={profileDraft.gender} onChange={(event) => setProfileDraft({ ...profileDraft, gender: event.target.value as ProfileDraft["gender"] })}><option value="">Prefer not to say</option>{genderOptions.map((gender) => <option value={gender.value} key={gender.value}>{gender.label}</option>)}</select></label><label><span>Locality</span><input value={profileDraft.area} onChange={(event) => setProfileDraft({ ...profileDraft, area: event.target.value })} placeholder="e.g. Whitefield" /></label><label><span>Travel radius (km)</span><input type="number" min="1" max="100" step="1" value={profileDraft.travel_radius_km} onChange={(event) => setProfileDraft({ ...profileDraft, travel_radius_km: event.target.value })} placeholder="10" /></label><label className="location-field"><span>Map coordinates</span><button className="location-button" type="button" onClick={useCurrentLocation}>{profileDraft.latitude != null && profileDraft.longitude != null ? "Location saved" : "Use current location"}<span>⌖</span></button></label></div><fieldset className="settings-preference-fieldset"><legend>Who do you like to play with?</legend><label><span>Age range</span><select value={profileDraft.preferred_age_range} onChange={(event) => setProfileDraft({ ...profileDraft, preferred_age_range: event.target.value as AgeRange })}>{ageRangeOptions.map((range) => <option value={range.value} key={range.value}>{range.label}</option>)}</select></label><span className="settings-hint">Leave gender unselected to keep every group in the mix.</span><div className="gender-preference-grid">{genderOptions.map((gender) => <label className={`availability-option ${profileDraft.preferred_genders.includes(gender.value) ? "selected" : ""}`} key={gender.value}><input type="checkbox" checked={profileDraft.preferred_genders.includes(gender.value)} onChange={() => togglePreferredGender(gender.value)} /><span>{gender.label}</span></label>)}</div></fieldset><label><span>Play style</span><select value={profileDraft.style} onChange={(event) => setProfileDraft({ ...profileDraft, style: event.target.value as ProfileDraft["style"] })}><option value="casual">Casual and easy-going</option><option value="social">Social and chatty</option><option value="competitive">Competitive and focused</option></select></label><fieldset><legend>Usual availability</legend><div className="availability-grid">{availabilityOptions.map((slot) => <label className={`availability-option ${profileDraft.availability.includes(slot) ? "selected" : ""}`} key={slot}><input type="checkbox" checked={profileDraft.availability.includes(slot)} onChange={() => toggleAvailability(slot)} /><span>{slot}</span></label>)}</div></fieldset><div className="profile-form-actions"><button className="dark-button" type="submit">Save preferences <span>→</span></button></div></form></section>}
       {settingsOpen && user && profile && <section className="settings-privacy-panel" aria-labelledby="privacy-settings-title"><div className="settings-privacy-heading"><div><span className="kicker">PRIVACY</span><h2 id="privacy-settings-title">Who can see your play?</h2></div><span>Applies to new games</span></div><form className="settings-privacy-form" onSubmit={saveProfile}><label className="settings-toggle-row"><span><strong>Private profile</strong><small>Hide your profile from recommendations and public player pages.</small></span><input type="checkbox" checked={profileDraft.is_profile_private} onChange={(event) => setProfileDraft({ ...profileDraft, is_profile_private: event.target.checked })} /><span className="settings-switch" aria-hidden="true" /></label><label><span>Default game session visibility</span><select value={profileDraft.default_session_visibility} onChange={(event) => setProfileDraft({ ...profileDraft, default_session_visibility: event.target.value as SessionVisibility })}><option value="public">Everyone nearby</option><option value="followers">Followers of the organizer</option><option value="private">Only players in the game</option></select></label><p className="settings-hint">This controls who can discover the games you create. You can still share a private game directly.</p><button className="dark-button" type="submit">Save privacy settings <span>→</span></button></form></section>}

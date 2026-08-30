@@ -1,120 +1,59 @@
 # CourtMate Technical Design
 
 **Status:** Hackathon MVP
-**Frontend:** Next.js 15, React, TypeScript, PWA
+**Frontend:** Next.js 15, React, TypeScript, responsive PWA
 **Backend:** Python FastAPI on Cloud Run
-**Cloud:** Firebase Auth, Firestore native vector search, Vertex AI Gemini Embeddings, Cloud Storage, Gemini API, optional Google Maps Geocoding
+**Data and AI:** Firebase Auth, Firestore, Cloud Storage, Gemini, Firestore native vector search with Vertex AI embeddings
 
-## 1. Design Principles
+## 1. Boundaries
 
-1. Gemini handles natural language, voice-to-text input, explanations, conversational follow-ups, and image interpretation.
-2. Python remains authoritative for eligibility, ranking, permissions, capacity, lifecycle, score validation, and CMR updates.
-3. The home journey is chat-first. Structured forms are not used for game creation or score entry.
-4. Every AI result is bounded by stored data and validated before state changes.
-5. The same API contract works with Firestore in deployment and an in-memory repository for local tests.
+The Next.js client owns presentation, voice capture, browser history, and optimistic interaction states. FastAPI is authoritative for authentication, privacy, authorization, matching, capacity, lifecycle, scores, feedback, CMR, social visibility, and tournament standings. Gemini parses language and explains verified records; it never mutates Firestore or decides access.
 
-## 2. Architecture
+The same repository protocol supports Firestore in deployment and an in-memory repository for local tests. Existing response shapes for search, groups, requests, tournaments, feedback, and performance remain compatible with the client.
 
-```text
-Next.js PWA
-  | Firebase ID token
-  v
-FastAPI on Cloud Run
-  |-- Gemini adapter (google-genai)
-  |-- embedding provider and sanitized vector indexer
-  |-- deterministic matcher and CMR engine
-  |-- authorization and state transitions
-  |-- repository protocol
-       |-- FirestoreRepository
-       |-- InMemoryRepository
+## 2. Chat And Search
 
-Firebase Auth: Google identity
-Cloud Storage: profile photos and wearable screenshots
-Playo/Hudle/venue URL: external booking hand-off
-```
+`POST /v1/sessions/search` accepts natural language, optional prior context, and an optional mode. The flow is:
 
-The browser never receives the Gemini secret. Cloud Run uses environment configuration and service credentials. Local development can use an AI Studio API key; production should use a managed secret and Vertex AI credentials when enabled.
+1. A deterministic scope guard accepts racket-sport discovery, courts, players, groups, tournaments, score/feedback entry, and the authenticated player’s performance. Other requests receive a short redirect.
+2. Gemini extracts strict intent JSON: sport, date, time, locality, skill range, style, tournament intent, and requested action. A deterministic parser is the fallback.
+3. Python applies hard filters for sport, status, visibility, capacity, authorization, date/time, skill, and area or travel radius. Similarity never replaces these checks.
+4. The normalized request is embedded with `gemini-embedding-001`, `output_dimensionality=768`, and `RETRIEVAL_QUERY`. Firestore KNN uses cosine distance and metadata pre-filters to retrieve up to `COURTMATE_MAX_VECTOR_RESULTS` candidates.
+5. Current session or tournament records are fetched again in batches. Python rechecks closed, full, cancelled, completed, private, out-of-range, or skill-incompatible records, then ranks by skill, time, distance, style, reliability, familiarity, and prior satisfaction.
+6. Gemini receives only verified records, allowed actions, and the parsed intent. It returns a concise grounded message and card-compatible IDs. If no result is valid, it returns a conversational creation proposal, never a fabricated match.
 
-## 3. Chat and Search Flow
+When embeddings are disabled or unavailable, the deterministic matcher remains usable. Search timing is exposed through server logs and `X-Response-Time-Ms`; read-only status refreshes do not rebuild CMR or embeddings.
 
-`POST /v1/sessions/search` receives a natural-language query and optional sport/mode.
+## 3. Vector Corpus
 
-1. The deterministic scope guard rejects unrelated questions before any retrieval.
-2. `GeminiIntentParser` attempts structured `SearchIntent` extraction.
-3. If Gemini is unavailable or invalid, the deterministic parser extracts supported sport, locality, date, time, skill range, and style. It handles phrases such as "around me," "this Saturday," "tomorrow," numeric ranges, and clock times without confusing time with skill.
-4. The query is embedded with Vertex AI `gemini-embedding-001` at 768 dimensions and searched against sanitized `search_documents` using Firestore KNN cosine search. Filters include source type, sport when explicit, visibility, and active status.
-5. Returned source IDs are re-read from Firestore. Localities are geocoded through Google Maps when configured, with Bangalore fallback coordinates.
-6. `search_sessions` filters by sport, open capacity, date, time overlap, coordinate distance/travel radius, skill overlap, and exact style when requested.
-7. Python ranks eligible sessions and produces evidence such as skill fit, distance, availability, reliability, and familiarity. Gemini receives only those verified records for a concise grounded explanation.
-8. If embeddings or the vector index are unavailable, the bounded deterministic matcher remains the fallback. No match returns a `GroupProposal`, not a fabricated group.
+`search_documents` stores `id`, `source_type`, `source_id`, canonical `content`, a 768-dimensional `embedding`, filter metadata, `embedding_model`, and `embedding_version`. Canonicalizers generate text from structured sessions, tournaments, public player summaries, venues, and FAQ/policy records. They must use safe optional fields and never assume a tournament summary exists.
 
-`POST /v1/me/performance-chat` handles CMR, completed games, activity, and uploaded wearable questions. Out-of-scope questions receive a safe redirect.
+Index only open/upcoming public games, recurring group profiles, upcoming tournaments, public player summaries, venue information, and approved help content. Exclude contact details, exact home coordinates, private preferences, auth material, private conversations, and unauthorized membership data.
 
-## 4. Operational Data
+`python -m backend.rebuild_vector_index` idempotently reads source records, embeds canonical text, upserts current documents, deletes obsolete/cancelled entries, and records the model version. New or edited sessions and tournaments attempt synchronous upserts; operational writes succeed if indexing fails and the next rebuild repairs the index. A future production worker can use Pub/Sub and Cloud Run.
 
-Firestore collections:
+## 4. Data And Workflows
 
-- `players`: identity, approximate location, sport signals, reliability, CMR history, follows.
-- `sessions`: sport, group name, coordinates, schedule, skill band, style, capacity, confirmed members, waitlist, lifecycle, external booking URL.
-- `join_requests`: pending, approved, declined, waitlisted, withdrawn.
-- `chat_posts`: member posts and parsed match-result metadata.
-- `feedback`: fun, fairness, qualitative skill feedback, teams, scores, return intent.
-- `notifications`: game matches, requests, approvals, follows, and event alerts.
-- `follows`, `activity_proofs`, `social_posts`, `social_comments`.
-- `tournaments`, `tournament_registrations`, `tournament_matches`.
-- `search_documents`: sanitized projections for public sessions, tournaments, players, venues, and CourtMate FAQ content, including a 768-dimensional embedding and filter metadata. It never stores contact details, exact home coordinates, private preferences, or private group chat.
+Firestore collections include `players`, `sessions`, `join_requests`, `chat_posts`, `feedback`, `notifications`, `follows`, `social_posts`, `social_comments`, `activity_proofs`, `tournaments`, `tournament_registrations`, `tournament_matches`, and `search_documents`.
 
-Coordinates support matching but are not public profile data. Profile photos and activity images use authenticated cloud-storage upload flows; initials are rendered when no photo exists.
+Game states are `open`, `full`, `in_progress`, `completed`, and `cancelled`. Requests are `pending`, `approved`, `declined`, `waitlisted`, or `withdrawn`; capacity rules can promote the next waitlisted player. Group chat posts may contain parsed teams and scores. Participants confirm or dispute a result before CMR changes. Feedback is qualitative and score evidence is session-scoped.
 
-## 5. Matching and CMR
+CMR is calculated independently per supported sport on a 0-100 scale. Confirmed results update ratings, game counts, history, and deltas. Performance chat retrieves only the authenticated player’s own history, completed games, feedback, and wearable proofs.
 
-Python hard filters first, then ranks with starting weights: 35% skill, 25% time or saved availability, 20% distance/area, 10% style, and 10% member reliability. Replacement candidates use skill, distance, reliability, and style. The weights are configuration, not model output.
+Tournaments use request-based registration and editable fixtures. Organizer or authorized match players submit scores; standings and draw data are recalculated from stored matches after every accepted edit. Social session activity and share-card generation use the verified leaderboard.
 
-External DUPR or self-reported skill can seed compatibility. CMR is separate per sport and displayed from 0-100. Completed-game feedback and confirmed scores update `cmr_ratings`, `cmr_game_counts`, and `cmr_history`; each history point stores rating and delta. CMR is a community signal, not an official DUPR replacement.
+## 5. Client Navigation And Privacy
 
-## 6. Group and Score State
+The client uses browser-history pages, not modal overlays, for settings, notifications, calendar, Connections, and public profiles. Connections calls `GET /v1/me/following` and `GET /v1/me/followers`, with profile navigation and follow/unfollow actions. The mobile sport selector is a horizontal list sourced only from the six CourtMate sports; missing profile photos render initials.
 
-Session states are `open`, `full`, `in_progress`, `completed`, and `cancelled`. Requests and waitlist promotion are authorized by the organizer and capacity rules. Members can post chat updates and natural score statements. The API parses teams and score, sets `pending_confirmation`, and requires participating confirmation before CMR refresh. A disputed result does not affect CMR.
+Voice input uses browser speech recognition and feeds the same chat pipeline as typing. Home supports active-game score selection and post-game feedback mode. Social media uploads require a tagged game for session photos/videos; profile and wearable images use protected Cloud Storage URLs.
 
-## 7. Tournament Design
+## 6. API, Security, And Operations
 
-`POST /v1/tournaments/{id}/fixtures` generates a 2-16 player round-robin draw. `POST /v1/tournaments/{id}/matches/{match_id}/score` accepts a score from a match player or organizer. Player submissions can require opponent confirmation; organizers can correct completed scores. `GET /v1/tournaments/{id}` recalculates standings from stored matches, so wins, losses, points, ranks, and the frontend Draw sheet stay current after every update.
+Core routes include `/health`, `/v1/me`, `/v1/me/profile`, `/v1/me/following`, `/v1/me/followers`, `/v1/sessions/search`, `/v1/groups`, `/v1/sessions/{id}/join`, `/v1/sessions/{id}/leave`, `/v1/sessions/{id}/group`, `/v1/sessions/{id}/chat`, `/v1/sessions/{id}/feedback`, `/v1/sessions/{id}/leaderboard`, `/v1/me/performance-chat`, `/v1/social/*`, and `/v1/tournaments/*`. Search may return a non-sensitive retrieval trace with mode, candidate count, grounded result count, and embedding version; embeddings never reach the browser.
 
-## 8. Security and Guardrails
+FastAPI verifies Firebase ID tokens and enforces organizer, member, player, follower, and tournament permissions. Vector similarity is not an authorization boundary. Exact home coordinates and private group data are never exposed. Cloud Run uses Application Default Credentials with `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION=global`, `GOOGLE_GENAI_USE_VERTEXAI=true`, and Vertex AI/Firestore service roles. Set a billing alert and caps such as `COURTMATE_MAX_VECTOR_RESULTS=20`, `COURTMATE_MAX_SESSION_READS=100`, and `COURTMATE_MAX_PLAYER_READS=500`.
 
-- Firebase ID tokens are verified server-side.
-- Organizer-only, member-only, player-only, and tournament permissions are enforced in FastAPI.
-- Gemini cannot override authorization, capacity, privacy, dates, score rules, or stored evidence.
-- Vector similarity is not an authorization boundary. Source records are fetched again and checked against the authenticated player before they are returned.
-- Screenshot analysis accepts only approved HTTPS cloud-storage URLs and extracts only visible metrics.
-- Exact home coordinates and private group content are not exposed.
-- Firestore read limits and Cloud Run scale-to-zero keep the hackathon deployment affordable.
+## 7. Verification
 
-## 9. API Surface
-
-Core routes include:
-
-```text
-GET  /health
-GET  /v1/me
-POST /v1/me/profile
-POST /v1/sessions/search
-POST /v1/me/performance-chat
-POST /v1/groups
-POST /v1/sessions/{id}/join
-POST /v1/sessions/{id}/leave
-GET  /v1/sessions/{id}/group
-GET/POST /v1/sessions/{id}/chat
-POST /v1/sessions/{id}/feedback
-GET  /v1/sessions/{id}/leaderboard
-GET/POST /v1/tournaments...
-```
-
-`POST /v1/sessions/search` keeps its existing recommendation and group-proposal contract and adds a non-sensitive `retrieval` trace containing the retrieval mode, candidate count, grounded result count, and embedding version. Embeddings are never returned to the browser.
-
-## 10. Verification and Deployment
-
-Run `python -m unittest discover -s tests` for API, matching, lifecycle, CMR, waitlist, and tournament coverage. Run `npm run build` for the PWA production build. Use `COURTMATE_DATASTORE=memory` for isolated local development and `COURTMATE_DATASTORE=firestore` on Cloud Run. Required configuration includes Firebase project identity, allowed CORS origins, Gemini credentials, Google Maps key if geocoding is enabled, and Firestore service access.
-Run `python -m backend.rebuild_vector_index` after seeding Firestore and create the `search_documents.embedding` vector index with 768 dimensions and cosine distance. Vector tests use a fake embedding provider and do not require cloud credentials.
-
-Deferred infrastructure includes Pub/Sub reminders, BigQuery/Looker analytics, native push notifications, first-class Venue/Event entities, bracket tournaments, and a general-purpose agent tool loop. These should follow evidence from the chat-to-game and organizer workflows.
+Run `npm run build`, `python -m unittest discover -s tests`, and vector tests with a fake embedding provider. Evaluate 40-60 queries covering exact and paraphrased searches, voice language, tournaments, follow-ups, no-match creation, score/feedback, performance, and unrelated prompts. Require relevant top-five retrieval, no closed/full false results, grounded responses, correct actions, and out-of-scope rejection.
