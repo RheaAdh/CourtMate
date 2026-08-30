@@ -40,7 +40,7 @@ Set `GOOGLE_CLOUD_PROJECT` and authenticate with Application Default Credentials
 gcloud auth application-default login
 ```
 
-The API uses Firestore when `COURTMATE_DATASTORE=firestore`. Set `COURTMATE_DATASTORE=memory` for an offline local run. With `GEMINI_API_KEY`, intent extraction and grounded search explanation use the model in `GEMINI_MODEL` (default `gemini-3.6-flash`) through the server-side adapter. Gemini receives only parsed intent and verified records; Python remains the authority for sport, skill, date, area, time, and open-slot eligibility. If Gemini or Vertex AI embeddings are unavailable, the API falls back to deterministic parsing, retrieval, and decisions.
+The API uses Firestore when `COURTMATE_DATASTORE=firestore`. Set `COURTMATE_DATASTORE=memory` for an offline local run. With `GEMINI_API_KEY`, intent extraction uses the model in `GEMINI_MODEL` (default `gemini-3.6-flash`) through the server-side adapter. Search summaries are deterministic by default so a search does not wait for a second Gemini generation call; set `COURTMATE_GROUNDED_RESPONSE_WITH_GEMINI=true` only if model-written prose is needed. Gemini receives only parsed intent and verified records; Python remains the authority for sport, skill, date, area, time, and open-slot eligibility. If Gemini or Vertex AI embeddings are unavailable, the API falls back to deterministic parsing, retrieval, and decisions.
 
 ### Grounded semantic search
 
@@ -185,6 +185,8 @@ python3 -m unittest discover -s tests -v
 - Enable the Firestore API and grant the Cloud Run service account Firestore User access.
 - Deploy one Cloud Run service in `us-central1` with scale-to-zero and a maximum of one instance for the MVP.
 - Keep Firestore reads bounded with `COURTMATE_MAX_SESSION_READS` and `COURTMATE_MAX_PLAYER_READS`.
+- API responses include `X-Response-Time-Ms`; use it with Cloud Run logs to separate auth, Gemini, vector search, and Firestore latency.
+- Read-only feed, search, and activity requests do not synchronously rebuild CMR ratings or re-index embeddings when a scheduled session changes status.
 - Use the Gemini API key server-side only; do not expose it in the frontend.
 - Keep Pub/Sub and BigQuery optional for the MVP; Cloud Storage is required only for profile pictures.
 

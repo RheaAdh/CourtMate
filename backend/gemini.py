@@ -38,6 +38,7 @@ class GeminiIntentParser:
     def __init__(self) -> None:
         self.api_key = os.getenv("GEMINI_API_KEY")
         self.model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+        self.use_grounded_response = os.getenv("COURTMATE_GROUNDED_RESPONSE_WITH_GEMINI", "false").lower() in {"1", "true", "yes"}
         self._client = None
         use_vertex = os.getenv("COURTMATE_USE_VERTEX_AI", "false").lower() in {"1", "true", "yes"} or os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() in {"1", "true", "yes"}
         try:
@@ -150,7 +151,10 @@ Current request: """ + query + "\nPrevious request context: " + (context or "non
             fallback = f"I found {len(tournaments)} tournament{'s' if len(tournaments) != 1 else ''}. Best match: {lead.name} on {lead.tournament_date.strftime('%a %d %b')} in {lead.area}."
         else:
             fallback = f"I could not find a {intent.sport.replace('_', ' ')} game or tournament matching those details."
-        if not self._client:
+        # The deterministic sentence above is already built from validated
+        # records. Keep search to one model hop by default; opt into a second
+        # prose-generation request only when the product needs it.
+        if not self._client or not self.use_grounded_response:
             return fallback
         records = [
             {

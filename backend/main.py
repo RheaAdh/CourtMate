@@ -4,6 +4,7 @@ import json
 from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 from datetime import date, datetime, time, timedelta, timezone
+from time import perf_counter
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -31,6 +32,16 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+@app.middleware("http")
+async def add_request_timing(request, call_next):
+    started = perf_counter()
+    response = await call_next(request)
+    elapsed_ms = round((perf_counter() - started) * 1000, 1)
+    response.headers["X-Response-Time-Ms"] = str(elapsed_ms)
+    print(f"{request.method} {request.url.path} {response.status_code} {elapsed_ms}ms")
+    return response
 repository = create_repository()
 intent_parser = GeminiIntentParser()
 vector_retriever = VectorRetriever(repository)
@@ -87,16 +98,18 @@ def _session_window(session: Session) -> tuple[datetime, datetime]:
     return start, end
 
 
-def _refresh_session_status(session: Session, refresh_cmr: bool = True) -> Session:
+def _refresh_session_status(session: Session, refresh_cmr: bool = True, persist: bool = True, index: bool = True) -> Session:
     if session.status in {"completed", "cancelled"}:
         return session
     now = datetime.now(local_timezone)
     start, end = _session_window(session)
     next_status = "completed" if now >= end else "in_progress" if now >= start else session.status
     if next_status != session.status:
-        session.status = next_status
-        repository.save_session(session)
-        _index_session_best_effort(session)
+        session = session.model_copy(update={"status": next_status})
+        if persist:
+            repository.save_session(session)
+        if index and persist:
+            _index_session_best_effort(session)
         if next_status == "completed" and refresh_cmr:
             _refresh_cmr_ratings()
     return session
@@ -109,14 +122,10 @@ def _get_session(session_id: str) -> Session | None:
 
 def _refresh_all_session_statuses() -> list[Session]:
     sessions = repository.list_sessions()
-    completed_session_changed = False
-    for session in sessions:
-        previous_status = session.status
-        _refresh_session_status(session, refresh_cmr=False)
-        completed_session_changed = completed_session_changed or (previous_status != "completed" and session.status == "completed")
-    if completed_session_changed:
-        _refresh_cmr_ratings()
-    return sessions
+    # Discovery, feeds, and activity pages are read paths. Do not make them
+    # wait for a write, embedding request, or full CMR rebuild just because a
+    # scheduled game crossed its start/end time.
+    return [_refresh_session_status(session, refresh_cmr=False, persist=False, index=False) for session in sessions]
 
 
 def _require_active_session(session: Session) -> None:
@@ -913,7 +922,8 @@ def _search_tournaments(query: str, intent: SearchIntent, player: Player, exact:
 
 @app.post("/v1/sessions/search", response_model=SearchResponse)
 def search(request: ParseRequest, player: Player = Depends(get_current_player)) -> SearchResponse:
-    _refresh_all_session_statuses()
+    refreshed_sessions = _refresh_all_session_statuses()
+    sessions_by_id = {session.id: session for session in refreshed_sessions}
     query = request.query.strip()
     if not query:
         raise HTTPException(status_code=422, detail="Search query is required")
@@ -942,8 +952,7 @@ def search(request: ParseRequest, player: Player = Depends(get_current_player)) 
                 explicit_tournament_sport = bool(re.search(r"\b(pickleball|badminton|tennis|padel|squash|table tennis|table-tennis|ping pong)\b", query.lower()))
                 vector_results = vector_retriever.search(query, intent, "tournament", filter_sport=explicit_tournament_sport)
                 candidate_count = len(vector_results)
-                candidate_tournaments = [repository.get_tournament(result.document.source_id) for result in vector_results]
-                candidate_tournaments = [item for item in candidate_tournaments if item]
+                candidate_tournaments = repository.get_tournaments([result.document.source_id for result in vector_results])
                 if candidate_tournaments:
                     retrieval_mode = "vector"
                 else:
@@ -966,8 +975,10 @@ def search(request: ParseRequest, player: Player = Depends(get_current_player)) 
         try:
             vector_results = vector_retriever.search(query, intent, "session")
             candidate_count = len(vector_results)
-            candidate_sessions = [repository.get_session(result.document.source_id) for result in vector_results]
-            candidate_sessions = [item for item in candidate_sessions if item]
+            candidate_sessions = [
+                sessions_by_id.get(session.id, session)
+                for session in repository.get_sessions([result.document.source_id for result in vector_results])
+            ]
             if candidate_sessions:
                 retrieval_mode = "vector"
             else:
@@ -975,13 +986,13 @@ def search(request: ParseRequest, player: Player = Depends(get_current_player)) 
                 fallback_reason = "vector_no_candidates"
         except Exception as error:
             fallback_reason = str(error)[:160]
-    sessions = candidate_sessions if candidate_sessions is not None else repository.list_sessions()
+    sessions = candidate_sessions if candidate_sessions is not None else refreshed_sessions
     sessions = [session for session in sessions if _session_visible_to_player(session, player)]
     recommendations = search_sessions(sessions, intent, repository.list_players(), player, exact=request.mode == "exact")
     if not recommendations and retrieval_mode == "vector":
         fallback_reason = "vector_candidates_failed_validation"
         retrieval_mode = "deterministic_fallback"
-        sessions = [session for session in repository.list_sessions() if _session_visible_to_player(session, player)]
+        sessions = [session for session in refreshed_sessions if _session_visible_to_player(session, player)]
         recommendations = search_sessions(sessions, intent, repository.list_players(), player, exact=request.mode == "exact")
     decision = intent_parser.decide(request.query, intent, sessions, recommendations, player)
     proposal = _group_proposal(intent, player.id, decision.proposed_group_name, request.query) if not recommendations else None

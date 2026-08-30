@@ -8,6 +8,7 @@ from .vector_search import cosine_similarity
 
 class Repository(Protocol):
     def list_sessions(self) -> list[Session]: ...
+    def get_sessions(self, session_ids: list[str]) -> list[Session]: ...
     def get_session(self, session_id: str) -> Session | None: ...
     def list_players(self) -> list[Player]: ...
     def get_player(self, player_id: str) -> Player | None: ...
@@ -42,6 +43,7 @@ class Repository(Protocol):
     def save_tournament(self, tournament: Tournament) -> Tournament: ...
     def get_tournament(self, tournament_id: str) -> Tournament | None: ...
     def list_tournaments(self) -> list[Tournament]: ...
+    def get_tournaments(self, tournament_ids: list[str]) -> list[Tournament]: ...
     def save_tournament_registration(self, registration: TournamentRegistration) -> TournamentRegistration: ...
     def list_tournament_registrations(self, tournament_id: str) -> list[TournamentRegistration]: ...
     def save_tournament_match(self, match: TournamentMatch) -> TournamentMatch: ...
@@ -74,6 +76,9 @@ class InMemoryRepository:
 
     def list_sessions(self) -> list[Session]:
         return list(self.sessions.values())
+
+    def get_sessions(self, session_ids: list[str]) -> list[Session]:
+        return [self.sessions[session_id] for session_id in session_ids if session_id in self.sessions]
 
     def get_session(self, session_id: str) -> Session | None:
         return self.sessions.get(session_id)
@@ -212,6 +217,9 @@ class InMemoryRepository:
     def list_tournaments(self) -> list[Tournament]:
         return list(self.tournaments.values())
 
+    def get_tournaments(self, tournament_ids: list[str]) -> list[Tournament]:
+        return [self.tournaments[tournament_id] for tournament_id in tournament_ids if tournament_id in self.tournaments]
+
     def save_tournament_registration(self, registration: TournamentRegistration) -> TournamentRegistration:
         self.tournament_registrations[registration.id] = registration
         return registration
@@ -288,6 +296,12 @@ class FirestoreRepository:
     def list_sessions(self) -> list[Session]:
         documents = self.client.collection("sessions").limit(self.max_session_reads).stream()
         return [self._as_session(document) for document in documents]
+
+    def get_sessions(self, session_ids: list[str]) -> list[Session]:
+        if not session_ids:
+            return []
+        references = [self.client.collection("sessions").document(session_id) for session_id in dict.fromkeys(session_ids)]
+        return [self._as_session(document) for document in self.client.get_all(references) if document.exists]
 
     def get_session(self, session_id: str) -> Session | None:
         document = self.client.collection("sessions").document(session_id).get()
@@ -475,6 +489,12 @@ class FirestoreRepository:
     def list_tournaments(self) -> list[Tournament]:
         documents = self.client.collection("tournaments").limit(self.max_tournament_reads).stream()
         return [Tournament.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
+
+    def get_tournaments(self, tournament_ids: list[str]) -> list[Tournament]:
+        if not tournament_ids:
+            return []
+        references = [self.client.collection("tournaments").document(tournament_id) for tournament_id in dict.fromkeys(tournament_ids)]
+        return [Tournament.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in self.client.get_all(references) if document.exists]
 
     def save_tournament_registration(self, registration: TournamentRegistration) -> TournamentRegistration:
         reference = self.client.collection("tournament_registrations").document(registration.id)
