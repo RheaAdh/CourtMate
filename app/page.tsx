@@ -617,11 +617,7 @@ export default function Home() {
         const hasTournamentLink = Boolean(new URLSearchParams(window.location.search).get("tournament"));
         setActiveTab(hasTournamentLink ? "tournaments" : "social");
         void loadProfile(nextUser);
-        void loadSocialProfile(nextUser);
-        void loadActivity("requests", nextUser);
-        void loadActivity("games", nextUser);
         void loadNotifications(nextUser);
-        void search(undefined, `Show me nearby ${selectedSport} games that match my saved preferences`, false, nextUser);
       } else {
         setActiveTab("home");
         setSettingsOpen(false);
@@ -2184,6 +2180,7 @@ export default function Home() {
     if (tab === "profile") {
       setProfileReturnTab("profile");
       setViewedProfile(null);
+      if (!socialProfile) void loadSocialProfile();
       if (window.location.hash.startsWith("#player-profile-")) {
         window.history.replaceState({ courtMatePage: "profile" }, "", `${window.location.pathname}${window.location.search}`);
       }

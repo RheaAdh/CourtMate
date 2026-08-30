@@ -45,7 +45,7 @@ class Repository(Protocol):
     def list_tournaments(self) -> list[Tournament]: ...
     def get_tournaments(self, tournament_ids: list[str]) -> list[Tournament]: ...
     def save_tournament_registration(self, registration: TournamentRegistration) -> TournamentRegistration: ...
-    def list_tournament_registrations(self, tournament_id: str) -> list[TournamentRegistration]: ...
+    def list_tournament_registrations(self, tournament_id: str | None = None) -> list[TournamentRegistration]: ...
     def save_tournament_match(self, match: TournamentMatch) -> TournamentMatch: ...
     def get_tournament_match(self, match_id: str) -> TournamentMatch | None: ...
     def list_tournament_matches(self, tournament_id: str) -> list[TournamentMatch]: ...
@@ -224,8 +224,9 @@ class InMemoryRepository:
         self.tournament_registrations[registration.id] = registration
         return registration
 
-    def list_tournament_registrations(self, tournament_id: str) -> list[TournamentRegistration]:
-        return [item for item in self.tournament_registrations.values() if item.tournament_id == tournament_id]
+    def list_tournament_registrations(self, tournament_id: str | None = None) -> list[TournamentRegistration]:
+        registrations = self.tournament_registrations.values()
+        return [item for item in registrations if tournament_id is None or item.tournament_id == tournament_id]
 
     def save_tournament_match(self, match: TournamentMatch) -> TournamentMatch:
         self.tournament_matches[match.id] = match
@@ -501,8 +502,9 @@ class FirestoreRepository:
         reference.set(self._write_model(registration))
         return registration
 
-    def list_tournament_registrations(self, tournament_id: str) -> list[TournamentRegistration]:
-        documents = self.client.collection("tournament_registrations").where("tournament_id", "==", tournament_id).limit(100).stream()
+    def list_tournament_registrations(self, tournament_id: str | None = None) -> list[TournamentRegistration]:
+        collection = self.client.collection("tournament_registrations")
+        documents = (collection.where("tournament_id", "==", tournament_id).limit(100).stream() if tournament_id else collection.limit(1000).stream())
         return [TournamentRegistration.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
 
     def save_tournament_match(self, match: TournamentMatch) -> TournamentMatch:

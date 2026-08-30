@@ -293,6 +293,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
   const [loadError, setLoadError] = useState("");
   const [posting, setPosting] = useState(false);
   const [showComposer, setShowComposer] = useState(false);
+  const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [caption, setCaption] = useState("");
   const [sport, setSport] = useState<Sport>("pickleball");
   const [taggedSessionId, setTaggedSessionId] = useState("");
@@ -324,7 +325,6 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
 
   useEffect(() => {
     void loadFeed();
-    void loadSessions();
     void loadRecommendedPlayers();
   }, [currentUserId]);
 
@@ -342,6 +342,8 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       setSessions(Array.from(new Map(options.map((session) => [session.id, session])).values()));
     } catch {
       setSessions([]);
+    } finally {
+      setSessionsLoaded(true);
     }
   }
 
@@ -436,6 +438,12 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
   }
 
   async function toggleFire(post: SocialPost) {
+    const optimisticPost = {
+      ...post,
+      liked_by_me: !post.liked_by_me,
+      like_count: post.liked_by_me ? Math.max(0, post.like_count - 1) : post.like_count + 1,
+    };
+    setPosts((current) => current.map((item) => item.id === post.id ? optimisticPost : item));
     try {
       setBusyAction(`fire-${post.id}`);
       const response = await authorizedFetch(`${apiUrl}/v1/social/posts/${post.id}/like`, { method: "POST" });
@@ -443,6 +451,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       const updated = await response.json() as SocialPost;
       setPosts((current) => current.map((item) => item.id === updated.id ? updated : item));
     } catch {
+      setPosts((current) => current.map((item) => item.id === post.id ? post : item));
       onToast("Could not update the fire reaction");
     } finally {
       setBusyAction("");
@@ -597,7 +606,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
   }
 
   return <section className="social-page" aria-label="CourtMate social feed">
-    <button type="button" className="section-fab social-fab" onClick={() => setShowComposer((open) => !open)} aria-label={showComposer ? "Close post composer" : "Create a social post"} title={showComposer ? "Close" : "Create a post"}>{showComposer ? "×" : "+"}</button>
+    <button type="button" className="section-fab social-fab" onClick={() => { const nextOpen = !showComposer; setShowComposer(nextOpen); if (nextOpen && !sessionsLoaded) void loadSessions(); }} aria-label={showComposer ? "Close post composer" : "Create a social post"} title={showComposer ? "Close" : "Create a post"}>{showComposer ? "×" : "+"}</button>
     <div className="social-page-heading">
       <div className="social-feed-tabs"><button className={feedFilter === "all" ? "active" : ""} type="button" onClick={() => changeFilter("all")}>Discover</button><button className={feedFilter === "following" ? "active" : ""} type="button" onClick={() => changeFilter("following")}>Following</button></div>
     </div>

@@ -45,12 +45,26 @@ class GeminiIntentParser:
         "what", "why", "how", "explain", "rule", "tip", "improve", "difference", "strategy",
         "technique", "drill", "training", "practice", "score", "scoring", "serve", "grip",
         "equipment", "benefit", "compare", "best", "meaning", "definition", "who", "when",
-        "can", "should",
+        "can", "should", "tell me about", "asking about",
+    )
+
+    _VENUE_INFORMATION_PATTERNS = (
+        r"\btell me about\b",
+        r"\basking about\b",
+        r"\b(?:i am|i'm|im) asking\b",
+        r"\binformation about\b",
+        r"\bwhat are the\b",
+        r"\bwhich are the\b",
+        r"\brecommend(?:ed)?\b",
     )
 
     def __init__(self) -> None:
         self.api_key = os.getenv("GEMINI_API_KEY")
         self.model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+        # Common discovery phrases are parsed locally to keep every search to
+        # one network hop at most. Enable the model parser for more ambiguous
+        # language when the richer interpretation is worth the latency.
+        self.use_gemini_intent = os.getenv("COURTMATE_USE_GEMINI_INTENT", "false").lower() in {"1", "true", "yes"}
         self.use_grounded_response = os.getenv("COURTMATE_GROUNDED_RESPONSE_WITH_GEMINI", "false").lower() in {"1", "true", "yes"}
         self._client = None
         use_vertex = os.getenv("COURTMATE_USE_VERTEX_AI", "false").lower() in {"1", "true", "yes"} or os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() in {"1", "true", "yes"}
@@ -83,6 +97,11 @@ class GeminiIntentParser:
         # previous message. Context is only for short follow-ups such as
         # "make it more casual" or "this weekend".
         if any(term in current for term in cls._NON_COURT_TERMS):
+            return False
+        # Venue questions framed as requests for information belong to the
+        # general assistant. Keep direct discovery such as "what courts are
+        # nearby?" in the CourtMate search workflow.
+        if cls._is_venue_information_query(current):
             return False
         lowered = f"{current} {context or ''}".strip()
         has_sport = any(term in lowered for term in cls._SPORT_TERMS)
@@ -118,6 +137,8 @@ class GeminiIntentParser:
         current = " ".join(query.lower().split())
         if not current or any(term in current for term in cls._NON_COURT_TERMS):
             return False
+        if cls._is_venue_information_query(current):
+            return True
         if cls.is_in_scope(current, context):
             return False
         has_sport = any(term in current for term in cls._GENERAL_SPORT_TERMS)
@@ -128,14 +149,22 @@ class GeminiIntentParser:
         )
         return has_sport and has_question_signal and not has_discovery_request
 
+    @classmethod
+    def _is_venue_information_query(cls, query: str) -> bool:
+        """Detect informational venue questions without stealing court discovery."""
+        has_venue = bool(re.search(r"\b(venue|venues|club|clubs)\b", query))
+        has_information_signal = any(re.search(pattern, query) for pattern in cls._VENUE_INFORMATION_PATTERNS)
+        has_game_request = bool(re.search(r"\b(find|search|show|join|create|book)\b.*\b(game|games|group|groups|session|sessions|match|matches)\b", query))
+        return has_venue and has_information_signal and not has_game_request
+
     def parse(self, query: str, sport: Sport | None = None, context: str | None = None) -> SearchIntent:
-        if self._client:
+        parsed = self._fallback_parse(f"{query} {context or ''}")
+        if self._client and self.use_gemini_intent:
             try:
-                parsed = self._parse_with_gemini(query, context)
-                return parsed.model_copy(update={"sport": sport}) if sport else parsed
+                parsed_by_model = self._parse_with_gemini(query, context)
+                return parsed_by_model.model_copy(update={"sport": sport}) if sport else parsed_by_model
             except Exception as error:
                 logger.warning("Gemini intent parsing failed (%s); using deterministic fallback", error)
-        parsed = self._fallback_parse(f"{query} {context or ''}")
         return parsed.model_copy(update={"sport": sport}) if sport else parsed
 
     def _parse_with_gemini(self, query: str, context: str | None = None) -> SearchIntent:

@@ -203,6 +203,18 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(payload["tournaments"], [])
         self.assertIn("general sports questions", payload["message"])
 
+    def test_venue_information_question_uses_general_assistant(self):
+        response = self.client.post(
+            "/v1/sessions/search",
+            json={"query": "Tell me about pickleball venues near me", "player_id": "p1"},
+        )
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["scope"], "sports_general")
+        self.assertEqual(payload["recommendations"], [])
+        self.assertEqual(payload["tournaments"], [])
+        self.assertIn("general sports questions", payload["message"])
+
     def test_social_feed_supports_session_posts_likes_comments_and_shares(self):
         created = self.client.post(
             "/v1/social/posts",

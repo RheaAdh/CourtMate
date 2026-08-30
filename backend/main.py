@@ -9,7 +9,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import AuthIdentity, get_current_identity
@@ -120,13 +120,13 @@ def _get_session(session_id: str) -> Session | None:
     return _refresh_session_status(session, refresh_cmr=False, index=False) if session else None
 
 
-def _refresh_all_session_statuses() -> list[Session]:
+def _refresh_all_session_statuses(persist: bool = False) -> list[Session]:
     sessions = repository.list_sessions()
     # Discovery, feeds, and activity pages are read paths. Persist only the
     # lightweight status transition; never make them wait for an embedding
     # request or full CMR rebuild just because a scheduled game crossed its
     # start/end time.
-    return [_refresh_session_status(session, refresh_cmr=False, persist=True, index=False) for session in sessions]
+    return [_refresh_session_status(session, refresh_cmr=False, persist=persist, index=False) for session in sessions]
 
 
 def _require_active_session(session: Session) -> None:
@@ -204,14 +204,15 @@ def me(player: Player = Depends(get_current_player)) -> Player:
 def recommended_players(player: Player = Depends(get_current_player)) -> PublicPlayerProfilesResponse:
     following_ids = {record.following_id for record in repository.list_following(player.id)}
     player_sports = set(player.cmr_ratings) | set(player.sport_ratings)
-    player_sessions = repository.list_sessions_for_player(player.id)
+    all_sessions = repository.list_sessions()
+    player_sessions = [session for session in all_sessions if player.id in session.confirmed_player_ids]
     player_session_ids = {session.id for session in player_sessions}
     candidates = []
     for candidate in repository.list_players():
         if candidate.id == player.id or candidate.id in following_ids or candidate.is_profile_private:
             continue
         candidate_sports = set(candidate.cmr_ratings) | set(candidate.sport_ratings)
-        candidate_sessions = repository.list_sessions_for_player(candidate.id)
+        candidate_sessions = [session for session in all_sessions if candidate.id in session.confirmed_player_ids]
         shared_sports = len(player_sports & candidate_sports)
         shared_area = bool(player.area.strip() and candidate.area.strip() and player.area.strip().lower() == candidate.area.strip().lower())
         shared_sessions = len(player_session_ids & {session.id for session in candidate_sessions})
@@ -219,7 +220,7 @@ def recommended_players(player: Player = Depends(get_current_player)) -> PublicP
         score = (5 if shared_area else 0) + shared_sports * 2 + (3 if shared_sessions else 0) + min(activity, 5) * .1
         candidates.append((score, candidate.display_name.lower(), candidate))
     candidates.sort(key=lambda item: (-item[0], item[1]))
-    return PublicPlayerProfilesResponse(profiles=[_public_profile(candidate, player.id) for _, _, candidate in candidates[:8]])
+    return PublicPlayerProfilesResponse(profiles=[_public_profile(candidate, player.id, all_sessions) for _, _, candidate in candidates[:8]])
 
 
 @app.get("/v1/players/{player_id}", response_model=PublicPlayerProfile)
@@ -268,12 +269,13 @@ def unfollow_player(player_id: str, player: Player = Depends(get_current_player)
 
 def _social_profiles(player: Player, following: bool) -> PublicPlayerProfilesResponse:
     records = repository.list_following(player.id) if following else repository.list_followers(player.id)
+    sessions = repository.list_sessions()
     profiles = []
     for record in records:
         target_id = record.following_id if following else record.follower_id
         target = repository.get_player(target_id)
         if target:
-            profiles.append(_public_profile(target, player.id))
+            profiles.append(_public_profile(target, player.id, sessions))
     profiles.sort(key=lambda profile: profile.display_name.lower())
     return PublicPlayerProfilesResponse(profiles=profiles)
 
@@ -502,10 +504,10 @@ def update_profile_image(request: ProfileImageUpdateRequest, player: Player = De
     return repository.save_player(player.model_copy(update={"profile_image_url": request.profile_image_url}))
 
 
-def _profile_activity(player_id: str) -> tuple[list[ProfileGameSummary], dict[str, int]]:
+def _profile_activity(player_id: str, sessions: list[Session] | None = None) -> tuple[list[ProfileGameSummary], dict[str, int]]:
     today = date.today()
     window_start = today - timedelta(days=83)
-    sessions = [session for session in repository.list_sessions() if player_id in session.confirmed_player_ids and session.status != "cancelled"]
+    sessions = [session for session in (sessions if sessions is not None else repository.list_sessions()) if player_id in session.confirmed_player_ids and session.status != "cancelled"]
     played_sessions = [session for session in sessions if session.session_date < today or session.status == "completed"]
     recent_games = [
         ProfileGameSummary(
@@ -527,8 +529,8 @@ def _profile_activity(player_id: str) -> tuple[list[ProfileGameSummary], dict[st
     return recent_games, activity_by_date
 
 
-def _public_profile(player: Player, viewer_id: str | None = None) -> PublicPlayerProfile:
-    recent_games, activity_by_date = _profile_activity(player.id)
+def _public_profile(player: Player, viewer_id: str | None = None, sessions: list[Session] | None = None) -> PublicPlayerProfile:
+    recent_games, activity_by_date = _profile_activity(player.id, sessions)
     return PublicPlayerProfile(
         id=player.id,
         display_name=player.display_name,
@@ -659,6 +661,7 @@ def _member_session(session_id: str, player: Player) -> Session:
 
 def _leaderboard(session_ids: list[str], scope: str, sport: str | None = None) -> LeaderboardResponse:
     players_by_id = {candidate.id: candidate for candidate in repository.list_players() if candidate.id in session_ids}
+    sessions = repository.list_sessions()
     entries = []
     for candidate in players_by_id.values():
         score = candidate.cmr_ratings.get(sport) if sport else candidate.community_score
@@ -676,14 +679,15 @@ def _leaderboard(session_ids: list[str], scope: str, sport: str | None = None) -
     entries.sort(key=lambda item: (-item[1], -item[0].reliability, item[0].display_name.lower()))
     return LeaderboardResponse(
         scope=scope,
-        entries=[LeaderboardEntry(rank=index, player=_public_profile(candidate), score=score, ratings_count=count) for index, (candidate, score, count) in enumerate(entries, start=1)],
+        entries=[LeaderboardEntry(rank=index, player=_public_profile(candidate, sessions=sessions), score=score, ratings_count=count) for index, (candidate, score, count) in enumerate(entries, start=1)],
     )
 
 
 def _refresh_community_scores() -> None:
     ratings_by_player: dict[tuple[str, str], list[int]] = {}
+    sessions_by_id = {session.id: session for session in repository.list_sessions()}
     for feedback_item in repository.list_feedback():
-        session = repository.get_session(feedback_item.session_id)
+        session = sessions_by_id.get(feedback_item.session_id)
         sport = session.sport if session else "pickleball"
         for rating in feedback_item.ratings:
             value = rating.rating
@@ -691,8 +695,9 @@ def _refresh_community_scores() -> None:
                 value = {"beginner": 2, "intermediate": 3, "advanced": 4}[rating.skill_level]
             if value is not None:
                 ratings_by_player.setdefault((rating.player_id, sport), []).append(value)
+    players_by_id = {player.id: player for player in repository.list_players()}
     for (player_id, sport), ratings in ratings_by_player.items():
-        player = repository.get_player(player_id)
+        player = players_by_id.get(player_id)
         if player:
             community_scores = {**player.community_scores, sport: round(sum(ratings) / len(ratings), 2)}
             community_rating_counts = {**player.community_rating_counts, sport: len(ratings)}
@@ -702,11 +707,11 @@ def _refresh_community_scores() -> None:
             repository.save_player(player.model_copy(update=updates))
 
 
-def _relative_match_ratings(session: Session, teams: list) -> dict[str, float]:
+def _relative_match_ratings(session: Session, teams: list, players: dict[str, Player] | None = None) -> dict[str, float]:
     """Turn a two-sided result into comparable 0-100 game ratings."""
     if len(teams) != 2 or any(team.score is None or not team.player_ids for team in teams):
         return {}
-    players = {player.id: player for player in repository.list_players()}
+    players = players or {player.id: player for player in repository.list_players()}
     team_ratings = []
     for team in teams:
         members = [players[player_id] for player_id in team.player_ids if player_id in players]
@@ -734,11 +739,12 @@ def _refresh_cmr_ratings() -> None:
     """Recompute CMR and a chronological per-game history from completed-game feedback."""
     ratings_by_player: dict[tuple[str, str], dict[str, list[float]]] = {}
     sessions_by_id = {session.id: session for session in repository.list_sessions() if session.status == "completed"}
+    players_by_id = {player.id: player for player in repository.list_players()}
     for session in sessions_by_id.values():
         for post in repository.list_chat_posts(session.id):
             if post.post_type != "match_result" or post.result_status not in {None, "confirmed"}:
                 continue
-            for player_id, game_rating in _relative_match_ratings(session, post.teams).items():
+            for player_id, game_rating in _relative_match_ratings(session, post.teams, players_by_id).items():
                 ratings_by_player.setdefault((player_id, session.sport), {}).setdefault(session.id, []).append(game_rating)
     for feedback_item in repository.list_feedback():
         session = sessions_by_id.get(feedback_item.session_id)
@@ -758,7 +764,7 @@ def _refresh_cmr_ratings() -> None:
         for player_id in session.confirmed_player_ids:
             completed_sessions_by_player.setdefault(player_id, []).append(session)
     for player_id, completed_sessions in completed_sessions_by_player.items():
-        player = repository.get_player(player_id)
+        player = players_by_id.get(player_id)
         if not player:
             continue
         sessions_by_sport: dict[str, list[Session]] = {}
@@ -893,6 +899,11 @@ def _search_tournaments(query: str, intent: SearchIntent, player: Player, exact:
     explicit_sport = any(term in lowered for term in ("pickleball", "badminton", "tennis", "padel", "squash", "table tennis", "table-tennis", "ping pong"))
     explicit_area = bool(re.search(r"\b(near|around|in|at)\s+", lowered))
     tournaments = tournaments if tournaments is not None else repository.list_tournaments()
+    registrations_by_tournament: dict[str, list[TournamentRegistration]] = {}
+    if tournaments:
+        registrations_by_tournament = {}
+        for registration in repository.list_tournament_registrations():
+            registrations_by_tournament.setdefault(registration.tournament_id, []).append(registration)
     scored: list[tuple[float, Tournament]] = []
     for tournament in tournaments:
         if not wants_history and tournament.status in {"completed", "cancelled"}:
@@ -915,7 +926,8 @@ def _search_tournaments(query: str, intent: SearchIntent, player: Player, exact:
         else:
             days_away = max(0, (tournament.tournament_date - date.today()).days)
             score += max(0.0, 2 - min(days_away / 30, 2))
-        registered_count = sum(item.status == "registered" for item in repository.list_tournament_registrations(tournament.id))
+        registrations = registrations_by_tournament.get(tournament.id, [])
+        registered_count = sum(item.status == "registered" for item in registrations)
         if registered_count < tournament.capacity:
             score += 1
         scored.append((score, tournament))
@@ -923,15 +935,13 @@ def _search_tournaments(query: str, intent: SearchIntent, player: Player, exact:
     scored.sort(key=lambda item: (-item[0], item[1].tournament_date, item[1].name.lower()))
     results = []
     for _, tournament in scored[:8]:
-        registration = next((item for item in repository.list_tournament_registrations(tournament.id) if item.player_id == player.id), None)
+        registration = next((item for item in registrations_by_tournament.get(tournament.id, []) if item.player_id == player.id), None)
         results.append(TournamentListItem(**tournament.model_dump(), my_registration_status=registration.status if registration else None))
     return results
 
 
 @app.post("/v1/sessions/search", response_model=SearchResponse)
 def search(request: ParseRequest, player: Player = Depends(get_current_player)) -> SearchResponse:
-    refreshed_sessions = _refresh_all_session_statuses()
-    sessions_by_id = {session.id: session for session in refreshed_sessions}
     query = request.query.strip()
     if not query:
         raise HTTPException(status_code=422, detail="Search query is required")
@@ -964,6 +974,8 @@ def search(request: ParseRequest, player: Player = Depends(get_current_player)) 
             scope="out_of_scope",
             retrieval=RetrievalTrace(mode="deterministic_fallback", fallback_reason="out_of_scope"),
         )
+    refreshed_sessions = _refresh_all_session_statuses()
+    sessions_by_id = {session.id: session for session in refreshed_sessions}
     intent = _parse_intent(request.query, request.sport, player, request.context)
     if _is_tournament_query(query):
         retrieval_mode = "deterministic_fallback"
@@ -1011,12 +1023,13 @@ def search(request: ParseRequest, player: Player = Depends(get_current_player)) 
             fallback_reason = str(error)[:160]
     sessions = candidate_sessions if candidate_sessions is not None else refreshed_sessions
     sessions = [session for session in sessions if _session_visible_to_player(session, player)]
-    recommendations = search_sessions(sessions, intent, repository.list_players(), player, exact=request.mode == "exact")
+    players = repository.list_players()
+    recommendations = search_sessions(sessions, intent, players, player, exact=request.mode == "exact")
     if not recommendations and retrieval_mode == "vector":
         fallback_reason = "vector_candidates_failed_validation"
         retrieval_mode = "deterministic_fallback"
         sessions = [session for session in refreshed_sessions if _session_visible_to_player(session, player)]
-        recommendations = search_sessions(sessions, intent, repository.list_players(), player, exact=request.mode == "exact")
+        recommendations = search_sessions(sessions, intent, players, player, exact=request.mode == "exact")
     decision = intent_parser.decide(request.query, intent, sessions, recommendations, player)
     proposal = _group_proposal(intent, player.id, decision.proposed_group_name, request.query) if not recommendations else None
     message = intent_parser.grounded_search_answer(query, intent, recommendations, [])
@@ -1303,8 +1316,9 @@ def group_view(session_id: str, player: Player = Depends(get_current_player)) ->
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     players_by_id = {candidate.id: candidate for candidate in repository.list_players()}
-    members = [_public_profile(players_by_id[player_id], player.id) for player_id in session.confirmed_player_ids if player_id in players_by_id]
-    waitlist = [_public_profile(players_by_id[player_id], player.id) for player_id in session.waitlist_player_ids if player_id in players_by_id]
+    sessions = repository.list_sessions()
+    members = [_public_profile(players_by_id[player_id], player.id, sessions) for player_id in session.confirmed_player_ids if player_id in players_by_id]
+    waitlist = [_public_profile(players_by_id[player_id], player.id, sessions) for player_id in session.waitlist_player_ids if player_id in players_by_id]
     activity_proofs = repository.list_activity_proofs(session_id=session.id) if session.status == "completed" else []
     return GroupViewResponse(session=session, members=members, waitlist=waitlist, activity_proofs=activity_proofs)
 
@@ -1323,16 +1337,19 @@ def _tournament_details(tournament: Tournament) -> TournamentDetailsResponse:
 @app.get("/v1/tournaments", response_model=TournamentListResponse)
 def list_tournaments(player: Player = Depends(get_current_player)) -> TournamentListResponse:
     tournaments = repository.list_tournaments()
+    registrations_by_tournament: dict[str, list[TournamentRegistration]] = {}
+    for registration in repository.list_tournament_registrations():
+        registrations_by_tournament.setdefault(registration.tournament_id, []).append(registration)
     tournaments.sort(key=lambda item: (item.tournament_date, item.created_at))
     list_items = []
     for tournament in tournaments:
-        registration = next((item for item in repository.list_tournament_registrations(tournament.id) if item.player_id == player.id), None)
+        registration = next((item for item in registrations_by_tournament.get(tournament.id, []) if item.player_id == player.id), None)
         list_items.append(TournamentListItem(**tournament.model_dump(), my_registration_status=registration.status if registration else None))
     return TournamentListResponse(tournaments=list_items)
 
 
 @app.post("/v1/tournaments", response_model=TournamentDetailsResponse)
-def create_tournament(request: CreateTournamentRequest, player: Player = Depends(get_current_player)) -> TournamentDetailsResponse:
+def create_tournament(background_tasks: BackgroundTasks, request: CreateTournamentRequest, player: Player = Depends(get_current_player)) -> TournamentDetailsResponse:
     try:
         rules = rules_for_sport(request.sport)
     except ValueError as error:
@@ -1363,7 +1380,7 @@ def create_tournament(request: CreateTournamentRequest, player: Player = Depends
     tournament.registration_ids.append(registration.id)
     repository.save_tournament(tournament)
     repository.save_tournament_registration(registration)
-    _index_tournament_best_effort(tournament)
+    background_tasks.add_task(_index_tournament_best_effort, tournament)
     return _tournament_details(tournament)
 
 
@@ -1420,6 +1437,7 @@ def decide_tournament_registration(
     tournament_id: str,
     registration_id: str,
     request: TournamentRegistrationDecisionRequest,
+    background_tasks: BackgroundTasks,
     player: Player = Depends(get_current_player),
 ) -> TournamentRegistration:
     tournament = repository.get_tournament(tournament_id)
@@ -1443,7 +1461,7 @@ def decide_tournament_registration(
         if registration.id not in tournament.registration_ids:
             tournament.registration_ids.append(registration.id)
         repository.save_tournament(tournament)
-        _index_tournament_best_effort(tournament)
+        background_tasks.add_task(_index_tournament_best_effort, tournament)
         saved_registration = repository.save_tournament_registration(registration.model_copy(update={"status": next_status}))
 
     try:
@@ -1465,7 +1483,7 @@ def decide_tournament_registration(
 
 
 @app.post("/v1/tournaments/{tournament_id}/fixtures", response_model=TournamentDetailsResponse)
-def generate_tournament_fixtures(tournament_id: str, player: Player = Depends(get_current_player)) -> TournamentDetailsResponse:
+def generate_tournament_fixtures(tournament_id: str, background_tasks: BackgroundTasks, player: Player = Depends(get_current_player)) -> TournamentDetailsResponse:
     tournament = repository.get_tournament(tournament_id)
     if not tournament:
         raise HTTPException(status_code=404, detail="Tournament not found")
@@ -1482,12 +1500,12 @@ def generate_tournament_fixtures(tournament_id: str, player: Player = Depends(ge
         repository.save_tournament_match(match)
     tournament.status = "in_progress"
     repository.save_tournament(tournament)
-    _index_tournament_best_effort(tournament)
+    background_tasks.add_task(_index_tournament_best_effort, tournament)
     return _tournament_details(tournament)
 
 
 @app.post("/v1/tournaments/{tournament_id}/matches/{match_id}/score", response_model=TournamentMatch)
-def enter_tournament_score(tournament_id: str, match_id: str, request: TournamentScoreRequest, player: Player = Depends(get_current_player)) -> TournamentMatch:
+def enter_tournament_score(tournament_id: str, match_id: str, request: TournamentScoreRequest, background_tasks: BackgroundTasks, player: Player = Depends(get_current_player)) -> TournamentMatch:
     tournament = repository.get_tournament(tournament_id)
     match = repository.get_tournament_match(match_id)
     if not tournament or not match or match.tournament_id != tournament_id:
@@ -1534,7 +1552,7 @@ def enter_tournament_score(tournament_id: str, match_id: str, request: Tournamen
     if all(item.status == "completed" for item in repository.list_tournament_matches(tournament.id)):
         tournament.status = "completed"
         repository.save_tournament(tournament)
-        _index_tournament_best_effort(tournament)
+        background_tasks.add_task(_index_tournament_best_effort, tournament)
     return saved_match
 
 
@@ -1688,7 +1706,7 @@ def post_group_chat(session_id: str, request: ChatPostRequest, player: Player = 
 
 
 @app.post("/v1/sessions/{session_id}/chat/{post_id}/decision", response_model=ChatPost)
-def decide_chat_match_result(session_id: str, post_id: str, request: ChatResultDecisionRequest, player: Player = Depends(get_current_player)) -> ChatPost:
+def decide_chat_match_result(session_id: str, post_id: str, request: ChatResultDecisionRequest, background_tasks: BackgroundTasks, player: Player = Depends(get_current_player)) -> ChatPost:
     session = _member_session(session_id, player)
     post = next((candidate for candidate in repository.list_chat_posts(session_id) if candidate.id == post_id), None)
     if not post or post.post_type != "match_result":
@@ -1706,7 +1724,7 @@ def decide_chat_match_result(session_id: str, post_id: str, request: ChatResultD
     result_status = "confirmed" if result_player_ids.issubset(confirmation_ids) else "pending_confirmation"
     updated = repository.save_chat_post(post.model_copy(update={"confirmation_ids": confirmation_ids, "result_status": result_status}))
     if result_status == "confirmed":
-        _refresh_cmr_ratings()
+        background_tasks.add_task(_refresh_cmr_ratings)
     return updated
 
 
@@ -1724,7 +1742,7 @@ def local_leaderboard(area: str | None = None, sport: Sport = "pickleball", play
 
 
 @app.post("/v1/sessions/{session_id}/complete", response_model=Session)
-def complete_session(session_id: str, player: Player = Depends(get_current_player)) -> Session:
+def complete_session(session_id: str, background_tasks: BackgroundTasks, player: Player = Depends(get_current_player)) -> Session:
     session = _get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1734,13 +1752,13 @@ def complete_session(session_id: str, player: Player = Depends(get_current_playe
         raise HTTPException(status_code=409, detail="Cancelled games cannot be completed")
     session.status = "completed"
     saved = repository.save_session(session)
-    _index_session_best_effort(saved)
-    _refresh_cmr_ratings()
+    background_tasks.add_task(_index_session_best_effort, saved)
+    background_tasks.add_task(_refresh_cmr_ratings)
     return saved
 
 
 @app.post("/v1/groups", response_model=CreatedGroupResponse)
-def create_group(request: CreateGroupRequest, player: Player = Depends(get_current_player)) -> CreatedGroupResponse:
+def create_group(background_tasks: BackgroundTasks, request: CreateGroupRequest, player: Player = Depends(get_current_player)) -> CreatedGroupResponse:
     intent = _parse_intent(request.query, request.sport, player)
     proposal = _group_proposal(intent, player.id, request.group_name, request.query)
     overrides = request.model_dump(exclude_none=True, exclude={"query", "group_name", "sport", "visibility"})
@@ -1779,8 +1797,8 @@ def create_group(request: CreateGroupRequest, player: Player = Depends(get_curre
         visibility=session_visibility,
     )
     saved_session = repository.save_session(session)
-    _index_session_best_effort(saved_session)
-    _notify_players_about_game(saved_session)
+    background_tasks.add_task(_index_session_best_effort, saved_session)
+    background_tasks.add_task(_notify_players_about_game, saved_session)
     return CreatedGroupResponse(session=saved_session, message="Group created. Compatible nearby players have been notified.")
 
 
@@ -1793,7 +1811,7 @@ def replacement(session_id: str, player: Player = Depends(get_current_player)) -
 
 
 @app.post("/v1/sessions/{session_id}/feedback", response_model=Feedback)
-def feedback(session_id: str, request: FeedbackRequest, player: Player = Depends(get_current_player)) -> Feedback:
+def feedback(session_id: str, request: FeedbackRequest, background_tasks: BackgroundTasks, player: Player = Depends(get_current_player)) -> Feedback:
     session = _member_session(session_id, player)
     ratings = request.ratings
     if request.player_id and request.rating is not None:
@@ -1820,8 +1838,8 @@ def feedback(session_id: str, request: FeedbackRequest, player: Player = Depends
                     raise HTTPException(status_code=422, detail="A player can only be on one team")
                 seen_team_players.add(player_id)
     saved = repository.save_feedback(Feedback(session_id=session_id, created_at=datetime.now(timezone.utc), player_id=player.id, fun=request.fun, fairness=request.fairness, would_return=request.would_return, ratings=ratings, teams=request.teams))
-    _refresh_community_scores()
-    _refresh_cmr_ratings()
+    background_tasks.add_task(_refresh_community_scores)
+    background_tasks.add_task(_refresh_cmr_ratings)
     return saved
 
 

@@ -6388,8 +6388,18 @@ body::before { border-color: rgba(117, 140, 31, .18); }
   font-weight: 500;
 }
 
+.social-post-actions button > .social-fire-icon {
+  transition: color .16s ease, transform .16s ease, filter .16s ease;
+}
+
 .social-post-actions button:hover,
 .social-post-actions button.fire-active { color: #718f12; }
+.social-post-actions button.fire-active > .social-fire-icon {
+  color: var(--lime);
+  fill: var(--lime);
+  filter: drop-shadow(0 2px 5px rgba(215, 242, 63, .3));
+  transform: scale(1.12);
+}
 .social-post-actions button:disabled { cursor: wait; opacity: .5; }
 .social-post-actions button > .social-fire-icon,
 .social-post-actions button > .social-comment-svg,
@@ -6583,9 +6593,17 @@ html[data-theme="dark"] textarea:focus {
 html[data-theme="dark"] .dark-button,
 html[data-theme="dark"] .search-button,
 html[data-theme="dark"] .create-game-action,
-html[data-theme="dark"] .calendar-button {
+html[data-theme="dark"] .calendar-button,
+html[data-theme="dark"] .guest-sign-in {
   background: var(--lime);
   border-color: var(--lime);
+  color: #152019;
+}
+
+html[data-theme="dark"] .guest-sign-in:hover,
+html[data-theme="dark"] .guest-sign-in:focus-visible {
+  background: #e5fa66;
+  border-color: #e5fa66;
   color: #152019;
 }
 
@@ -6638,6 +6656,12 @@ html[data-theme="dark"] .social-comment-name {
   color: var(--ink);
 }
 
+html[data-theme="dark"] .social-post-actions button.fire-active,
+html[data-theme="dark"] .social-post-actions button.fire-active > .social-fire-icon {
+  color: var(--lime);
+  fill: var(--lime);
+}
+
 html[data-theme="dark"] .social-post-media {
   background: #1a2922;
 }
@@ -6660,6 +6684,31 @@ html[data-theme="dark"] .performance-chat-form button {
 html[data-theme="dark"] .app-tabs button.active {
   background: #24362c;
   color: var(--lime);
+}
+
+/* Active secondary tabs need dark text on the lime surface for readable contrast. */
+html[data-theme="dark"] .tournament-tabs,
+html[data-theme="dark"] .page-tabs {
+  border-color: #344a3e;
+  background: #17231f;
+}
+
+html[data-theme="dark"] .tournament-tabs button,
+html[data-theme="dark"] .page-tabs button {
+  color: #a5b5aa;
+}
+
+html[data-theme="dark"] .tournament-tabs button.active,
+html[data-theme="dark"] .page-tabs button.active {
+  background: var(--lime);
+  color: #17231f;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, .24);
+}
+
+html[data-theme="dark"] .tournament-tabs button.active span,
+html[data-theme="dark"] .page-tabs button.active span {
+  background: rgba(16, 24, 22, .16);
+  color: #17231f;
 }
 
 html[data-theme="dark"] .notification-button,
@@ -6685,4 +6734,172 @@ html[data-theme="dark"] .notification-count {
 @media (max-width: 600px) {
   .theme-toggle { width: 34px; height: 34px; }
   .theme-toggle svg { width: 17px; height: 17px; }
+}
+
+/* The desktop left rail shifts the assistant workspace right; keep its composer aligned. */
+@media (min-width: 1100px) {
+  .chat-input-shell {
+    left: calc(50% + 84px);
+  }
+}
+
+/* Keep late desktop/mobile surface passes from reintroducing light cards in dark mode. */
+html[data-theme="dark"] body::before,
+html[data-theme="dark"] body::after {
+  opacity: 0;
+}
+
+html[data-theme="dark"] .home-chat-page,
+html[data-theme="dark"] .game-list,
+html[data-theme="dark"] .page-empty,
+html[data-theme="dark"] .search-hero,
+html[data-theme="dark"] .social-page-heading,
+html[data-theme="dark"] .social-feed-tabs {
+  border-color: #344a3e;
+  background: #17231f;
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .home-chat-page {
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .2);
+}
+
+html[data-theme="dark"] .game-list {
+  background: #14201b;
+}
+
+html[data-theme="dark"] .page-empty {
+  border-style: dashed;
+  background: #17231f;
+}
+
+html[data-theme="dark"] .social-post-card {
+  border-color: #2c3c35;
+  background: #14201b;
+}
+
+html[data-theme="dark"] .social-post-card h2,
+html[data-theme="dark"] .social-post-card h3,
+html[data-theme="dark"] .social-post-card p,
+html[data-theme="dark"] .social-post-card strong,
+html[data-theme="dark"] .social-post-card button,
+html[data-theme="dark"] .chat-page-header h1,
+html[data-theme="dark"] .chat-page-header p,
+html[data-theme="dark"] .chat-message p,
+html[data-theme="dark"] .result-message-body > p,
+html[data-theme="dark"] .chat-tournament-card,
+html[data-theme="dark"] .chat-choice-card,
+html[data-theme="dark"] .crafted-game-card {
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .chat-message > div {
+  background: #263927;
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .user-message > div {
+  background: #24362c;
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .chat-tournament-card,
+html[data-theme="dark"] .chat-choice-card,
+html[data-theme="dark"] .crafted-game-card,
+html[data-theme="dark"] .chat-request-confirmation,
+html[data-theme="dark"] .chat-score-picker,
+html[data-theme="dark"] .home-score-picker {
+  border-color: #405a47;
+  background: #1a2a22;
+}
+
+html[data-theme="dark"] .chat-input-shell {
+  border-color: #506842;
+  background: #17231f;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, .35), 0 0 0 5px rgba(215, 242, 63, .08);
+}
+
+html[data-theme="dark"] .chat-input-row input {
+  background: transparent;
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .settings-page,
+html[data-theme="dark"] .settings-privacy-panel {
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .settings-page {
+  border-color: #344a3e;
+}
+
+html[data-theme="dark"] .settings-form label > span,
+html[data-theme="dark"] .settings-form legend,
+html[data-theme="dark"] .settings-privacy-form label:not(.settings-toggle-row) > span:first-child {
+  color: var(--muted);
+}
+
+html[data-theme="dark"] .settings-form input,
+html[data-theme="dark"] .settings-form select,
+html[data-theme="dark"] .settings-privacy-form select {
+  border-color: #405a47;
+  background: #17231f;
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .settings-form input:focus,
+html[data-theme="dark"] .settings-form select:focus,
+html[data-theme="dark"] .settings-privacy-form select:focus {
+  border-color: #91ad48;
+  box-shadow: 0 0 0 3px rgba(215, 242, 63, .14);
+}
+
+html[data-theme="dark"] .settings-preference-fieldset {
+  border-color: #344a3e !important;
+}
+
+html[data-theme="dark"] .settings-form .availability-option {
+  border-color: #405a47;
+  background: #17231f;
+  color: var(--muted);
+}
+
+html[data-theme="dark"] .settings-form .availability-option.selected {
+  border-color: #91ad48;
+  background: #263927;
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .settings-toggle-row {
+  border-color: #405a47;
+  background: #1a2a22;
+}
+
+html[data-theme="dark"] .settings-switch {
+  background: #405047;
+}
+
+html[data-theme="dark"] .settings-switch::after {
+  background: #dfead9;
+}
+
+/* Settings sections should flow together instead of reserving a full viewport for the form. */
+.settings-page {
+  min-height: auto;
+  margin-bottom: 0;
+}
+
+.settings-privacy-panel {
+  margin-top: 30px;
+}
+
+html[data-theme="dark"] .social-page-heading,
+html[data-theme="dark"] .social-feed-tabs {
+  box-shadow: none;
+}
+
+@media (max-width: 600px) {
+  html[data-theme="dark"] .social-post-card {
+    background: #14201b;
+  }
 }
