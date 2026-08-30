@@ -19,6 +19,8 @@ from .models import (
     Player,
     PlayerRating,
     Session,
+    SocialComment,
+    SocialPost,
     Tournament,
     TournamentRegistration,
     cmr_from_legacy_rating,
@@ -110,6 +112,73 @@ def make_session(session_id: str, name: str, organizer_id: str, sport: str, area
         external_booking_url="https://playo.co/",
         status=status,
     )
+
+
+def seed_social_content(repository: FirestoreRepository, players: list[Player], sessions: list[Session], rhea_id: str, now: datetime) -> tuple[int, int]:
+    """Create stable feed posts and comments for the social demo experience."""
+    players_by_id = {player.id: player for player in players}
+    sessions_by_id = {session.id: session for session in sessions}
+
+    post_specs = [
+        ("demo-social-rhea-sunset", rhea_id, "pickleball", "demo-pb-sat-evening", "Sunset games are becoming my favourite way to reset after work. The rallies were close and the group energy was spot on.", None, None, ["demo-kavya", "demo-sana"], now - timedelta(hours=2)),
+        ("demo-social-meera-ladder", "demo-meera", "pickleball", "demo-pb-sun-competitive", "Competitive morning ladder at Varthur. Three tight games, one new personal best, and plenty to work on before next Sunday.", "https://images.unsplash.com/photo-1626224583764-f87db24ac4ea?auto=format&fit=crop&w=1000&q=80", "image", [rhea_id, "demo-vikram", "demo-kabir"], now - timedelta(hours=5)),
+        ("demo-social-rohit-shuttle", "demo-rohit", "badminton", "demo-badminton-evening", "Fast doubles, lots of rotation, and no one left sitting out. This is exactly what a weeknight shuttle session should feel like.", "https://images.unsplash.com/photo-1622279457486-62dcc4a431d6?auto=format&fit=crop&w=1000&q=80", "image", ["demo-sana", "demo-pooja"], now - timedelta(hours=8)),
+        ("demo-social-neil-tennis", "demo-neil", "tennis", "demo-tennis-evening", "Working on the first serve before Saturday's doubles. The new Whitefield court has a great evening setup.", "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4", "video", [rhea_id, "demo-meera"], now - timedelta(days=1)),
+        ("demo-social-vikram-padel", "demo-vikram", "padel", "demo-padel-sunday", "Padel pairs are back this weekend. Looking for steady rallies, clean lobs, and a friendly match that runs on time.", "https://images.unsplash.com/photo-1554068865-24cecd4e34b8?auto=format&fit=crop&w=1000&q=80", "image", ["demo-meera", "demo-neil"], now - timedelta(days=1, hours=4)),
+        ("demo-social-isha-squash", "demo-isha", "squash", None, "A short squash session still counts. Forty minutes on court and my legs definitely know it.", None, None, ["demo-arjun", "demo-tara"], now - timedelta(days=2)),
+        ("demo-social-nisha-table-tennis", "demo-nisha", "table_tennis", None, "Table tennis doubles night: quick hands, questionable serves, excellent laughs.", "https://images.unsplash.com/photo-1534158914592-062992fbe900?auto=format&fit=crop&w=1000&q=80", "image", ["demo-dev"], now - timedelta(days=2, hours=5)),
+        ("demo-social-kavya-rally", "demo-kavya", "pickleball", "demo-pb-sat-evening", "Brought the spare balls and somehow stayed for the longest rally of the evening. Same time next week?", None, None, [rhea_id, "demo-sana", "demo-pooja"], now - timedelta(days=3)),
+    ]
+
+    comment_specs = {
+        "demo-social-rhea-sunset": [("demo-kavya", "Count me in for the next one. I can bring the neon balls."), ("demo-sana", "That last rally was ridiculous in the best way.")],
+        "demo-social-meera-ladder": [(rhea_id, "The pace was intense. I learned a lot from the third game."), ("demo-vikram", "Next week we add a proper final." )],
+        "demo-social-rohit-shuttle": [("demo-sana", "The rotation worked really well."), ("demo-pooja", "Please keep this slot open every Wednesday.")],
+        "demo-social-neil-tennis": [("demo-meera", "That serve was looking sharp." )],
+        "demo-social-vikram-padel": [("demo-neil", "I am in if we keep the same format."), ("demo-kabir", "The lobs are getting serious.")],
+        "demo-social-isha-squash": [("demo-arjun", "Forty minutes of squash is never short." )],
+        "demo-social-nisha-table-tennis": [("demo-dev", "The serve replay is still under review." )],
+        "demo-social-kavya-rally": [(rhea_id, "Absolutely. Same court, same time."), ("demo-sana", "I will join the warm-up this time.")],
+    }
+
+    post_count = 0
+    comment_count = 0
+    for post_id, player_id, sport, session_id, caption, media_url, media_type, liked_by, created_at in post_specs:
+        player = players_by_id[player_id]
+        session = sessions_by_id.get(session_id) if session_id else None
+        post = SocialPost(
+            id=post_id,
+            player_id=player_id,
+            player_display_name=player.display_name,
+            profile_image_url=player.profile_image_url,
+            sport=sport,
+            session_id=session.id if session else None,
+            caption=caption,
+            media_url=media_url,
+            media_type=media_type,
+            liked_by=[player_id, *[item for item in liked_by if item != player_id]],
+            # save_social_comment increments this counter as each demo comment is written.
+            comment_count=0,
+            share_count=2 if post_id in {"demo-social-meera-ladder", "demo-social-vikram-padel"} else 0,
+            created_at=created_at,
+        )
+        repository.save_social_post(post)
+        post_count += 1
+
+        for index, (commenter_id, message) in enumerate(comment_specs.get(post_id, []), start=1):
+            commenter = players_by_id[commenter_id]
+            repository.save_social_comment(SocialComment(
+                id=f"{post_id}-comment-{index}",
+                post_id=post_id,
+                player_id=commenter_id,
+                player_display_name=commenter.display_name,
+                profile_image_url=commenter.profile_image_url,
+                message=message,
+                created_at=created_at + timedelta(minutes=index * 6),
+            ))
+            comment_count += 1
+
+    return post_count, comment_count
 
 
 def seed_additional_sessions(repository: FirestoreRepository, players: list[Player], today: date) -> int:
@@ -371,6 +440,7 @@ def seed() -> None:
     for session in sessions:
         repository.save_session(session)
     generated_sessions = seed_additional_sessions(repository, players, today)
+    social_post_count, social_comment_count = seed_social_content(repository, players, sessions, rhea_id, now)
 
     requests = [
         JoinRequest(id="demo-pb-sat-evening:demo-rohit", session_id="demo-pb-sat-evening", player_id="demo-rohit", player_display_name="Demo Rohit", status="pending", created_at=now - timedelta(hours=2)),
@@ -411,7 +481,7 @@ def seed() -> None:
 
     tournament_count = seed_tournaments(repository, players, rhea_id, today, now)
 
-    print(f"Seeded synthetic CourtMate data into {project}: {len(players)} players, {len(sessions) + generated_sessions} sessions, {len(requests)} requests, {len(posts)} chat posts, {len(feedback)} feedback records, {len(follows)} follows, {len(notifications)} notifications, {tournament_count} tournaments.")
+    print(f"Seeded synthetic CourtMate data into {project}: {len(players)} players, {len(sessions) + generated_sessions} sessions, {len(requests)} requests, {len(posts)} chat posts, {social_post_count} social posts, {social_comment_count} social comments, {len(feedback)} feedback records, {len(follows)} follows, {len(notifications)} notifications, {tournament_count} tournaments.")
 
 
 if __name__ == "__main__":

@@ -117,6 +117,7 @@ def session_to_document(session: Session) -> SearchDocument:
         f"{session.session_date.strftime('%A %d %B')} from {session.start_time.strftime('%I:%M %p').lstrip('0')} "
         f"to {session.end_time.strftime('%I:%M %p').lstrip('0')}. "
         f"{open_slots} spots open. "
+        f"Session visibility: {session.visibility}. "
         f"{'Venue: ' + session.venue_name + '. ' if session.venue_name else ''}"
         f"{'External booking link available.' if session.external_booking_url else ''}"
     )
@@ -124,7 +125,7 @@ def session_to_document(session: Session) -> SearchDocument:
         "sport": session.sport,
         "area": session.area.lower(),
         "status": session.status,
-        "visibility": "public",
+        "visibility": session.visibility,
         "event_date": _safe_date(session.session_date),
         "open_slots": open_slots,
     })

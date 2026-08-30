@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import { TennisBallLoader } from "./tennis-ball-loader";
 
 type SkillLevel = "beginner" | "intermediate" | "advanced";
 
@@ -91,7 +92,7 @@ export function PostGameFeedbackPanel({ sessionId, members, currentUserId, apiUr
     <div className="feedback-fields"><label><span>Fun</span><select value={feedbackFun} onChange={(event) => setFeedbackFun(event.target.value)}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}/5</option>)}</select></label><label><span>Fairness</span><select value={feedbackFairness} onChange={(event) => setFeedbackFairness(event.target.value)}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}/5</option>)}</select></label></div>
     <label className="return-check"><input type="checkbox" checked={feedbackWouldReturn} onChange={(event) => setFeedbackWouldReturn(event.target.checked)} /><span>Would you play with this group again?</span></label>
     <fieldset className="player-rating-fields"><legend>Player levels</legend>{members.filter((member) => member.id !== currentUserId).map((member) => <label key={member.id}><span>{member.display_name}</span><select value={playerLevels[member.id] ?? ""} onChange={(event) => setPlayerLevels({ ...playerLevels, [member.id]: event.target.value as SkillLevel | "" })}><option value="">Skip</option>{levelOptions.map((level) => <option key={level.value} value={level.value}>{level.label}</option>)}</select></label>)}</fieldset>
-    <div className="activity-proof-upload"><div><strong>Activity</strong></div><label className="proof-upload-button"><input type="file" accept="image/jpeg,image/png,image/webp" disabled={proofLoading} onChange={(event) => { const file = event.target.files?.[0]; if (file) void attachActivityProof(file); event.currentTarget.value = ""; }} />{proofLoading ? "Reading..." : "+ Add stats"}</label></div>
+    <div className="activity-proof-upload"><div><strong>Activity</strong></div><label className="proof-upload-button"><input type="file" accept="image/jpeg,image/png,image/webp" disabled={proofLoading} onChange={(event) => { const file = event.target.files?.[0]; if (file) void attachActivityProof(file); event.currentTarget.value = ""; }} />{proofLoading ? <TennisBallLoader compact label="Reading stats" /> : "+ Add stats"}</label></div>
     {activityProofs.length > 0 && <div className="activity-proof-list">{activityProofs.map((proof) => <article className="activity-proof-card" key={proof.id}><img src={proof.image_url} alt="Uploaded activity tracker" /><div><strong>{members.find((member) => member.id === proof.player_id)?.display_name ?? "Player"}</strong><p>{proof.analysis.summary}</p><div className="activity-proof-stats">{proof.analysis.calories_burned != null && <b>{Math.round(proof.analysis.calories_burned)} <small>kcal</small></b>}{proof.analysis.duration_minutes != null && <b>{Math.round(proof.analysis.duration_minutes)} <small>min</small></b>}{proof.analysis.distance_km != null && <b>{proof.analysis.distance_km.toFixed(1)} <small>km</small></b>}{proof.analysis.steps != null && <b>{proof.analysis.steps.toLocaleString()} <small>steps</small></b>}</div></div></article>)}</div>}
     <button className="dark-button" type="submit" disabled={saving}>{saving ? "Saving..." : "Save check-in"} <span>→</span></button>
   </form>;

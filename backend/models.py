@@ -8,6 +8,7 @@ RatingSource = Literal["dupr", "organizer_confirmed", "synthetic", "self_reporte
 SkillLevel = Literal["beginner", "intermediate", "advanced"]
 Gender = Literal["woman", "man", "non_binary", "prefer_not_to_say"]
 AgeRange = Literal["any", "18_24", "25_34", "35_44", "45_plus"]
+SessionVisibility = Literal["public", "followers", "private"]
 
 
 class CMRHistoryPoint(BaseModel):
@@ -36,6 +37,9 @@ class SearchIntent(BaseModel):
 class Player(BaseModel):
     id: str
     display_name: str
+    bio: str = Field(default="", max_length=240)
+    is_profile_private: bool = False
+    default_session_visibility: SessionVisibility = "public"
     profile_image_url: str | None = None
     area: str
     age: int | None = Field(default=None, ge=13, le=100)
@@ -126,6 +130,7 @@ class ProfileGameSummary(BaseModel):
 class PublicPlayerProfile(BaseModel):
     id: str
     display_name: str
+    bio: str = ""
     profile_image_url: str | None = None
     area: str
     dupr_rating: float | None = Field(default=None, ge=1, le=8)
@@ -161,6 +166,9 @@ class PublicPlayerProfilesResponse(BaseModel):
 
 
 class ProfileUpdateRequest(BaseModel):
+    bio: str | None = Field(default=None, max_length=240)
+    is_profile_private: bool | None = None
+    default_session_visibility: SessionVisibility | None = None
     area: str | None = None
     age: int | None = Field(default=None, ge=13, le=100)
     gender: Gender | None = None
@@ -213,6 +221,7 @@ class Session(BaseModel):
     external_booking_url: str | None = None
     status: Literal["open", "full", "in_progress", "completed", "cancelled"] = "open"
     sport: Sport = "pickleball"
+    visibility: SessionVisibility = "public"
 
     @property
     def open_slots(self) -> int:
@@ -622,6 +631,31 @@ class SocialPostView(BaseModel):
     share_count: int = Field(default=0, ge=0)
     liked_by_me: bool = False
     created_at: datetime
+    activity_type: Literal["post", "session"] = "post"
+    session_status: str | None = None
+    session_players: list["SocialSessionPlayer"] = Field(default_factory=list)
+    session_leaderboard: list["SocialLeaderboardEntry"] = Field(default_factory=list)
+
+
+class SocialSessionPlayer(BaseModel):
+    id: str
+    display_name: str
+    profile_image_url: str | None = None
+    cmr_rating: float | None = Field(default=None, ge=0, le=100)
+
+
+class SocialLeaderboardEntry(BaseModel):
+    rank: int
+    player_id: str
+    display_name: str
+    profile_image_url: str | None = None
+    cmr_rating: float | None = Field(default=None, ge=0, le=100)
+    wins: int = 0
+    losses: int = 0
+    table_points: int = 0
+
+
+SocialPostView.model_rebuild()
 
 
 class SocialFeedResponse(BaseModel):
@@ -648,6 +682,7 @@ class CreateGroupRequest(BaseModel):
     skill_min: float | None = Field(default=None, ge=1, le=8)
     skill_max: float | None = Field(default=None, ge=1, le=8)
     style: Literal["casual", "social", "competitive"] | None = None
+    visibility: SessionVisibility | None = None
 
 
 class CreatedGroupResponse(BaseModel):

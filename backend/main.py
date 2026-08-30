@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, ExploreSessionsResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialPost, SocialPostCreateRequest, SocialPostView, Sport, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListItem, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentRegistrationDecisionRequest, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, ExploreSessionsResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListItem, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentRegistrationDecisionRequest, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
 from .tournaments import calculate_standings, generate_round_robin_matches, rules_for_sport, validate_score
 from .vector_search import VectorIndexer, VectorRetriever
@@ -87,7 +87,7 @@ def _session_window(session: Session) -> tuple[datetime, datetime]:
     return start, end
 
 
-def _refresh_session_status(session: Session) -> Session:
+def _refresh_session_status(session: Session, refresh_cmr: bool = True) -> Session:
     if session.status in {"completed", "cancelled"}:
         return session
     now = datetime.now(local_timezone)
@@ -97,7 +97,7 @@ def _refresh_session_status(session: Session) -> Session:
         session.status = next_status
         repository.save_session(session)
         _index_session_best_effort(session)
-        if next_status == "completed":
+        if next_status == "completed" and refresh_cmr:
             _refresh_cmr_ratings()
     return session
 
@@ -107,9 +107,16 @@ def _get_session(session_id: str) -> Session | None:
     return _refresh_session_status(session) if session else None
 
 
-def _refresh_all_session_statuses() -> None:
-    for session in repository.list_sessions():
-        _refresh_session_status(session)
+def _refresh_all_session_statuses() -> list[Session]:
+    sessions = repository.list_sessions()
+    completed_session_changed = False
+    for session in sessions:
+        previous_status = session.status
+        _refresh_session_status(session, refresh_cmr=False)
+        completed_session_changed = completed_session_changed or (previous_status != "completed" and session.status == "completed")
+    if completed_session_changed:
+        _refresh_cmr_ratings()
+    return sessions
 
 
 def _require_active_session(session: Session) -> None:
@@ -183,11 +190,35 @@ def me(player: Player = Depends(get_current_player)) -> Player:
     return player
 
 
+@app.get("/v1/players/recommended", response_model=PublicPlayerProfilesResponse)
+def recommended_players(player: Player = Depends(get_current_player)) -> PublicPlayerProfilesResponse:
+    following_ids = {record.following_id for record in repository.list_following(player.id)}
+    player_sports = set(player.cmr_ratings) | set(player.sport_ratings)
+    player_sessions = repository.list_sessions_for_player(player.id)
+    player_session_ids = {session.id for session in player_sessions}
+    candidates = []
+    for candidate in repository.list_players():
+        if candidate.id == player.id or candidate.id in following_ids or candidate.is_profile_private:
+            continue
+        candidate_sports = set(candidate.cmr_ratings) | set(candidate.sport_ratings)
+        candidate_sessions = repository.list_sessions_for_player(candidate.id)
+        shared_sports = len(player_sports & candidate_sports)
+        shared_area = bool(player.area.strip() and candidate.area.strip() and player.area.strip().lower() == candidate.area.strip().lower())
+        shared_sessions = len(player_session_ids & {session.id for session in candidate_sessions})
+        activity = len(candidate_sessions)
+        score = (5 if shared_area else 0) + shared_sports * 2 + (3 if shared_sessions else 0) + min(activity, 5) * .1
+        candidates.append((score, candidate.display_name.lower(), candidate))
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    return PublicPlayerProfilesResponse(profiles=[_public_profile(candidate, player.id) for _, _, candidate in candidates[:8]])
+
+
 @app.get("/v1/players/{player_id}", response_model=PublicPlayerProfile)
 def public_player_profile(player_id: str, player: Player = Depends(get_current_player)) -> PublicPlayerProfile:
     target = repository.get_player(player_id)
     if not target:
         raise HTTPException(status_code=404, detail="Player not found")
+    if target.is_profile_private and target.id != player.id and not repository.is_following(player.id, target.id):
+        raise HTTPException(status_code=403, detail="This profile is private")
     return _public_profile(target, player.id)
 
 
@@ -251,14 +282,52 @@ def my_followers(player: Player = Depends(get_current_player)) -> PublicPlayerPr
 def social_feed(feed: str = "all", sport: Sport | None = None, player: Player = Depends(get_current_player)) -> SocialFeedResponse:
     if feed not in {"all", "following"}:
         raise HTTPException(status_code=422, detail="Feed must be all or following")
+    sessions = _refresh_all_session_statuses()
+    sessions_by_id = {session.id: session for session in sessions}
+    players_by_id = {candidate.id: candidate for candidate in repository.list_players()}
     following_ids = {record.following_id for record in repository.list_following(player.id)}
     posts = repository.list_social_posts()
+    posts = [
+        post for post in posts
+        if not (players_by_id.get(post.player_id) or player).is_profile_private
+        or post.player_id == player.id
+        or post.player_id in following_ids
+    ]
+    posts = [
+        post for post in posts
+        if not post.session_id
+        or (session := sessions_by_id.get(post.session_id)) is None
+        or _session_visible_to_player(session, player, following_ids)
+    ]
     if feed == "following":
         following_ids.add(player.id)
         posts = [post for post in posts if post.player_id in following_ids]
     if sport:
         posts = [post for post in posts if post.sport == sport]
-    return SocialFeedResponse(posts=[_social_post_view(post, player.id) for post in posts[:50]])
+    session_activities = []
+    for session in sessions:
+        if session.status == "cancelled" or not session.confirmed_player_ids or not _session_visible_to_player(session, player, following_ids):
+            continue
+        if feed == "following" and not ({*following_ids, player.id} & set(session.confirmed_player_ids)):
+            continue
+        if sport and session.sport != sport:
+            continue
+        session_activities.append(_session_social_view(session, players_by_id))
+    feed_items = [_social_post_view(post, player.id, sessions_by_id.get(post.session_id)) for post in posts] + session_activities
+    feed_items.sort(key=lambda item: item.created_at, reverse=True)
+    return SocialFeedResponse(posts=feed_items[:50])
+
+
+def _session_visible_to_player(session: Session, player: Player, following_ids: set[str] | None = None) -> bool:
+    """Keep private game activity out of discovery while preserving member access."""
+    if session.organizer_id == player.id or player.id in session.confirmed_player_ids:
+        return True
+    if session.visibility == "public":
+        return True
+    if session.visibility == "followers":
+        followed = following_ids if following_ids is not None else {record.following_id for record in repository.list_following(player.id)}
+        return session.organizer_id in followed
+    return False
 
 
 @app.post("/v1/social/posts", response_model=SocialPostView)
@@ -268,6 +337,8 @@ def create_social_post(request: SocialPostCreateRequest, player: Player = Depend
         raise HTTPException(status_code=422, detail="Post caption is required")
     if request.media_url and not request.media_type:
         raise HTTPException(status_code=422, detail="Media type is required with an attachment")
+    if request.media_url and not request.session_id:
+        raise HTTPException(status_code=422, detail="Photos and videos must be attached to a game")
     if request.session_id:
         session = _get_session(request.session_id)
         if not session:
@@ -451,6 +522,7 @@ def _public_profile(player: Player, viewer_id: str | None = None) -> PublicPlaye
     return PublicPlayerProfile(
         id=player.id,
         display_name=player.display_name,
+        bio=player.bio,
         profile_image_url=player.profile_image_url,
         area=player.area,
         dupr_rating=player.dupr_rating,
@@ -475,8 +547,8 @@ def _public_profile(player: Player, viewer_id: str | None = None) -> PublicPlaye
     )
 
 
-def _social_post_view(post: SocialPost, viewer_id: str) -> SocialPostView:
-    session = repository.get_session(post.session_id) if post.session_id else None
+def _social_post_view(post: SocialPost, viewer_id: str, session: Session | None = None) -> SocialPostView:
+    session = session if session is not None else repository.get_session(post.session_id) if post.session_id else None
     return SocialPostView(
         id=post.id,
         player_id=post.player_id,
@@ -495,6 +567,67 @@ def _social_post_view(post: SocialPost, viewer_id: str) -> SocialPostView:
         share_count=post.share_count,
         liked_by_me=viewer_id in post.liked_by,
         created_at=post.created_at,
+    )
+
+
+def _session_social_view(session: Session, players_by_id: dict[str, Player] | None = None) -> SocialPostView:
+    players_by_id = players_by_id or {candidate.id: candidate for candidate in repository.list_players()}
+    participants = [players_by_id.get(player_id) for player_id in session.confirmed_player_ids]
+    players = [candidate for candidate in participants if candidate]
+
+    def cmr_rating(candidate: Player) -> float | None:
+        current = candidate.cmr_ratings.get(session.sport)
+        if current is not None:
+            return round(current, 1)
+        legacy = rating_for_sport(candidate, session.sport)
+        return round(cmr_from_legacy_rating(legacy), 1) if legacy is not None else None
+
+    ranked_players = sorted(
+        players,
+        key=lambda candidate: (
+            -(cmr_rating(candidate) or -1),
+            -candidate.reliability,
+            candidate.display_name.lower(),
+        ),
+    )
+    leaderboard = [
+        SocialLeaderboardEntry(
+            rank=index,
+            player_id=candidate.id,
+            display_name=candidate.display_name,
+            profile_image_url=candidate.profile_image_url,
+            cmr_rating=cmr_rating(candidate),
+        )
+        for index, candidate in enumerate(ranked_players, start=1)
+    ]
+    organizer = players_by_id.get(session.organizer_id) or (players[0] if players else None)
+    organizer_name = organizer.display_name if organizer else "CourtMate player"
+    return SocialPostView(
+        id=f"session-activity-{session.id}",
+        player_id=organizer.id if organizer else session.organizer_id,
+        player_display_name=organizer_name,
+        profile_image_url=organizer.profile_image_url if organizer else None,
+        sport=session.sport,
+        session_id=session.id,
+        session_name=session.group_name,
+        session_date=session.session_date,
+        session_area=session.area,
+        caption=f"{organizer_name} is playing in {session.group_name}.",
+        # Sessions do not store a creation timestamp; use the scheduled start so
+        # activity cards sort naturally alongside authored social posts.
+        created_at=datetime.combine(session.session_date, session.start_time, tzinfo=local_timezone),
+        activity_type="session",
+        session_status=session.status,
+        session_players=[
+            SocialSessionPlayer(
+                id=candidate.id,
+                display_name=candidate.display_name,
+                profile_image_url=candidate.profile_image_url,
+                cmr_rating=cmr_rating(candidate),
+            )
+            for candidate in players
+        ],
+        session_leaderboard=leaderboard,
     )
 
 
@@ -843,11 +976,12 @@ def search(request: ParseRequest, player: Player = Depends(get_current_player)) 
         except Exception as error:
             fallback_reason = str(error)[:160]
     sessions = candidate_sessions if candidate_sessions is not None else repository.list_sessions()
+    sessions = [session for session in sessions if _session_visible_to_player(session, player)]
     recommendations = search_sessions(sessions, intent, repository.list_players(), player, exact=request.mode == "exact")
     if not recommendations and retrieval_mode == "vector":
         fallback_reason = "vector_candidates_failed_validation"
         retrieval_mode = "deterministic_fallback"
-        sessions = repository.list_sessions()
+        sessions = [session for session in repository.list_sessions() if _session_visible_to_player(session, player)]
         recommendations = search_sessions(sessions, intent, repository.list_players(), player, exact=request.mode == "exact")
     decision = intent_parser.decide(request.query, intent, sessions, recommendations, player)
     proposal = _group_proposal(intent, player.id, decision.proposed_group_name, request.query) if not recommendations else None
@@ -1569,7 +1703,8 @@ def complete_session(session_id: str, player: Player = Depends(get_current_playe
 def create_group(request: CreateGroupRequest, player: Player = Depends(get_current_player)) -> CreatedGroupResponse:
     intent = _parse_intent(request.query, request.sport, player)
     proposal = _group_proposal(intent, player.id, request.group_name, request.query)
-    overrides = request.model_dump(exclude_none=True, exclude={"query", "group_name", "sport"})
+    overrides = request.model_dump(exclude_none=True, exclude={"query", "group_name", "sport", "visibility"})
+    session_visibility = request.visibility or player.default_session_visibility
     if request.area:
         coordinates = _geocode_area(request.area)
         overrides.update({"area": request.area, "latitude": coordinates[0] if coordinates else None, "longitude": coordinates[1] if coordinates else None})
@@ -1601,6 +1736,7 @@ def create_group(request: CreateGroupRequest, player: Player = Depends(get_curre
         sport=proposal.sport,
         capacity=proposal.capacity,
         confirmed_player_ids=[player.id],
+        visibility=session_visibility,
     )
     saved_session = repository.save_session(session)
     _index_session_best_effort(saved_session)

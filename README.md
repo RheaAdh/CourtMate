@@ -120,7 +120,7 @@ COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
   python -m backend.seed_synthetic_firestore
 ```
 
-The script upserts only `demo-` records in the CourtMate collections: players, sessions, join requests, chat posts, feedback, follows, notifications, tournaments, tournament registrations, and tournament matches. It does not touch Firebase Authentication or unrelated collections. To attach the Rhea Adhikari demo profile to your signed-in Firebase account, pass the Firebase Auth UID from that account:
+The script upserts only `demo-` records in the CourtMate collections: players, sessions, join requests, chat posts, social posts and comments, feedback, follows, notifications, tournaments, tournament registrations, and tournament matches. Social data includes multi-sport session updates, image/video examples, reactions, comments, and share counts. It does not touch Firebase Authentication or unrelated collections. To attach the Rhea Adhikari demo profile to your signed-in Firebase account, pass the Firebase Auth UID from that account:
 
 ```bash
 COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \

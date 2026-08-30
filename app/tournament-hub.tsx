@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import { TennisBallLoader } from "./tennis-ball-loader";
 
 type Sport = "pickleball" | "badminton" | "tennis" | "padel" | "squash" | "table_tennis";
 type TournamentStatus = "registration" | "in_progress" | "completed" | "cancelled";
@@ -333,8 +334,8 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
   if (!currentUserId) {
     return (
       <section className="page-view tournament-page">
-        <div className="tournament-hero">
-          <h1>Tournaments</h1>
+        <div className="page-empty tournament-sign-in">
+          <strong>Sign in to explore tournaments.</strong>
           <button className="dark-button" onClick={onSignIn}>Sign in to enter <span>-&gt;</span></button>
         </div>
       </section>
@@ -374,14 +375,15 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
 
   return (
     <section className="page-view tournament-page">
-      <div className="tournament-hero">
-        <div>
-          <h1>Tournaments</h1>
-        </div>
-        <button className="create-game-action" onClick={() => setShowCreate((open) => !open)}>
-          {showCreate ? "Close" : "Create tournament"} <span>+</span>
-        </button>
-      </div>
+      <button
+        type="button"
+        className="section-fab tournament-fab"
+        onClick={() => setShowCreate((open) => !open)}
+        aria-label={showCreate ? "Close tournament creation" : "Create a tournament"}
+        title={showCreate ? "Close" : "Create tournament"}
+      >
+        {showCreate ? "×" : "+"}
+      </button>
 
       {showCreate && (
         <form className="tournament-create-card" onSubmit={createTournament}>
@@ -494,7 +496,7 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
           <div className="tournament-tabs" role="tablist" aria-label="Tournament views">
             {tournamentTabs.map((tab) => <button type="button" role="tab" aria-selected={activeView === tab.value} className={activeView === tab.value ? "active" : ""} onClick={() => setActiveView(tab.value)} key={tab.value}>{tab.label}<span>{tab.value === "explore" ? exploreTournaments.length : tournaments.filter((tournament) => tournamentView(tournament) === tab.value).length}</span></button>)}
           </div>
-          <div className="tournament-list-heading"><div><h2>{activeView === "explore" ? "Explore tournaments" : activeView === "upcoming" ? "Upcoming tournaments" : activeView === "pending" ? "Pending registrations" : "Tournament history"}</h2></div><span>{loading ? "Loading..." : `${visibleTournaments.length} event${visibleTournaments.length === 1 ? "" : "s"}`}</span></div>
+          <div className="tournament-list-heading"><div><h2>{activeView === "explore" ? "Explore tournaments" : activeView === "upcoming" ? "Upcoming tournaments" : activeView === "pending" ? "Pending registrations" : "Tournament history"}</h2></div>{loading ? <TennisBallLoader compact label="Loading tournaments" /> : <span>{`${visibleTournaments.length} event${visibleTournaments.length === 1 ? "" : "s"}`}</span>}</div>
           {visibleTournaments.length ? visibleTournaments.map((tournament) => (
             <button className="tournament-card" key={tournament.id} onClick={() => void openTournament(tournament.id)} disabled={busyId === tournament.id}>
               <span className="tournament-card-date"><strong>{new Date(`${tournament.tournament_date}T00:00:00`).toLocaleDateString("en-IN", { day: "2-digit" })}</strong><small>{new Date(`${tournament.tournament_date}T00:00:00`).toLocaleDateString("en-IN", { month: "short" })}</small></span>

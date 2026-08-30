@@ -233,6 +233,14 @@ class ApiFlowTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
+    def test_social_media_requires_a_game_the_player_can_access(self):
+        response = self.client.post(
+            "/v1/social/posts",
+            json={"caption": "Unattached photo", "sport": "pickleball", "media_url": "https://storage.googleapis.com/example/photo.jpg", "media_type": "image"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(response.status_code, 422)
+
     def test_exact_search_filters_requested_game_style(self):
         response = self.client.post(
             "/v1/sessions/search",
