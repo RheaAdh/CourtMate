@@ -17,6 +17,7 @@ type GroupSpaceSession = {
 type GroupSpaceMember = {
   id: string;
   display_name: string;
+  profile_image_url?: string | null;
   area: string;
   style: string;
   cmr_ratings?: Record<string, number>;
@@ -73,6 +74,7 @@ type GroupSpaceProps = {
   onRefresh: () => void;
   onChatPosted: (post: GroupSpacePost) => void;
   onToast: (message: string) => void;
+  onViewProfile: (playerId: string) => void;
   activityProofs?: ActivityProof[];
   onAnalyzeActivityProof: (file: File) => Promise<ActivityProof | null>;
 };
@@ -103,7 +105,7 @@ function MicrophoneIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="12" rx="4" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" /></svg>;
 }
 
-export function GroupSpace({ group, members, waitlist, posts, leaderboard, localLeaderboard, currentUserId, apiUrl, authorizedFetch, onClose, onRefresh, onChatPosted, onToast, activityProofs = [], onAnalyzeActivityProof }: GroupSpaceProps) {
+export function GroupSpace({ group, members, waitlist, posts, leaderboard, localLeaderboard, currentUserId, apiUrl, authorizedFetch, onClose, onRefresh, onChatPosted, onToast, onViewProfile, activityProofs = [], onAnalyzeActivityProof }: GroupSpaceProps) {
   const [draft, setDraft] = useState("");
   const [listening, setListening] = useState(false);
   const [posting, setPosting] = useState(false);
@@ -187,8 +189,8 @@ export function GroupSpace({ group, members, waitlist, posts, leaderboard, local
               const pending = post.post_type === "match_result" && (post.result_status ?? "confirmed") === "pending_confirmation";
               const canConfirm = pending && Boolean(currentUserId) && resultPlayers.includes(currentUserId ?? "") && !confirmations.includes(currentUserId ?? "");
               return <article className={`chat-post ${post.player_id === currentUserId ? "mine" : ""}`} key={post.id}>
-                <div className="chat-avatar">{initials(post.player_display_name)}</div>
-                <div className="group-space-v2-post-copy"><strong>{post.player_display_name}</strong><p>{post.message}</p><small>{new Date(post.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</small>
+                <button type="button" className="group-profile-trigger" onClick={() => onViewProfile(post.player_id)} aria-label={`View ${post.player_display_name}'s profile`}><span className="chat-avatar">{initials(post.player_display_name)}</span></button>
+                <div className="group-space-v2-post-copy"><button type="button" className="group-profile-name" onClick={() => onViewProfile(post.player_id)}>{post.player_display_name}</button><p>{post.message}</p><small>{new Date(post.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</small>
                   {post.post_type === "match_result" && post.teams?.length === 2 && <div className={`chat-result-card ${post.result_status ?? "confirmed"}`}><div><strong>{post.result_status === "disputed" ? "Result needs review" : post.result_status === "confirmed" || !post.result_status ? "Result confirmed" : "Confirm this result"}</strong><small>{memberNames(post.teams[0].player_ids, members)} {post.teams[0].score ?? "-"} – {post.teams[1].score ?? "-"} {memberNames(post.teams[1].player_ids, members)}</small></div>{pending && <span>{confirmations.length}/{resultPlayers.length} agreed</span>}{canConfirm && <div className="chat-result-actions"><button type="button" onClick={() => void decideResult(post, true)} disabled={decisionId === post.id}>Agree</button><button type="button" className="chat-result-dispute" onClick={() => void decideResult(post, false)} disabled={decisionId === post.id}>Dispute</button></div>}</div>}
                 </div>
               </article>;
@@ -201,7 +203,7 @@ export function GroupSpace({ group, members, waitlist, posts, leaderboard, local
           </form>
           <p className="group-space-v2-hint">Say the venue, time, payment split, score, or feedback. Example: "Ananya and Kavya beat Rohit and Sana 11-8".</p>
         </section>
-        <section className="workspace-panel group-waitlist-panel"><div className="workspace-panel-heading"><div><span className="kicker">THE LINE-UP</span><h3>Playing now</h3></div><span>{members.length} confirmed</span></div><div className="group-roster-list">{members.map((member) => <div className="group-roster-row" key={member.id}><span className="chat-avatar">{initials(member.display_name)}</span><strong>{member.display_name}</strong><b>{member.cmr_ratings?.[group.sport]?.toFixed(1) ?? "-"}</b></div>)}</div><div className="group-waitlist-heading"><span className="kicker">NEXT UP</span><strong>Waitlist · {waitlist.length}</strong></div>{waitlist.length ? <div className="group-waitlist-list">{waitlist.map((member, index) => <div className="group-waitlist-row" key={member.id}><span>#{index + 1}</span><div><strong>{member.display_name}</strong><small>{member.area} · {member.style}</small></div><b>{member.cmr_ratings?.[group.sport]?.toFixed(1) ?? "-"}</b></div>)}</div> : <p className="activity-empty">No one is waiting. A player who backs out will release the next spot here.</p>}</section>
+        <section className="workspace-panel group-waitlist-panel"><div className="workspace-panel-heading"><div><span className="kicker">THE LINE-UP</span><h3>Playing now</h3></div><span>{members.length} confirmed</span></div><div className="group-roster-list">{members.map((member) => <button type="button" className="group-roster-row group-profile-row" key={member.id} onClick={() => onViewProfile(member.id)} aria-label={`View ${member.display_name}'s profile`}><span className="chat-avatar">{member.profile_image_url ? <img src={member.profile_image_url} alt="" /> : initials(member.display_name)}</span><strong>{member.display_name}</strong><b>{member.cmr_ratings?.[group.sport]?.toFixed(1) ?? "-"}</b></button>)}</div><div className="group-waitlist-heading"><span className="kicker">NEXT UP</span><strong>Waitlist · {waitlist.length}</strong></div>{waitlist.length ? <div className="group-waitlist-list">{waitlist.map((member, index) => <button type="button" className="group-waitlist-row group-profile-row" key={member.id} onClick={() => onViewProfile(member.id)} aria-label={`View ${member.display_name}'s profile`}><span>#{index + 1}</span><div><strong>{member.display_name}</strong><small>{member.area} · {member.style}</small></div><b>{member.cmr_ratings?.[group.sport]?.toFixed(1) ?? "-"}</b></button>)}</div> : <p className="activity-empty">No one is waiting. A player who backs out will release the next spot here.</p>}</section>
         <section className="workspace-panel leaderboard-panel"><div className="workspace-panel-heading"><div><span className="kicker">{group.sport.replaceAll("_", " ").toUpperCase()} LEADERBOARD</span><h3>Group rankings</h3></div></div>{leaderboard.length ? <div className="leaderboard-list">{leaderboard.map((entry) => <div className="leaderboard-row" key={entry.player.id}><span className="rank">{entry.rank}</span><div><strong>{entry.player.display_name}</strong><small>{entry.ratings_count} rated game{entry.ratings_count === 1 ? "" : "s"}</small></div><b>{entry.score.toFixed(1)}</b></div>)}</div> : <p className="activity-empty">Confirmed results will build this leaderboard.</p>}<div className="local-leaderboard"><span className="kicker">{group.area.toUpperCase()} · LOCAL</span>{localLeaderboard.slice(0, 5).map((entry) => <div className="local-row" key={entry.player.id}><span>#{entry.rank}</span><strong>{entry.player.display_name}</strong><b>{entry.score.toFixed(1)}</b></div>)}</div></section>
       </div>
       {group.status === "completed" && <PostGameFeedbackPanel sessionId={group.id} members={members} currentUserId={currentUserId} apiUrl={apiUrl} authorizedFetch={authorizedFetch} activityProofs={activityProofs} onAnalyzeActivityProof={onAnalyzeActivityProof} onSaved={onRefresh} onToast={onToast} />}

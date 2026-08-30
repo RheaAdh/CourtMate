@@ -340,6 +340,10 @@ class SessionRecommendation(BaseModel):
     reasons: RecommendationReason
 
 
+class ExploreSessionsResponse(BaseModel):
+    recommendations: list[SessionRecommendation] = Field(default_factory=list)
+
+
 class GroupProposal(BaseModel):
     group_name: str
     area: str

@@ -3323,6 +3323,11 @@ body::before { border-color: rgba(117, 140, 31, .18); }
   display: none;
 }
 
+/* The creation conversation replaces the old no-match result action. */
+.creation-in-progress .result-message {
+  display: none;
+}
+
 @media (max-width: 600px) {
   .crafted-game-card {
     padding: 13px;
@@ -4715,4 +4720,98 @@ body::before { border-color: rgba(117, 140, 31, .18); }
     padding-inline: 4px;
     font-size: 9px;
   }
+}
+
+.group-profile-trigger,
+.group-profile-name,
+.group-profile-row,
+.social-profile-trigger,
+.social-comment-profile,
+.social-comment-name {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.group-profile-trigger {
+  flex: none;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.group-profile-trigger:hover .chat-avatar,
+.group-profile-trigger:focus-visible .chat-avatar,
+.group-profile-row:hover,
+.group-profile-row:focus-visible,
+.group-profile-name:hover,
+.group-profile-name:focus-visible,
+.social-profile-trigger:hover,
+.social-profile-trigger:focus-visible,
+.social-comment-profile:hover,
+.social-comment-profile:focus-visible,
+.social-comment-name:hover,
+.social-comment-name:focus-visible {
+  opacity: .72;
+}
+
+.group-profile-name {
+  display: block;
+  padding: 0;
+  text-align: left;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.group-profile-row {
+  width: 100%;
+  text-align: left;
+}
+
+.group-profile-row .chat-avatar,
+.member-profile-avatar {
+  overflow: hidden;
+}
+
+.group-profile-row .chat-avatar img,
+.member-profile-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+
+.social-profile-trigger {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  text-align: left;
+}
+
+.social-profile-trigger > span:last-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.social-profile-trigger strong { font-size: 12px; }
+.social-profile-trigger small { color: #8a958c; font: 9px 'DM Mono'; }
+
+.social-comment-profile {
+  flex: none;
+  align-self: flex-start;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.social-comment-name {
+  display: block;
+  padding: 0;
+  text-align: left;
+  font-size: 10px;
+  font-weight: 800;
 }

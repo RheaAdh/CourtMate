@@ -52,6 +52,7 @@ type SocialFeedProps = {
   currentProfileImage?: string | null;
   authorizedFetch: (url: string, options?: RequestInit) => Promise<Response>;
   onToast: (message: string) => void;
+  onViewProfile: (playerId: string) => void;
 };
 
 const sports: { value: Sport; label: string }[] = [
@@ -84,7 +85,7 @@ function Avatar({ name, imageUrl, large = false }: { name: string; imageUrl?: st
   return <span className={`social-avatar ${large ? "large" : ""}`}>{imageUrl ? <img src={imageUrl} alt="" /> : initials(name)}</span>;
 }
 
-export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProfileImage, authorizedFetch, onToast }: SocialFeedProps) {
+export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProfileImage, authorizedFetch, onToast, onViewProfile }: SocialFeedProps) {
   const [posts, setPosts] = useState<SocialPost[]>([]);
   const [feedFilter, setFeedFilter] = useState<"all" | "following">("all");
   const [loading, setLoading] = useState(true);
@@ -293,12 +294,12 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       {loading && <p className="social-empty">Loading your court community...</p>}
       {!loading && posts.length === 0 && <div className="social-empty"><strong>{feedFilter === "following" ? "Follow players to build your feed." : "Your court community starts here."}</strong><p>Share a game moment, a match result, or a photo from the court.</p></div>}
       {!loading && posts.map((post) => <article className="social-post-card" id={`social-post-${post.id}`} key={post.id}>
-        <header className="social-post-header"><Avatar name={post.player_display_name} imageUrl={post.profile_image_url} large /><div><strong>{post.player_display_name}</strong><span>{sportLabel(post.sport)} · {relativeTime(post.created_at)}</span></div><span className="social-post-sport">{sportLabel(post.sport)}</span></header>
+        <header className="social-post-header"><button type="button" className="social-profile-trigger" onClick={() => onViewProfile(post.player_id)} aria-label={`View ${post.player_display_name}'s profile`}><Avatar name={post.player_display_name} imageUrl={post.profile_image_url} large /><span><strong>{post.player_display_name}</strong><small>{sportLabel(post.sport)} · {relativeTime(post.created_at)}</small></span></button><span className="social-post-sport">{sportLabel(post.sport)}</span></header>
         <p className="social-post-caption">{post.caption}</p>
         {post.session_name && <div className="social-session-chip"><span>●</span><div><strong>{post.session_name}</strong><small>{post.session_date} · {post.session_area}</small></div><span>Game</span></div>}
         {post.media_url && <div className="social-post-media">{post.media_type === "video" ? <video src={post.media_url} controls playsInline /> : <img src={post.media_url} alt="Shared court moment" />}</div>}
         <div className="social-post-actions"><button type="button" className={post.liked_by_me ? "liked" : ""} onClick={() => void toggleLike(post)} disabled={busyAction === `like-${post.id}`}><span>{post.liked_by_me ? "♥" : "♡"}</span> {post.like_count || "Like"}</button><button type="button" onClick={() => void toggleComments(post.id)}><span>◌</span> {post.comment_count || "Comment"}</button><button type="button" onClick={() => void sharePost(post)} disabled={busyAction === `share-${post.id}`}><span>↗</span> {post.share_count || "Share"}</button></div>
-        {expandedPostId === post.id && <div className="social-comments"><div className="social-comments-list">{busyAction === `comments-${post.id}` ? <small>Loading comments...</small> : comments[post.id]?.length ? comments[post.id].map((comment) => <div className="social-comment" key={comment.id}><Avatar name={comment.player_display_name} imageUrl={comment.profile_image_url} /><div><strong>{comment.player_display_name}</strong><p>{comment.message}</p></div></div>) : <small>No comments yet. Start the conversation.</small>}</div><form className="social-comment-form" onSubmit={(event) => void addComment(event, post.id)}><Avatar name={currentUserName} imageUrl={currentProfileImage} /><input value={commentDrafts[post.id] ?? ""} onChange={(event) => setCommentDrafts((current) => ({ ...current, [post.id]: event.target.value }))} placeholder="Add a comment..." maxLength={300} aria-label="Add a comment" /><button type="submit" disabled={!commentDrafts[post.id]?.trim() || busyAction === `comment-${post.id}`}>↗</button></form></div>}
+        {expandedPostId === post.id && <div className="social-comments"><div className="social-comments-list">{busyAction === `comments-${post.id}` ? <small>Loading comments...</small> : comments[post.id]?.length ? comments[post.id].map((comment) => <div className="social-comment" key={comment.id}><button type="button" className="social-comment-profile" onClick={() => onViewProfile(comment.player_id)} aria-label={`View ${comment.player_display_name}'s profile`}><Avatar name={comment.player_display_name} imageUrl={comment.profile_image_url} /></button><div><button type="button" className="social-comment-name" onClick={() => onViewProfile(comment.player_id)}>{comment.player_display_name}</button><p>{comment.message}</p></div></div>) : <small>No comments yet. Start the conversation.</small>}</div><form className="social-comment-form" onSubmit={(event) => void addComment(event, post.id)}><Avatar name={currentUserName} imageUrl={currentProfileImage} /><input value={commentDrafts[post.id] ?? ""} onChange={(event) => setCommentDrafts((current) => ({ ...current, [post.id]: event.target.value }))} placeholder="Add a comment..." maxLength={300} aria-label="Add a comment" /><button type="submit" disabled={!commentDrafts[post.id]?.trim() || busyAction === `comment-${post.id}`}>↗</button></form></div>}
       </article>)}
     </div>
   </section>;

@@ -440,6 +440,23 @@ class ApiFlowTests(unittest.TestCase):
         request_views = incoming.json()["requests"]
         self.assertTrue(any(item["request"]["id"] == join.json()["id"] and item["session"]["id"] == "s1" for item in request_views))
 
+    def test_player_can_withdraw_a_pending_request(self):
+        join = self.client.post("/v1/sessions/s1/join", headers={"X-CourtMate-Player-ID": "p5"})
+        self.assertEqual(join.status_code, 200)
+        self.assertEqual(join.json()["status"], "pending")
+
+        withdrawn = self.client.post(
+            f"/v1/me/requests/{join.json()['id']}/withdraw",
+            headers={"X-CourtMate-Player-ID": "p5"},
+        )
+        self.assertEqual(withdrawn.status_code, 200)
+        self.assertEqual(withdrawn.json()["status"], "withdrawn")
+        self.assertEqual(repository.list_join_requests_for_player("p5")[0].status, "withdrawn")
+
+        pending = self.client.get("/v1/me/requests", headers={"X-CourtMate-Player-ID": "p5"})
+        self.assertEqual(pending.status_code, 200)
+        self.assertEqual([item for item in pending.json()["requests"] if item["request"]["status"] in {"pending", "waitlisted"}], [])
+
     def test_expired_session_closes_and_stops_new_changes(self):
         session_id = "expired-session"
         repository.save_session(

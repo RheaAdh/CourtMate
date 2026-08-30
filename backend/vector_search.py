@@ -136,8 +136,10 @@ def tournament_to_document(tournament: Tournament) -> SearchDocument:
         f"{tournament.format.replace('_', ' ')} format in {tournament.area}. "
         f"Tournament date {tournament.tournament_date.strftime('%A %d %B')}. "
         f"{tournament.capacity} player capacity. "
+        f"Status: {tournament.status.replace('_', ' ')}. "
+        f"{len(tournament.registration_ids)} registered players. "
         f"{'Venue: ' + tournament.venue_name + '. ' if tournament.venue_name else ''}"
-        f"{tournament.summary}"
+        f"Rules: best of {tournament.rules.best_of}, first to {tournament.rules.point_target}, win by {tournament.rules.win_by}."
     )
     return _base_document("tournament", tournament.id, content, {
         "sport": tournament.sport,

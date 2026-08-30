@@ -7,6 +7,7 @@ touches Firebase Authentication or non-CourtMate collections.
 
 from datetime import date, datetime, time, timedelta, timezone
 import os
+import re
 
 from .models import (
     AppNotification,
@@ -31,6 +32,12 @@ COORDINATES = {
     "Brookefield": (12.9665, 77.7168),
     "Varthur": (12.9408, 77.7460),
     "Marathahalli": (12.9569, 77.7011),
+    "Indiranagar": (12.9784, 77.6408),
+    "Koramangala": (12.9352, 77.6245),
+    "HSR Layout": (12.9116, 77.6389),
+    "Sarjapur": (12.9279, 77.6271),
+    "Bellandur": (12.9255, 77.6762),
+    "Kadubeesanahalli": (12.9358, 77.6900),
 }
 
 
@@ -105,6 +112,50 @@ def make_session(session_id: str, name: str, organizer_id: str, sport: str, area
     )
 
 
+def seed_additional_sessions(repository: FirestoreRepository, players: list[Player], today: date) -> int:
+    """Create a broad, stable discovery corpus for demos and vector retrieval."""
+    areas = ["Whitefield", "Brookefield", "Varthur", "Marathahalli", "Indiranagar", "Koramangala", "HSR Layout", "Sarjapur", "Bellandur", "Kadubeesanahalli"]
+    session_templates = [
+        ("pickleball", "Rally", time(7), time(9), 2.6, 3.6, "casual"),
+        ("badminton", "Shuttle", time(19), time(21), 2.4, 3.5, "social"),
+        ("tennis", "Doubles", time(6, 30), time(8, 30), 3.0, 4.4, "casual"),
+        ("padel", "Pairs", time(20), time(22), 3.2, 4.7, "competitive"),
+        ("squash", "Ladder", time(18), time(20), 3.5, 4.8, "competitive"),
+        ("table_tennis", "Spin", time(8), time(10), 2.0, 3.4, "social"),
+    ]
+    seeded = 0
+    for area_index, area in enumerate(areas):
+        for sport_index, (sport, format_name, start_hour, end_hour, minimum, maximum, style) in enumerate(session_templates):
+            date_offset = 1 + ((area_index * 3 + sport_index * 2) % 20)
+            slug = re.sub(r"[^a-z0-9]+", "-", area.lower()).strip("-")
+            session_id = f"demo-generated-{slug}-{sport}"
+            organizer = players[(area_index + sport_index) % len(players)]
+            confirmed = [organizer.id]
+            for step in range(1, 4):
+                member = players[(area_index + sport_index + step) % len(players)]
+                if member.id not in confirmed:
+                    confirmed.append(member.id)
+            waitlist = [players[(area_index + sport_index + 5) % len(players)].id]
+            session = make_session(
+                session_id,
+                f"{area} {format_name} {sport.replace('_', ' ').title()}",
+                organizer.id,
+                sport,
+                area,
+                today + timedelta(days=date_offset),
+                start_hour,
+                end_hour,
+                minimum,
+                maximum,
+                style,
+                confirmed,
+                waitlist,
+            )
+            repository.save_session(session)
+            seeded += 1
+    return seeded
+
+
 def make_notification(notification_id: str, player_id: str, kind: str, title: str, message: str, session_id: str, now: datetime, request_id: str | None = None, actor_id: str | None = None, read: bool = False) -> AppNotification:
     return AppNotification(
         id=notification_id,
@@ -120,8 +171,8 @@ def make_notification(notification_id: str, player_id: str, kind: str, title: st
     )
 
 
-def seed_tournaments(repository: FirestoreRepository, players: list[Player], organizer_id: str, today: date, now: datetime) -> None:
-    """Create one registration event and one partially played event for the tournament desk."""
+def seed_tournaments(repository: FirestoreRepository, players: list[Player], organizer_id: str, today: date, now: datetime) -> int:
+    """Create registration, live, and completed events across racket sports."""
     players_by_id = {player.id: player for player in players}
     events = [
         Tournament(
@@ -163,11 +214,67 @@ def seed_tournaments(repository: FirestoreRepository, players: list[Player], org
             created_at=now - timedelta(days=24),
             rules=rules_for_sport("tennis"),
         ),
+        Tournament(
+            id="demo-tournament-badminton",
+            name="HSR Shuttle Cup",
+            sport="badminton",
+            organizer_id="demo-rohit",
+            area="HSR Layout",
+            venue_name="Demo HSR Courts",
+            tournament_date=today + timedelta(days=14),
+            capacity=8,
+            status="registration",
+            created_at=now - timedelta(days=1),
+            rules=rules_for_sport("badminton"),
+        ),
+        Tournament(
+            id="demo-tournament-padel",
+            name="Bellandur Padel Pairs",
+            sport="padel",
+            organizer_id="demo-vikram",
+            area="Bellandur",
+            venue_name="Demo Bellandur Courts",
+            tournament_date=today + timedelta(days=9),
+            capacity=6,
+            status="registration",
+            created_at=now - timedelta(days=3),
+            rules=rules_for_sport("padel"),
+        ),
+        Tournament(
+            id="demo-tournament-squash",
+            name="Koramangala Squash Ladder",
+            sport="squash",
+            organizer_id="demo-meera",
+            area="Koramangala",
+            venue_name="Demo Koramangala Courts",
+            tournament_date=today + timedelta(days=18),
+            capacity=8,
+            status="registration",
+            created_at=now - timedelta(days=4),
+            rules=rules_for_sport("squash"),
+        ),
+        Tournament(
+            id="demo-tournament-table-tennis",
+            name="Indiranagar Table Tennis Open",
+            sport="table_tennis",
+            organizer_id="demo-neil",
+            area="Indiranagar",
+            venue_name="Demo Indiranagar Courts",
+            tournament_date=today + timedelta(days=11),
+            capacity=8,
+            status="registration",
+            created_at=now - timedelta(days=2),
+            rules=rules_for_sport("table_tennis"),
+        ),
     ]
     registration_specs = {
         "demo-tournament-registration": [organizer_id, "demo-kavya", "demo-rohit", "demo-sana", "demo-pooja", "demo-meera"],
         "demo-tournament-live": ["demo-meera", "demo-vikram", organizer_id, "demo-kavya", "demo-rohit", "demo-sana"],
         "demo-tournament-tennis": ["demo-neil", organizer_id, "demo-vikram", "demo-meera"],
+        "demo-tournament-badminton": ["demo-rohit", "demo-sana", "demo-pooja", "demo-isha", "demo-kavya"],
+        "demo-tournament-padel": ["demo-vikram", "demo-meera", "demo-neil", "demo-isha"],
+        "demo-tournament-squash": ["demo-meera", "demo-vikram", "demo-isha", "demo-arjun"],
+        "demo-tournament-table-tennis": ["demo-neil", "demo-isha", "demo-arjun", "demo-pooja"],
     }
 
     for event in events:
@@ -212,6 +319,7 @@ def seed_tournaments(repository: FirestoreRepository, players: list[Player], org
             else:
                 match.status = "scheduled"
             repository.save_tournament_match(match)
+    return len(events)
 
 
 def seed() -> None:
@@ -231,6 +339,12 @@ def seed() -> None:
         make_player("demo-vikram", "Demo Vikram", "Marathahalli", {"pickleball": 4.4, "tennis": 4.6}, "competitive", 0.90, avatar_number=13, age=38, gender="man"),
         make_player("demo-pooja", "Demo Pooja", "Whitefield", {"pickleball": 2.5, "badminton": 2.8}, "casual", 0.82, avatar_number=5, age=42, gender="woman"),
         make_player("demo-neil", "Demo Neil", "Brookefield", {"tennis": 3.2, "padel": 3.0}, "social", 0.84, avatar_number=11, age=46, gender="man"),
+        make_player("demo-isha", "Demo Isha", "HSR Layout", {"badminton": 3.8, "padel": 3.6, "squash": 3.5, "table_tennis": 3.3}, "casual", 0.89, avatar_number=18, age=28, gender="woman"),
+        make_player("demo-arjun", "Demo Arjun", "Koramangala", {"tennis": 4.1, "squash": 4.2, "table_tennis": 3.9}, "competitive", 0.92, avatar_number=20, age=32, gender="man"),
+        make_player("demo-nisha", "Demo Nisha", "Sarjapur", {"pickleball": 3.1, "badminton": 3.2, "tennis": 3.4, "table_tennis": 2.9}, "social", 0.87, avatar_number=23, age=26, gender="woman"),
+        make_player("demo-kabir", "Demo Kabir", "Bellandur", {"pickleball": 4.0, "padel": 4.2, "tennis": 4.4}, "competitive", 0.93, avatar_number=27, age=35, gender="man"),
+        make_player("demo-tara", "Demo Tara", "Indiranagar", {"badminton": 2.7, "tennis": 3.0, "squash": 2.8}, "casual", 0.81, avatar_number=29, age=30, gender="woman"),
+        make_player("demo-dev", "Demo Dev", "Kadubeesanahalli", {"pickleball": 3.7, "badminton": 4.0, "padel": 3.8, "table_tennis": 4.1}, "social", 0.90, avatar_number=31, age=37, gender="man"),
     ]
     for player in players:
         repository.save_player(player)
@@ -256,6 +370,7 @@ def seed() -> None:
     ]
     for session in sessions:
         repository.save_session(session)
+    generated_sessions = seed_additional_sessions(repository, players, today)
 
     requests = [
         JoinRequest(id="demo-pb-sat-evening:demo-rohit", session_id="demo-pb-sat-evening", player_id="demo-rohit", player_display_name="Demo Rohit", status="pending", created_at=now - timedelta(hours=2)),
@@ -294,9 +409,9 @@ def seed() -> None:
     for notification in notifications:
         repository.save_notification(notification)
 
-    seed_tournaments(repository, players, rhea_id, today, now)
+    tournament_count = seed_tournaments(repository, players, rhea_id, today, now)
 
-    print(f"Seeded synthetic CourtMate data into {project}: {len(players)} players, {len(sessions)} sessions, {len(requests)} requests, {len(posts)} chat posts, {len(feedback)} feedback records, {len(follows)} follows, {len(notifications)} notifications, 3 tournaments.")
+    print(f"Seeded synthetic CourtMate data into {project}: {len(players)} players, {len(sessions) + generated_sessions} sessions, {len(requests)} requests, {len(posts)} chat posts, {len(feedback)} feedback records, {len(follows)} follows, {len(notifications)} notifications, {tournament_count} tournaments.")
 
 
 if __name__ == "__main__":

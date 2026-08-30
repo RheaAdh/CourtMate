@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialPost, SocialPostCreateRequest, SocialPostView, Sport, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListItem, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentRegistrationDecisionRequest, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, ExploreSessionsResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialPost, SocialPostCreateRequest, SocialPostView, Sport, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListItem, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentRegistrationDecisionRequest, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
 from .tournaments import calculate_standings, generate_round_robin_matches, rules_for_sport, validate_score
 from .vector_search import VectorIndexer, VectorRetriever
@@ -940,7 +940,8 @@ def leave_session(session_id: str, player: Player = Depends(get_current_player))
         pending_request = next((candidate for candidate in repository.list_join_requests(session_id) if candidate.player_id == player.id and candidate.status == "pending"), None)
         if pending_request:
             pending_request.status = "withdrawn"
-            repository.save_join_request(pending_request)
+            saved_request = repository.save_join_request(pending_request)
+            _notify_request_update(saved_request, session)
             return session
         raise HTTPException(status_code=409, detail="You are not confirmed or waitlisted for this session")
     if session.open_slots > 0 and session.status == "full":
@@ -948,6 +949,37 @@ def leave_session(session_id: str, player: Player = Depends(get_current_player))
     saved = repository.save_session(session)
     _index_session_best_effort(saved)
     return saved
+
+
+@app.post("/v1/me/requests/{request_id}/withdraw", response_model=JoinRequest)
+def withdraw_join_request(request_id: str, player: Player = Depends(get_current_player)) -> JoinRequest:
+    """Withdraw one of the current player's pending or waitlisted requests."""
+    join_request = next(
+        (
+            candidate
+            for candidate in repository.list_join_requests_for_player(player.id)
+            if candidate.id == request_id
+        ),
+        None,
+    )
+    if not join_request:
+        raise HTTPException(status_code=404, detail="Join request not found")
+    if join_request.status not in {"pending", "waitlisted"}:
+        raise HTTPException(status_code=409, detail=f"Join request is already {join_request.status}")
+
+    session = _get_session(join_request.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _require_active_session(session)
+
+    if player.id in session.waitlist_player_ids:
+        session.waitlist_player_ids.remove(player.id)
+        saved_session = repository.save_session(session)
+        _index_session_best_effort(saved_session)
+
+    join_request.status = "withdrawn"
+    saved_request = repository.save_join_request(join_request)
+    return saved_request
 
 
 @app.get("/v1/sessions/{session_id}/join-requests", response_model=JoinRequestsResponse)
@@ -1055,6 +1087,46 @@ def my_games(player: Player = Depends(get_current_player)) -> MyGamesResponse:
         past_games.append(PastGame(session=session, rank=player_entry.rank if player_entry else None, score=player_entry.score if player_entry else None, ratings_count=player_entry.ratings_count if player_entry else 0, group_size=len(session.confirmed_player_ids)))
     past_games.sort(key=lambda item: (item.session.session_date, item.session.start_time), reverse=True)
     return MyGamesResponse(games=games, past_games=past_games)
+
+
+@app.get("/v1/me/explore", response_model=ExploreSessionsResponse)
+def explore_sessions(player: Player = Depends(get_current_player)) -> ExploreSessionsResponse:
+    """Recommend open games nearby that this player can still request to join."""
+    _refresh_all_session_statuses()
+    active_request_session_ids = {
+        request.session_id
+        for request in repository.list_join_requests_for_player(player.id)
+        if request.status in {"pending", "approved", "waitlisted"}
+    }
+    source_sessions = [
+        session
+        for session in repository.list_sessions()
+        if session.organizer_id != player.id
+        and player.id not in session.confirmed_player_ids
+        and session.id not in active_request_session_ids
+        and session.status == "open"
+        and session.open_slots > 0
+    ]
+    players = repository.list_players()
+    recommendations = []
+    for sport in ("pickleball", "badminton", "tennis", "padel", "squash", "table_tennis"):
+        intent = SearchIntent(
+            sport=sport,
+            area=player.area,
+            latitude=player.latitude,
+            longitude=player.longitude,
+            open_slots_required=1,
+        )
+        recommendations.extend(search_sessions(source_sessions, intent, players, player, exact=False))
+    recommendations.sort(
+        key=lambda item: (
+            -item.score,
+            item.reasons.distance_km if item.reasons.distance_km is not None else 9999,
+            item.session.session_date,
+            item.session.start_time,
+        )
+    )
+    return ExploreSessionsResponse(recommendations=recommendations[:50])
 
 
 @app.get("/v1/sessions/{session_id}/group", response_model=GroupViewResponse)

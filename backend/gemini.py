@@ -271,7 +271,11 @@ Stored player context: {context}
         }
         sport = next((candidate for candidate, aliases in sport_aliases.items() if any(alias in lowered for alias in aliases)), "pickleball")
         style = "competitive" if "competitive" in lowered else "social" if "social" in lowered else "casual" if "casual" in lowered else "any"
-        area = next((candidate for candidate in ["Whitefield", "Brookefield", "Kadugodi", "Indiranagar", "Koramangala"] if candidate.lower() in lowered), "Whitefield")
+        locality_match = re.search(
+            r"\b(?:near|around|in)\s+([a-z0-9][a-z0-9'. -]*?)(?=\s+(?:this|next|on|at|for|with|today|tomorrow|sun(?:day)?|mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|morning|afternoon|evening|tonight|beginner|intermediate|advanced|casual|social|competitive|skill|level|cmr)\b|\s*[,.!?]|$)",
+            lowered,
+        )
+        area = locality_match.group(1).strip(" ,.-").title() if locality_match else "Whitefield"
         skill_bands = {
             "beginner": (1.0, 2.9),
             "intermediate": (3.0, 3.5),

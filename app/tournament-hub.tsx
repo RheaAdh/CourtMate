@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 
 type Sport = "pickleball" | "badminton" | "tennis" | "padel" | "squash" | "table_tennis";
 type TournamentStatus = "registration" | "in_progress" | "completed" | "cancelled";
-type TournamentView = "upcoming" | "pending" | "history";
+type TournamentView = "explore" | "upcoming" | "pending" | "history";
 
 type Tournament = {
   id: string;
@@ -79,6 +79,7 @@ type FixtureEdit = {
 type TournamentHubProps = {
   apiUrl: string;
   currentUserId?: string;
+  playerArea?: string;
   authorizedFetch: (url: string, options?: RequestInit) => Promise<Response>;
   onToast: (message: string) => void;
   onSignIn: () => void;
@@ -96,7 +97,7 @@ const sports: { value: Sport; label: string }[] = [
 const today = () => new Date().toISOString().slice(0, 10);
 const sportLabel = (sport: Sport) => sports.find((item) => item.value === sport)?.label ?? sport;
 
-export function TournamentHub({ apiUrl, currentUserId, authorizedFetch, onToast, onSignIn }: TournamentHubProps) {
+export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFetch, onToast, onSignIn }: TournamentHubProps) {
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
   const [selected, setSelected] = useState<TournamentDetails | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -356,8 +357,16 @@ export function TournamentHub({ apiUrl, currentUserId, authorizedFetch, onToast,
     if (tournament.my_registration_status === "pending" || tournament.my_registration_status === "waitlisted") return "pending";
     return "upcoming";
   };
-  const visibleTournaments = tournaments.filter((tournament) => tournamentView(tournament) === activeView);
+  const exploreTournaments = tournaments
+    .filter((tournament) => tournament.status === "registration" && tournament.tournament_date >= today() && !["pending", "registered", "waitlisted"].includes(tournament.my_registration_status ?? ""))
+    .sort((a, b) => {
+      const area = playerArea?.trim().toLowerCase() ?? "";
+      const areaScore = (tournament: Tournament) => area && (tournament.area.toLowerCase().includes(area) || area.includes(tournament.area.toLowerCase())) ? 0 : 1;
+      return areaScore(a) - areaScore(b) || a.tournament_date.localeCompare(b.tournament_date) || a.name.localeCompare(b.name);
+    });
+  const visibleTournaments = activeView === "explore" ? exploreTournaments : tournaments.filter((tournament) => tournamentView(tournament) === activeView);
   const tournamentTabs: { value: TournamentView; label: string }[] = [
+    { value: "explore", label: "Explore" },
     { value: "upcoming", label: "Upcoming" },
     { value: "pending", label: "Pending" },
     { value: "history", label: "History" },
@@ -483,9 +492,9 @@ export function TournamentHub({ apiUrl, currentUserId, authorizedFetch, onToast,
       ) : (
         <div className="tournament-list">
           <div className="tournament-tabs" role="tablist" aria-label="Tournament views">
-            {tournamentTabs.map((tab) => <button type="button" role="tab" aria-selected={activeView === tab.value} className={activeView === tab.value ? "active" : ""} onClick={() => setActiveView(tab.value)} key={tab.value}>{tab.label}<span>{tournaments.filter((tournament) => tournamentView(tournament) === tab.value).length}</span></button>)}
+            {tournamentTabs.map((tab) => <button type="button" role="tab" aria-selected={activeView === tab.value} className={activeView === tab.value ? "active" : ""} onClick={() => setActiveView(tab.value)} key={tab.value}>{tab.label}<span>{tab.value === "explore" ? exploreTournaments.length : tournaments.filter((tournament) => tournamentView(tournament) === tab.value).length}</span></button>)}
           </div>
-          <div className="tournament-list-heading"><div><h2>{activeView === "upcoming" ? "Upcoming tournaments" : activeView === "pending" ? "Pending registrations" : "Tournament history"}</h2></div><span>{loading ? "Loading..." : `${visibleTournaments.length} event${visibleTournaments.length === 1 ? "" : "s"}`}</span></div>
+          <div className="tournament-list-heading"><div><h2>{activeView === "explore" ? "Explore tournaments" : activeView === "upcoming" ? "Upcoming tournaments" : activeView === "pending" ? "Pending registrations" : "Tournament history"}</h2></div><span>{loading ? "Loading..." : `${visibleTournaments.length} event${visibleTournaments.length === 1 ? "" : "s"}`}</span></div>
           {visibleTournaments.length ? visibleTournaments.map((tournament) => (
             <button className="tournament-card" key={tournament.id} onClick={() => void openTournament(tournament.id)} disabled={busyId === tournament.id}>
               <span className="tournament-card-date"><strong>{new Date(`${tournament.tournament_date}T00:00:00`).toLocaleDateString("en-IN", { day: "2-digit" })}</strong><small>{new Date(`${tournament.tournament_date}T00:00:00`).toLocaleDateString("en-IN", { month: "short" })}</small></span>
@@ -494,7 +503,7 @@ export function TournamentHub({ apiUrl, currentUserId, authorizedFetch, onToast,
               <span className="tournament-card-arrow">-&gt;</span>
             </button>
           )) : (
-            <div className="tournament-waiting"><span className="tournament-waiting-icon">+</span><div><strong>{activeView === "pending" ? "No pending registrations." : activeView === "history" ? "No tournament history yet." : "No upcoming tournaments."}</strong><p>{activeView === "pending" ? "Requests awaiting organizer approval and waitlisted events will appear here." : activeView === "history" ? "Completed events and results will stay here." : "Create a local tournament or check back for open events."}</p></div></div>
+            <div className="tournament-waiting"><span className="tournament-waiting-icon">+</span><div><strong>{activeView === "explore" ? "No open tournaments nearby." : activeView === "pending" ? "No pending registrations." : activeView === "history" ? "No tournament history yet." : "No upcoming tournaments."}</strong><p>{activeView === "explore" ? "Open tournaments near your saved locality will appear here." : activeView === "pending" ? "Requests awaiting organizer approval and waitlisted events will appear here." : activeView === "history" ? "Completed events and results will stay here." : "Create a local tournament or check back for open events."}</p></div></div>
           )}
         </div>
       )}

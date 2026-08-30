@@ -128,7 +128,7 @@ COURTMATE_DEMO_RHEA_UID=YOUR_FIREBASE_AUTH_UID \
   python -m backend.seed_synthetic_firestore
 ```
 
-Without `COURTMATE_DEMO_RHEA_UID`, Rhea is created as the isolated `demo-rhea-adhikari` player. The seed includes multi-sport CMR history for Rhea, synthetic nearby players, notifications, and tournament fixtures so the Profile, Home, Games, group requests, leaderboard, social, and tournament flows are ready for a hackathon walkthrough. It is safe to rerun because the demo IDs are stable and writes are upserts.
+Without `COURTMATE_DEMO_RHEA_UID`, Rhea is created as the isolated `demo-rhea-adhikari` player. The seed includes 15 synthetic multi-sport players, 68 active/upcoming sessions across 10 Bangalore areas, seven tournaments, notifications, group requests, leaderboards, social posts, and tournament fixtures so the Profile, Home, Games, social, and tournament flows are ready for a hackathon walkthrough. It is safe to rerun because the demo IDs are stable and writes are upserts.
 
 Existing player documents created before the 0-100 CMR update are converted safely when read. To permanently rewrite those records in Firestore, run the one-time migration with Application Default Credentials:
 
