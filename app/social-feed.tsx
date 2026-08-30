@@ -117,7 +117,59 @@ function Avatar({ name, imageUrl, large = false }: { name: string; imageUrl?: st
   return <span className={`social-avatar ${large ? "large" : ""}`}>{imageUrl && !imageFailed ? <img src={imageUrl} alt="" onError={() => setImageFailed(true)} /> : initials(name)}</span>;
 }
 
-function SessionActivityCard({ post, currentUserId, onViewProfile, onShare, onAddPhoto, photoBusy }: { post: SocialPost; currentUserId: string; onViewProfile: (playerId: string) => void; onShare: (post: SocialPost) => void; onAddPhoto: (post: SocialPost, file: File) => void; photoBusy: boolean }) {
+function FireIcon() {
+  return <svg className="social-fire-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.4 2.5c.4 3.5-1.8 4.8-3.1 6.7-.8 1.1-.9 2.2-.5 3.2.4-1 1.2-1.8 2.3-2.4-.2 2.3.8 3.1 1.9 4.1.8.7 1.3 1.5 1.3 2.5 0 .5-.1.9-.3 1.3 1.9-.8 3.2-2.6 3.2-4.8 0-1.3-.5-2.7-1.6-4.2 3.1 1.9 4.8 4.5 4.8 7.4 0 4.3-3.5 7.5-8 7.5s-8-3.1-8-7.5c0-3.8 2.4-6.8 6.6-9.2-.1 1.4.2 2.4.8 3.1.7-2.1 1.3-4.4.6-7.7Z" fill="currentColor" /></svg>;
+}
+
+function CommentIcon() {
+  return <svg className="social-comment-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v10H9l-5 4v-14Z" /></svg>;
+}
+
+function ShareIcon() {
+  return <svg className="social-share-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V3m0 0L7 8m5-5 5 5M5 13v7h14v-7" /></svg>;
+}
+
+function SocialPostEngagement({ post, currentUserName, currentProfileImage, comments, commentDraft, fireBusy, commentsBusy, commentBusy, shareBusy, shareLabel = "Share", onFire, onShare, onFocusComments, onLoadComments, onCommentDraftChange, onAddComment, onViewProfile }: {
+  post: SocialPost;
+  currentUserName: string;
+  currentProfileImage?: string | null;
+  comments?: SocialComment[];
+  commentDraft: string;
+  fireBusy: boolean;
+  commentsBusy: boolean;
+  commentBusy: boolean;
+  shareBusy: boolean;
+  shareLabel?: string;
+  onFire: (post: SocialPost) => void;
+  onShare: (post: SocialPost) => void;
+  onFocusComments: (postId: string) => void;
+  onLoadComments: (postId: string) => void;
+  onCommentDraftChange: (postId: string, value: string) => void;
+  onAddComment: (event: FormEvent, postId: string) => void;
+  onViewProfile: (playerId: string) => void;
+}) {
+  return <>
+    <div className="social-post-actions">
+      <button type="button" className={post.liked_by_me ? "fire-active" : ""} onClick={() => onFire(post)} disabled={fireBusy} aria-pressed={post.liked_by_me} aria-label={post.liked_by_me ? "Remove fire" : "Fire this post"} title={post.liked_by_me ? "Remove fire" : "Fire this post"}><FireIcon />{post.like_count > 0 && <b>{post.like_count}</b>}</button>
+      <button type="button" onClick={() => onFocusComments(post.id)} aria-label={`${post.comment_count} comments`} title="Comments"><CommentIcon />{post.comment_count > 0 && <b>{post.comment_count}</b>}</button>
+      <button type="button" onClick={() => onShare(post)} disabled={shareBusy} aria-label={shareLabel} title={shareLabel}><ShareIcon />{post.share_count > 0 && <b>{post.share_count}</b>}</button>
+    </div>
+    {post.liked_by_me && <div className="social-post-liked-by"><Avatar name={currentUserName} imageUrl={currentProfileImage} /><span>Liked by <strong>{currentUserName}</strong>{post.like_count > 1 && <> and {post.like_count - 1} other{post.like_count === 2 ? "" : "s"}</>}</span></div>}
+    <div className="social-comments">
+      <div className="social-comments-heading"><strong>Comments</strong><span>{post.comment_count}</span></div>
+      <div className="social-comments-list">
+        {commentsBusy ? <small>Loading comments...</small> : comments ? comments.length ? comments.map((comment) => <div className="social-comment" key={comment.id}><button type="button" className="social-comment-profile" onClick={() => onViewProfile(comment.player_id)} aria-label={`View ${comment.player_display_name}'s profile`}><Avatar name={comment.player_display_name} imageUrl={comment.profile_image_url} /></button><div><button type="button" className="social-comment-name" onClick={() => onViewProfile(comment.player_id)}>{comment.player_display_name}</button><p>{comment.message}</p></div></div>) : <small>No comments yet. Start the conversation.</small> : <button type="button" className="social-comments-load" onClick={() => onLoadComments(post.id)}>{post.comment_count > 0 ? `View ${post.comment_count} comment${post.comment_count === 1 ? "" : "s"}` : "View comments"}</button>}
+      </div>
+      <form className="social-comment-form" onSubmit={(event) => onAddComment(event, post.id)}>
+        <Avatar name={currentUserName} imageUrl={currentProfileImage} />
+        <input id={`social-comment-input-${post.id}`} value={commentDraft} onChange={(event) => onCommentDraftChange(post.id, event.target.value)} placeholder="Add a comment..." maxLength={300} aria-label="Add a comment" />
+        <button type="submit" disabled={!commentDraft.trim() || commentBusy}>↗</button>
+      </form>
+    </div>
+  </>;
+}
+
+function SessionActivityCard({ post, currentUserId, currentUserName, currentProfileImage, comments, commentDraft, fireBusy, commentsBusy, commentBusy, shareBusy, onFire, onViewProfile, onShare, onLoadComments, onFocusComments, onCommentDraftChange, onAddComment, onAddPhoto, photoBusy }: { post: SocialPost; currentUserId: string; currentUserName: string; currentProfileImage?: string | null; comments?: SocialComment[]; commentDraft: string; fireBusy: boolean; commentsBusy: boolean; commentBusy: boolean; shareBusy: boolean; onFire: (post: SocialPost) => void; onViewProfile: (playerId: string) => void; onShare: (post: SocialPost) => void; onLoadComments: (postId: string) => void; onFocusComments: (postId: string) => void; onCommentDraftChange: (postId: string, value: string) => void; onAddComment: (event: FormEvent, postId: string) => void; onAddPhoto: (post: SocialPost, file: File) => void; photoBusy: boolean }) {
   const status = post.session_status === "in_progress" ? "Playing now" : post.session_status === "completed" ? "Final leaderboard" : "Upcoming game";
   const players = post.session_players ?? [];
   const leaderboard = post.session_leaderboard ?? [];
@@ -125,9 +177,9 @@ function SessionActivityCard({ post, currentUserId, onViewProfile, onShare, onAd
   return <article className="social-post-card social-session-activity-card" id={`social-session-${post.session_id}`}>
     <header className="social-post-header"><button type="button" className="social-profile-trigger" onClick={() => onViewProfile(post.player_id)} aria-label={`View ${post.player_display_name}'s profile`}><Avatar name={post.player_display_name} imageUrl={post.profile_image_url} large /><span><strong>{post.player_display_name}</strong><small>{status} · {sportLabel(post.sport)}</small></span></button><span className="social-post-sport">{sportLabel(post.sport)}</span></header>
     <div className="social-session-activity-intro"><strong>{post.caption}</strong><span>{post.session_name} · {post.session_date} · {post.session_area}</span></div>
-    <div className="social-session-players" aria-label="Players in this session">{players.map((player) => <button type="button" className="social-session-player" key={player.id} onClick={() => onViewProfile(player.id)}><Avatar name={player.display_name} imageUrl={player.profile_image_url} /><span>{player.display_name}</span></button>)}</div>
     <div className="social-session-leaderboard"><div className="social-session-leaderboard-heading"><strong>Session leaderboard</strong><span>{post.session_status === "completed" ? "Based on this game" : "Current CMR order"}</span></div>{leaderboard.length ? leaderboard.map((entry) => <button type="button" className="social-session-rank-row" key={entry.player_id} onClick={() => onViewProfile(entry.player_id)} aria-label={`View ${entry.display_name}'s profile to follow`} title={`View ${entry.display_name}'s profile`}><b>{entry.rank}</b><Avatar name={entry.display_name} imageUrl={entry.profile_image_url} /><span><strong>{entry.display_name}</strong><small>{entry.cmr_rating != null ? `${entry.cmr_rating.toFixed(1)} CMR` : "CMR building"}</small></span><em>{entry.cmr_rating != null ? entry.cmr_rating.toFixed(1) : "--"}</em></button>) : <span className="social-session-empty">CMR rankings appear after players complete feedback.</span>}</div>
-    <div className="social-session-actions"><button type="button" onClick={() => onShare(post)}>↗ Share leaderboard</button>{canAddPhoto && <label className={`social-session-photo-button ${photoBusy ? "busy" : ""}`}><input type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; if (file) onAddPhoto(post, file); }} disabled={photoBusy} />{photoBusy ? "Adding photo..." : "+ Add photo"}</label>}</div>
+    <SocialPostEngagement post={post} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments} commentDraft={commentDraft} fireBusy={fireBusy} commentsBusy={commentsBusy} commentBusy={commentBusy} shareBusy={shareBusy} shareLabel="Share leaderboard" onFire={onFire} onShare={onShare} onFocusComments={onFocusComments} onLoadComments={onLoadComments} onCommentDraftChange={onCommentDraftChange} onAddComment={onAddComment} onViewProfile={onViewProfile} />
+    <div className="social-session-actions">{canAddPhoto && <label className={`social-session-photo-button ${photoBusy ? "busy" : ""}`}><input type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; if (file) onAddPhoto(post, file); }} disabled={photoBusy} />{photoBusy ? "Adding photo..." : "+ Add photo"}</label>}</div>
   </article>;
 }
 
@@ -248,7 +300,6 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
   const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
   const [comments, setComments] = useState<Record<string, SocialComment[]>>({});
-  const [expandedPostId, setExpandedPostId] = useState<string | null>(null);
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [busyAction, setBusyAction] = useState("");
   const [recommendedPlayers, setRecommendedPlayers] = useState<RecommendedPlayer[]>([]);
@@ -384,26 +435,21 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
     }
   }
 
-  async function toggleLike(post: SocialPost) {
+  async function toggleFire(post: SocialPost) {
     try {
-      setBusyAction(`like-${post.id}`);
+      setBusyAction(`fire-${post.id}`);
       const response = await authorizedFetch(`${apiUrl}/v1/social/posts/${post.id}/like`, { method: "POST" });
-      if (!response.ok) throw new Error("Like failed");
+      if (!response.ok) throw new Error("Fire reaction failed");
       const updated = await response.json() as SocialPost;
       setPosts((current) => current.map((item) => item.id === updated.id ? updated : item));
     } catch {
-      onToast("Could not update the like");
+      onToast("Could not update the fire reaction");
     } finally {
       setBusyAction("");
     }
   }
 
-  async function toggleComments(postId: string) {
-    if (expandedPostId === postId) {
-      setExpandedPostId(null);
-      return;
-    }
-    setExpandedPostId(postId);
+  async function loadComments(postId: string) {
     if (comments[postId]) return;
     try {
       setBusyAction(`comments-${postId}`);
@@ -416,6 +462,11 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
     } finally {
       setBusyAction("");
     }
+  }
+
+  function focusComments(postId: string) {
+    void loadComments(postId);
+    window.requestAnimationFrame(() => document.getElementById(`social-comment-input-${postId}`)?.focus());
   }
 
   async function addComment(event: FormEvent, postId: string) {
@@ -567,13 +618,12 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       {loading && <div className="social-feed-loader"><TennisBallLoader label="Loading social feed" /></div>}
       {!loading && loadError && <div className="social-feed-error" role="alert"><strong>Social is taking a breather.</strong><p>We couldn&apos;t load the latest court activity.</p><button type="button" onClick={() => void loadFeed()}>Try again <span>↗</span></button></div>}
       {!loading && !loadError && posts.length === 0 && <div className="social-empty"><strong>{feedFilter === "following" ? "Follow players to build your feed." : "Your court community starts here."}</strong><p>Share a game moment, a match result, or a photo from the court.</p></div>}
-      {!loading && posts.map((post) => post.activity_type === "session" ? <SessionActivityCard key={post.id} post={post} currentUserId={currentUserId} onViewProfile={onViewProfile} onShare={(sessionPost) => void shareSessionLeaderboard(sessionPost)} onAddPhoto={(sessionPost, file) => void addSessionPhoto(sessionPost, file)} photoBusy={busyAction === `photo-${post.id}`} /> : <article className="social-post-card" id={`social-post-${post.id}`} key={post.id}>
+      {!loading && posts.map((post) => post.activity_type === "session" ? <SessionActivityCard key={post.id} post={post} currentUserId={currentUserId} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments[post.id]} commentDraft={commentDrafts[post.id] ?? ""} fireBusy={busyAction === `fire-${post.id}`} commentsBusy={busyAction === `comments-${post.id}`} commentBusy={busyAction === `comment-${post.id}`} shareBusy={busyAction === `share-${post.id}`} onFire={(socialPost) => void toggleFire(socialPost)} onViewProfile={onViewProfile} onShare={(sessionPost) => void shareSessionLeaderboard(sessionPost)} onLoadComments={(postId) => void loadComments(postId)} onFocusComments={focusComments} onCommentDraftChange={(postId, value) => setCommentDrafts((current) => ({ ...current, [postId]: value }))} onAddComment={(event, postId) => void addComment(event, postId)} onAddPhoto={(sessionPost, file) => void addSessionPhoto(sessionPost, file)} photoBusy={busyAction === `photo-${post.id}`} /> : <article className="social-post-card" id={`social-post-${post.id}`} key={post.id}>
         <header className="social-post-header"><button type="button" className="social-profile-trigger" onClick={() => onViewProfile(post.player_id)} aria-label={`View ${post.player_display_name}'s profile`}><Avatar name={post.player_display_name} imageUrl={post.profile_image_url} large /><span><strong>{post.player_display_name}</strong><small>{sportLabel(post.sport)} · {relativeTime(post.created_at)}</small></span></button><span className="social-post-sport">{sportLabel(post.sport)}</span></header>
         <p className="social-post-caption">{post.caption}</p>
         {post.session_name && <div className="social-session-chip"><span>●</span><div><strong>{post.session_name}</strong><small>{post.session_date} · {post.session_area}</small></div><span>Game</span></div>}
         {post.media_url && <div className="social-post-media">{post.media_type === "video" ? <video src={post.media_url} controls playsInline /> : <img src={post.media_url} alt="Shared court moment" />}</div>}
-        <div className="social-post-actions"><button type="button" className={post.liked_by_me ? "liked" : ""} onClick={() => void toggleLike(post)} disabled={busyAction === `like-${post.id}`}><span>{post.liked_by_me ? "♥" : "♡"}</span> {post.like_count || "Like"}</button><button type="button" onClick={() => void toggleComments(post.id)}><span>◌</span> {post.comment_count || "Comment"}</button><button type="button" onClick={() => void sharePost(post)} disabled={busyAction === `share-${post.id}`}><span>↗</span> {post.share_count || "Share"}</button></div>
-        {expandedPostId === post.id && <div className="social-comments"><div className="social-comments-list">{busyAction === `comments-${post.id}` ? <small>Loading comments...</small> : comments[post.id]?.length ? comments[post.id].map((comment) => <div className="social-comment" key={comment.id}><button type="button" className="social-comment-profile" onClick={() => onViewProfile(comment.player_id)} aria-label={`View ${comment.player_display_name}'s profile`}><Avatar name={comment.player_display_name} imageUrl={comment.profile_image_url} /></button><div><button type="button" className="social-comment-name" onClick={() => onViewProfile(comment.player_id)}>{comment.player_display_name}</button><p>{comment.message}</p></div></div>) : <small>No comments yet. Start the conversation.</small>}</div><form className="social-comment-form" onSubmit={(event) => void addComment(event, post.id)}><Avatar name={currentUserName} imageUrl={currentProfileImage} /><input value={commentDrafts[post.id] ?? ""} onChange={(event) => setCommentDrafts((current) => ({ ...current, [post.id]: event.target.value }))} placeholder="Add a comment..." maxLength={300} aria-label="Add a comment" /><button type="submit" disabled={!commentDrafts[post.id]?.trim() || busyAction === `comment-${post.id}`}>↗</button></form></div>}
+        <SocialPostEngagement post={post} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments[post.id]} commentDraft={commentDrafts[post.id] ?? ""} fireBusy={busyAction === `fire-${post.id}`} commentsBusy={busyAction === `comments-${post.id}`} commentBusy={busyAction === `comment-${post.id}`} shareBusy={busyAction === `share-${post.id}`} onFire={(socialPost) => void toggleFire(socialPost)} onShare={(socialPost) => void sharePost(socialPost)} onFocusComments={focusComments} onLoadComments={(postId) => void loadComments(postId)} onCommentDraftChange={(postId, value) => setCommentDrafts((current) => ({ ...current, [postId]: value }))} onAddComment={(event, postId) => void addComment(event, postId)} onViewProfile={onViewProfile} />
       </article>)}
     </div>
   </section>;

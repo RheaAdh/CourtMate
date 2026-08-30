@@ -57,6 +57,32 @@ def validate_score(score_a: int, score_b: int, rules: TournamentRules) -> None:
         raise ValueError(f"Winner must reach {rules.point_target} with a {rules.win_by}-point advantage")
 
 
+def validate_set_scores(set_scores_a: list[int], set_scores_b: list[int], rules: TournamentRules) -> tuple[int, int]:
+    """Validate an optional best-of result and return sets won by each side."""
+    if not set_scores_a and not set_scores_b:
+        return (0, 0)
+    if not set_scores_a or len(set_scores_a) != len(set_scores_b):
+        raise ValueError("Enter both sides of every set score")
+    if len(set_scores_a) > rules.best_of:
+        raise ValueError(f"A best-of-{rules.best_of} match cannot have more than {rules.best_of} sets")
+    if any(score < 0 or score > 999 for score in [*set_scores_a, *set_scores_b]):
+        raise ValueError("Set scores must be between 0 and 999")
+    for score_a, score_b in zip(set_scores_a, set_scores_b):
+        if score_a == score_b:
+            raise ValueError("A set score cannot be tied")
+        if rules.score_label != "Sets":
+            try:
+                validate_score(score_a, score_b, rules.model_copy(update={"best_of": 1}))
+            except ValueError as error:
+                raise ValueError(f"Invalid set score {score_a}-{score_b}: {error}") from error
+    sets_won_a = sum(score_a > score_b for score_a, score_b in zip(set_scores_a, set_scores_b))
+    sets_won_b = len(set_scores_a) - sets_won_a
+    required = rules.best_of // 2 + 1
+    if max(sets_won_a, sets_won_b) != required:
+        raise ValueError(f"Enter enough sets to complete the best-of-{rules.best_of} match")
+    return (sets_won_a, sets_won_b)
+
+
 def calculate_standings(
     registrations: list[TournamentRegistration],
     matches: list[TournamentMatch],

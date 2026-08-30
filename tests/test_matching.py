@@ -85,6 +85,13 @@ class MatchingTests(unittest.TestCase):
         self.assertFalse(parser.is_in_scope("What is the weather?", "Find a tennis game near Whitefield this Saturday"))
         self.assertTrue(parser.is_in_scope("Show me tennis games near Whitefield"))
 
+    def test_scope_guard_accepts_general_sports_questions(self):
+        parser = GeminiIntentParser()
+        self.assertTrue(parser.is_general_sports_query("Explain the rules of tennis"))
+        self.assertTrue(parser.is_general_sports_query("How can I improve my cricket batting?"))
+        self.assertFalse(parser.is_general_sports_query("Find a tennis game near Whitefield"))
+        self.assertFalse(parser.is_general_sports_query("What is the weather near me?"))
+
     def test_performance_guard_does_not_steal_game_discovery_questions(self):
         parser = GeminiIntentParser()
         self.assertFalse(parser.is_performance_query("Find games near me"))

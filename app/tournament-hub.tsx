@@ -44,6 +44,8 @@ type TournamentMatch = {
   status: "scheduled" | "pending_confirmation" | "completed";
   score_a?: number | null;
   score_b?: number | null;
+  set_scores_a?: number[];
+  set_scores_b?: number[];
   winner_id?: string | null;
   score_entered_by?: string | null;
   confirmed_by?: string | null;
@@ -77,6 +79,12 @@ type FixtureEdit = {
   b: string;
 };
 
+type ScoreDraft = {
+  a: string;
+  b: string;
+  sets: { a: string; b: string }[];
+};
+
 type TournamentHubProps = {
   apiUrl: string;
   currentUserId?: string;
@@ -98,6 +106,19 @@ const sports: { value: Sport; label: string }[] = [
 const today = () => new Date().toISOString().slice(0, 10);
 const sportLabel = (sport: Sport) => sports.find((item) => item.value === sport)?.label ?? sport;
 
+function scoreDraftFor(match: TournamentMatch, bestOf: number): ScoreDraft {
+  const savedSets = Math.max(match.set_scores_a?.length ?? 0, match.set_scores_b?.length ?? 0);
+  const setCount = Math.max(bestOf > 1 ? bestOf : 0, savedSets);
+  return {
+    a: String(match.score_a ?? ""),
+    b: String(match.score_b ?? ""),
+    sets: Array.from({ length: setCount }, (_, index) => ({
+      a: String(match.set_scores_a?.[index] ?? ""),
+      b: String(match.set_scores_b?.[index] ?? ""),
+    })),
+  };
+}
+
 export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFetch, onToast, onSignIn }: TournamentHubProps) {
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
   const [selected, setSelected] = useState<TournamentDetails | null>(null);
@@ -111,7 +132,7 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
   const [venue, setVenue] = useState("");
   const [date, setDate] = useState(today());
   const [capacity, setCapacity] = useState("8");
-  const [scores, setScores] = useState<Record<string, { a: string; b: string }>>({});
+  const [scores, setScores] = useState<Record<string, ScoreDraft>>({});
   const [fixtureEdits, setFixtureEdits] = useState<Record<string, FixtureEdit>>({});
   const [updatedMatchId, setUpdatedMatchId] = useState("");
   const [drawNotice, setDrawNotice] = useState("");
@@ -303,8 +324,29 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
 
   async function submitScore(match: TournamentMatch, confirm = false) {
     if (!selected) return;
-    const draft = scores[match.id] ?? { a: String(match.score_a ?? ""), b: String(match.score_b ?? "") };
-    if (draft.a === "" || draft.b === "") {
+    const draft = scores[match.id] ?? scoreDraftFor(match, selected.tournament.rules.best_of);
+    const hasSetScores = draft.sets.some((set) => set.a !== "" || set.b !== "");
+    const setScoresA: number[] = [];
+    const setScoresB: number[] = [];
+    if (hasSetScores) {
+      for (const set of draft.sets) {
+        if (set.a === "" || set.b === "") {
+          onToast("Enter both sides of every set score");
+          return;
+        }
+        setScoresA.push(Number(set.a));
+        setScoresB.push(Number(set.b));
+      }
+    }
+    let scoreA = draft.a;
+    let scoreB = draft.b;
+    if (hasSetScores) {
+      const setsWonA = setScoresA.filter((score, index) => score > setScoresB[index]).length;
+      const setsWonB = setScoresB.length - setsWonA;
+      scoreA = String(setsWonA);
+      scoreB = String(setsWonB);
+    }
+    if (scoreA === "" || scoreB === "") {
       onToast("Enter both sides of the score");
       return;
     }
@@ -313,7 +355,7 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
       const response = await authorizedFetch(`${apiUrl}/v1/tournaments/${selected.tournament.id}/matches/${match.id}/score`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ score_a: Number(draft.a), score_b: Number(draft.b), confirm }),
+        body: JSON.stringify({ score_a: Number(scoreA), score_b: Number(scoreB), set_scores_a: setScoresA, set_scores_b: setScoresB, confirm }),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({})) as { detail?: string };
@@ -375,6 +417,7 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
 
   return (
     <section className="page-view tournament-page">
+      {loading ? <div className="tournament-page-loader"><TennisBallLoader label="Loading tournaments" detail="Finding tournaments near you..." /></div> : <>
       <button
         type="button"
         className="section-fab tournament-fab"
@@ -455,12 +498,13 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
                       {selected.matches.filter((match) => match.round_number === round).map((match) => {
                         const canScore = Boolean(isOrganizer) || (match.status !== "completed" && (currentUserId === match.player_a_id || currentUserId === match.player_b_id));
                         const canConfirm = match.status === "pending_confirmation" && currentUserId !== match.score_entered_by && (Boolean(isOrganizer) || currentUserId === match.player_a_id || currentUserId === match.player_b_id);
-                        const draft = scores[match.id] ?? { a: String(match.score_a ?? ""), b: String(match.score_b ?? "") };
+                        const draft = scores[match.id] ?? scoreDraftFor(match, selected.tournament.rules.best_of);
                         const fixtureEdit = fixtureEdits[match.id];
                         return (
                           <article className={`fixture-card fixture-${match.status}${updatedMatchId === match.id ? " fixture-updated" : ""}`} key={match.id}>
                             <div className="fixture-top"><span>Match {match.match_number}</span><span className="fixture-card-actions"><small>{matchStatusLabel(match.status)}</small>{isOrganizer && !fixtureEdit && <button className="fixture-edit-button" type="button" onClick={() => startFixtureEdit(match)}>Edit fixture</button>}</span></div>
                             <div className="fixture-players"><strong className={match.winner_id === match.player_a_id ? "winner" : ""}>{playerName(match.player_a_id)}</strong><b>{match.score_a ?? "-"}</b><strong className={match.winner_id === match.player_b_id ? "winner" : ""}>{playerName(match.player_b_id)}</strong><b>{match.score_b ?? "-"}</b></div>
+                            {(match.set_scores_a?.length ?? 0) > 0 && <p className="fixture-set-summary">Set scores: {match.set_scores_a?.map((score, index) => `${score}-${match.set_scores_b?.[index] ?? "-"}`).join(" · ")}</p>}
                             {fixtureEdit && <div className="fixture-edit-entry">
                               <div className="fixture-edit-fields">
                                 <label><span>Round</span><input type="number" min="1" value={fixtureEdit.round} onChange={(event) => setFixtureEdits({ ...fixtureEdits, [match.id]: { ...fixtureEdit, round: event.target.value } })} /></label>
@@ -470,7 +514,7 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
                               </div>
                               <div className="fixture-edit-actions"><button className="score-button" type="button" onClick={() => void saveFixture(match)} disabled={busyId === `fixture-${match.id}`}>{busyId === `fixture-${match.id}` ? "Saving..." : "Save fixture"}</button><button className="fixture-swap-button" type="button" onClick={() => setFixtureEdits({ ...fixtureEdits, [match.id]: { ...fixtureEdit, a: fixtureEdit.b, b: fixtureEdit.a } })}>Swap sides</button><button className="fixture-cancel-button" type="button" onClick={() => cancelFixtureEdit(match.id)}>Cancel</button></div>
                             </div>}
-                            {canScore && !fixtureEdit && <div className="fixture-score-entry"><span className="fixture-score-label">{match.status === "completed" ? "Edit final" : "Enter score"}</span><input type="number" min="0" value={draft.a} onChange={(event) => setScores({ ...scores, [match.id]: { ...draft, a: event.target.value } })} placeholder="0" aria-label={`${playerName(match.player_a_id)} score`} /><span>:</span><input type="number" min="0" value={draft.b} onChange={(event) => setScores({ ...scores, [match.id]: { ...draft, b: event.target.value } })} placeholder="0" aria-label={`${playerName(match.player_b_id)} score`} /><button className="score-button" onClick={() => void submitScore(match, canConfirm)} disabled={busyId === match.id}>{match.status === "completed" ? "Update" : canConfirm ? "Confirm" : "Save"}</button></div>}
+                            {canScore && !fixtureEdit && <><div className="fixture-score-entry"><span className="fixture-score-label">{match.status === "completed" ? "Edit final" : "Enter score"}</span><input type="number" min="0" value={draft.a} onChange={(event) => setScores({ ...scores, [match.id]: { ...draft, a: event.target.value } })} placeholder="0" aria-label={`${playerName(match.player_a_id)} score`} /><span>:</span><input type="number" min="0" value={draft.b} onChange={(event) => setScores({ ...scores, [match.id]: { ...draft, b: event.target.value } })} placeholder="0" aria-label={`${playerName(match.player_b_id)} score`} /><button className="score-button" onClick={() => void submitScore(match, canConfirm)} disabled={busyId === match.id}>{match.status === "completed" ? "Update" : canConfirm ? "Confirm" : "Save"}</button></div>{draft.sets.length > 0 && <div className="fixture-set-scores"><span className="fixture-score-label">Set scores <small>(optional)</small></span><div className="fixture-set-score-grid">{draft.sets.map((set, index) => <label key={index}><span>Set {index + 1}</span><input type="number" min="0" value={set.a} onChange={(event) => { const sets = draft.sets.map((item, itemIndex) => itemIndex === index ? { ...item, a: event.target.value } : item); setScores({ ...scores, [match.id]: { ...draft, sets } }); }} placeholder="0" aria-label={`${playerName(match.player_a_id)} set ${index + 1} score`} /><b>:</b><input type="number" min="0" value={set.b} onChange={(event) => { const sets = draft.sets.map((item, itemIndex) => itemIndex === index ? { ...item, b: event.target.value } : item); setScores({ ...scores, [match.id]: { ...draft, sets } }); }} placeholder="0" aria-label={`${playerName(match.player_b_id)} set ${index + 1} score`} /></label>)}</div></div>}</>}
                             {match.status === "pending_confirmation" && !canConfirm && <p className="fixture-note">Waiting for the opponent to confirm this score.</p>}
                           </article>
                         );
@@ -496,7 +540,7 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
           <div className="tournament-tabs" role="tablist" aria-label="Tournament views">
             {tournamentTabs.map((tab) => <button type="button" role="tab" aria-selected={activeView === tab.value} className={activeView === tab.value ? "active" : ""} onClick={() => setActiveView(tab.value)} key={tab.value}>{tab.label}<span>{tab.value === "explore" ? exploreTournaments.length : tournaments.filter((tournament) => tournamentView(tournament) === tab.value).length}</span></button>)}
           </div>
-          <div className="tournament-list-heading"><div><h2>{activeView === "explore" ? "Explore tournaments" : activeView === "upcoming" ? "Upcoming tournaments" : activeView === "pending" ? "Pending registrations" : "Tournament history"}</h2></div>{loading ? <TennisBallLoader compact label="Loading tournaments" /> : <span>{`${visibleTournaments.length} event${visibleTournaments.length === 1 ? "" : "s"}`}</span>}</div>
+          <div className="tournament-list-heading"><div><h2>{activeView === "explore" ? "Explore tournaments" : activeView === "upcoming" ? "Upcoming tournaments" : activeView === "pending" ? "Pending registrations" : "Tournament history"}</h2></div><span>{`${visibleTournaments.length} event${visibleTournaments.length === 1 ? "" : "s"}`}</span></div>
           {visibleTournaments.length ? visibleTournaments.map((tournament) => (
             <button className="tournament-card" key={tournament.id} onClick={() => void openTournament(tournament.id)} disabled={busyId === tournament.id}>
               <span className="tournament-card-date"><strong>{new Date(`${tournament.tournament_date}T00:00:00`).toLocaleDateString("en-IN", { day: "2-digit" })}</strong><small>{new Date(`${tournament.tournament_date}T00:00:00`).toLocaleDateString("en-IN", { month: "short" })}</small></span>
@@ -509,6 +553,7 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
           )}
         </div>
       )}
+      </>}
     </section>
   );
 }

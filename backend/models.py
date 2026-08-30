@@ -275,6 +275,8 @@ class TournamentMatch(BaseModel):
     status: Literal["scheduled", "pending_confirmation", "completed"] = "scheduled"
     score_a: int | None = Field(default=None, ge=0, le=999)
     score_b: int | None = Field(default=None, ge=0, le=999)
+    set_scores_a: list[int] = Field(default_factory=list, max_length=7)
+    set_scores_b: list[int] = Field(default_factory=list, max_length=7)
     winner_id: str | None = None
     score_entered_by: str | None = None
     confirmed_by: str | None = None
@@ -318,6 +320,8 @@ class CreateTournamentRequest(BaseModel):
 class TournamentScoreRequest(BaseModel):
     score_a: int = Field(ge=0, le=999)
     score_b: int = Field(ge=0, le=999)
+    set_scores_a: list[int] = Field(default_factory=list, max_length=7)
+    set_scores_b: list[int] = Field(default_factory=list, max_length=7)
     confirm: bool = False
 
 
@@ -390,7 +394,7 @@ class SearchResponse(BaseModel):
     action: Literal["join_existing", "create_group"] = "join_existing"
     message: str = ""
     group_proposal: GroupProposal | None = None
-    scope: Literal["court_discovery", "out_of_scope"] = "court_discovery"
+    scope: Literal["court_discovery", "sports_general", "out_of_scope"] = "court_discovery"
     retrieval: "RetrievalTrace | None" = None
 
 

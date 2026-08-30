@@ -17,7 +17,7 @@ from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
 from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, ExploreSessionsResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListItem, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentRegistrationDecisionRequest, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
-from .tournaments import calculate_standings, generate_round_robin_matches, rules_for_sport, validate_score
+from .tournaments import calculate_standings, generate_round_robin_matches, rules_for_sport, validate_score, validate_set_scores
 from .vector_search import VectorIndexer, VectorRetriever
 
 
@@ -935,6 +935,21 @@ def search(request: ParseRequest, player: Player = Depends(get_current_player)) 
     query = request.query.strip()
     if not query:
         raise HTTPException(status_code=422, detail="Search query is required")
+    if intent_parser.is_general_sports_query(query, request.context):
+        intent = SearchIntent(
+            sport=request.sport or "pickleball",
+            area=player.area,
+            latitude=player.latitude,
+            longitude=player.longitude,
+        )
+        return SearchResponse(
+            intent=intent,
+            recommendations=[],
+            action="join_existing",
+            message=intent_parser.general_sports_answer(query),
+            scope="sports_general",
+            retrieval=RetrievalTrace(mode="deterministic_fallback", fallback_reason="general_sports"),
+        )
     if not intent_parser.is_in_scope(query, request.context):
         return SearchResponse(
             intent=SearchIntent(
@@ -1483,7 +1498,11 @@ def enter_tournament_score(tournament_id: str, match_id: str, request: Tournamen
     if player.id not in {match.player_a_id, match.player_b_id, tournament.organizer_id}:
         raise HTTPException(status_code=403, detail="Only match players or the organizer can enter a score")
     try:
-        validate_score(request.score_a, request.score_b, tournament.rules)
+        sets_won_a, sets_won_b = validate_set_scores(request.set_scores_a, request.set_scores_b, tournament.rules)
+        score_a = sets_won_a if request.set_scores_a else request.score_a
+        score_b = sets_won_b if request.set_scores_b else request.score_b
+        if not request.set_scores_a:
+            validate_score(score_a, score_b, tournament.rules)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     if match.status == "completed":
@@ -1492,22 +1511,24 @@ def enter_tournament_score(tournament_id: str, match_id: str, request: Tournamen
         match.status = "completed"
         match.confirmed_by = player.id
         match.score_entered_by = player.id
-        match.winner_id = match.player_a_id if request.score_a > request.score_b else match.player_b_id
+        match.winner_id = match.player_a_id if score_a > score_b else match.player_b_id
     elif match.status == "pending_confirmation" and match.score_entered_by != player.id and not is_organizer:
-        if match.score_a != request.score_a or match.score_b != request.score_b:
+        if match.score_a != score_a or match.score_b != score_b or match.set_scores_a != request.set_scores_a or match.set_scores_b != request.set_scores_b:
             raise HTTPException(status_code=409, detail="The submitted score does not match the pending result")
         match.status = "completed"
         match.confirmed_by = player.id
-        match.winner_id = match.player_a_id if request.score_a > request.score_b else match.player_b_id
+        match.winner_id = match.player_a_id if score_a > score_b else match.player_b_id
     elif is_organizer or request.confirm:
         match.status = "completed"
         match.confirmed_by = player.id
-        match.winner_id = match.player_a_id if request.score_a > request.score_b else match.player_b_id
+        match.winner_id = match.player_a_id if score_a > score_b else match.player_b_id
     else:
         match.status = "pending_confirmation"
         match.score_entered_by = player.id
-    match.score_a = request.score_a
-    match.score_b = request.score_b
+    match.score_a = score_a
+    match.score_b = score_b
+    match.set_scores_a = request.set_scores_a
+    match.set_scores_b = request.set_scores_b
     match.score_entered_by = match.score_entered_by or player.id
     saved_match = repository.save_tournament_match(match)
     if all(item.status == "completed" for item in repository.list_tournament_matches(tournament.id)):
@@ -1547,7 +1568,7 @@ def update_tournament_fixture(tournament_id: str, match_id: str, request: Tourna
         "match_number": request.match_number,
         "player_a_id": request.player_a_id,
         "player_b_id": request.player_b_id,
-        **({"status": "scheduled", "score_a": None, "score_b": None, "winner_id": None, "score_entered_by": None, "confirmed_by": None} if pairing_or_round_changed else {}),
+        **({"status": "scheduled", "score_a": None, "score_b": None, "set_scores_a": [], "set_scores_b": [], "winner_id": None, "score_entered_by": None, "confirmed_by": None} if pairing_or_round_changed else {}),
     })
     saved_match = repository.save_tournament_match(updated)
     if pairing_or_round_changed and tournament.status == "completed":

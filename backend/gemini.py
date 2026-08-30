@@ -34,6 +34,19 @@ class GeminiIntentParser:
         "weather", "recipe", "restaurant", "movie", "news", "stock price", "politics",
         "capital of", "python", "javascript", "code", "translate", "joke", "flight",
     )
+    _GENERAL_SPORT_TERMS = (
+        "sport", "sports", "football", "soccer", "cricket", "basketball", "volleyball", "hockey",
+        "baseball", "rugby", "golf", "athletics", "swimming", "running", "cycling", "boxing",
+        "mma", "wrestling", "gymnastics", "track and field", "formula 1", "f1", "motorsport",
+        "skiing", "snowboarding", "tennis", "badminton", "pickleball", "padel", "squash",
+        "table tennis", "ping pong", "racket", "racquet",
+    )
+    _GENERAL_SPORT_QUESTION_TERMS = (
+        "what", "why", "how", "explain", "rule", "tip", "improve", "difference", "strategy",
+        "technique", "drill", "training", "practice", "score", "scoring", "serve", "grip",
+        "equipment", "benefit", "compare", "best", "meaning", "definition", "who", "when",
+        "can", "should",
+    )
 
     def __init__(self) -> None:
         self.api_key = os.getenv("GEMINI_API_KEY")
@@ -98,6 +111,22 @@ class GeminiIntentParser:
         # A sport plus timing, location, skill, or a clear wish to play is an
         # implicit request to discover a game.
         return has_sport and (has_time_context or has_location_context or has_play_intent)
+
+    @classmethod
+    def is_general_sports_query(cls, query: str, context: str | None = None) -> bool:
+        """Identify informational sports questions that do not need CourtMate records."""
+        current = " ".join(query.lower().split())
+        if not current or any(term in current for term in cls._NON_COURT_TERMS):
+            return False
+        if cls.is_in_scope(current, context):
+            return False
+        has_sport = any(term in current for term in cls._GENERAL_SPORT_TERMS)
+        has_question_signal = "?" in query or any(term in current for term in cls._GENERAL_SPORT_QUESTION_TERMS)
+        has_discovery_request = bool(
+            re.search(r"\b(find|search|show|join|invite|create|book|nearby|around|available)\b", current)
+            and re.search(r"\b(game|games|group|groups|session|sessions|court|courts|venue|venues|player|players|people|match|matches)\b", current)
+        )
+        return has_sport and has_question_signal and not has_discovery_request
 
     def parse(self, query: str, sport: Sport | None = None, context: str | None = None) -> SearchIntent:
         if self._client:
@@ -193,6 +222,23 @@ Verified records: {records}
             return answer or fallback
         except Exception as error:
             logger.warning("Grounded Gemini response failed (%s); using deterministic summary", error)
+            return fallback
+
+    def general_sports_answer(self, query: str) -> str:
+        """Answer general sports questions without implying CourtMate has matching records."""
+        fallback = "I can answer general sports questions about rules, technique, tactics, training, and equipment."
+        if not self._client:
+            return fallback
+        prompt = f"""You are CourtMate's general sports assistant. Answer the user's informational question using your general sports knowledge, even when the sport or topic is not present in CourtMate's database. Cover rules, technique, tactics, training, equipment, and comparisons when relevant. Do not invent live scores, current fixtures, athlete news, or CourtMate games, players, venues, or tournaments. If the question depends on current information, say that it needs a live source. Avoid medical diagnosis and recommend a qualified professional for injuries. Keep the answer concise, clear, and practical.
+
+User question: {query}
+"""
+        try:
+            response = self._client.models.generate_content(model=self.model, contents=prompt)
+            answer = response.text.strip()
+            return answer or fallback
+        except Exception as error:
+            logger.warning("General sports response failed (%s); using fallback", error)
             return fallback
 
     def analyze_activity_image(self, image_bytes: bytes, mime_type: str) -> ActivityProofAnalysis:
