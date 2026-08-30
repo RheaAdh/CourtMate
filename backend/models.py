@@ -465,7 +465,7 @@ class JoinRequest(BaseModel):
 class AppNotification(BaseModel):
     id: str
     player_id: str
-    kind: Literal["game_match", "join_request", "request_update", "tournament_request", "tournament_update", "follow"] = "game_match"
+    kind: Literal["game_match", "game_completed", "join_request", "request_update", "tournament_request", "tournament_update", "follow"] = "game_match"
     title: str
     message: str
     session_id: str
@@ -512,6 +512,16 @@ class PastGame(BaseModel):
 
 class MyGamesResponse(BaseModel):
     games: list[Session]
+    past_games: list[PastGame] = Field(default_factory=list)
+
+
+class MyActivityResponse(BaseModel):
+    """The data needed to render every Games tab in one authenticated read."""
+
+    requests: list[JoinRequestView] = Field(default_factory=list)
+    incoming_requests: list[JoinRequestView] = Field(default_factory=list)
+    groups: list[Session] = Field(default_factory=list)
+    games: list[Session] = Field(default_factory=list)
     past_games: list[PastGame] = Field(default_factory=list)
 
 
@@ -718,7 +728,9 @@ class PlayerRating(BaseModel):
     player_id: str
     skill_level: SkillLevel | None = None
     rank_score: float | None = Field(default=None, ge=0, le=100)
-    # Kept for old feedback documents and API clients. New feedback uses skill_level.
+    # New post-game feedback uses a simple 1-10 player performance rating.
+    rating_10: int | None = Field(default=None, ge=1, le=10)
+    # Kept for old feedback documents and API clients.
     rating: int | None = Field(default=None, ge=1, le=5)
     comment: str | None = Field(default=None, max_length=300)
 

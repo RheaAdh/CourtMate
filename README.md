@@ -1,6 +1,6 @@
 # CourtMate
 
-CourtMate is the intelligent group layer for racket-sport organizers. The MVP helps players discover skill-compatible sessions across pickleball, badminton, tennis, padel, squash, and table tennis, while helping organizers replace dropouts without replacing WhatsApp or court-booking platforms.
+CourtMate is the intelligent group layer for racket-sport organizers. The MVP helps players discover skill-compatible sessions across pickleball, badminton, tennis, padel, squash, and table tennis, while helping organizers replace dropouts without replacing their messaging or court-booking platforms.
 
 ## Backend MVP
 

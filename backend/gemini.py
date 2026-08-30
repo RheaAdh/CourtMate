@@ -61,6 +61,8 @@ class GeminiIntentParser:
         r"\bwhat are the\b",
         r"\bwhich are the\b",
         r"\brecommend(?:ed)?\b",
+        r"\bwhere can i play\b",
+        r"\b(?:venue|venues|club|clubs)\s+(?:near|nearby|around|in)\b",
         r"\bhow (?:do|can) i (?:book|reserve|choose)\b",
         r"\b(?:cost|price|pricing|opening hours|amenities|surface)\b",
     )
@@ -160,7 +162,7 @@ class GeminiIntentParser:
     @classmethod
     def _is_venue_information_query(cls, query: str) -> bool:
         """Detect informational venue questions without stealing court discovery."""
-        has_venue = bool(re.search(r"\b(court|courts|venue|venues|club|clubs)\b", query))
+        has_venue = bool(re.search(r"\b(court|courts|venue|venues|club|clubs)\b|\bwhere can i play\b", query))
         has_information_signal = any(re.search(pattern, query) for pattern in cls._VENUE_INFORMATION_PATTERNS)
         has_game_request = bool(re.search(r"\b(find|search|show|join|create|book)\b.*\b(game|games|group|groups|session|sessions|match|matches)\b", query))
         return has_venue and has_information_signal and not has_game_request
@@ -266,7 +268,7 @@ Verified records: {records}
         fallback = "I can answer general sports questions about rules, technique, tactics, training, and equipment."
         if not self._client:
             lowered = query.lower()
-            if re.search(r"\b(court|courts|venue|venues|club|clubs)\b", lowered):
+            if re.search(r"\b(court|courts|venue|venues|club|clubs)\b|\bwhere can i play\b", lowered):
                 sport = next((name for name in ("pickleball", "badminton", "tennis", "padel", "squash", "table tennis") if name in lowered), "racket-sport")
                 area_match = re.search(r"\b(?:near|around|in|at)\s+([a-z][a-z .'-]+?)(?:\?|$)", lowered)
                 area = area_match.group(1).strip().title() if area_match else "your area"

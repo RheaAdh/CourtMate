@@ -9,7 +9,7 @@ os.environ["GEMINI_API_KEY"] = ""
 
 from fastapi.testclient import TestClient
 
-from backend.main import _clear_social_feed_cache, app, repository
+from backend.main import _clear_read_view_cache, _clear_social_feed_cache, app, repository
 from backend.models import Session
 from tests.fixtures import load_repository_fixture
 
@@ -17,6 +17,7 @@ from tests.fixtures import load_repository_fixture
 class ApiFlowTests(unittest.TestCase):
     def setUp(self):
         load_repository_fixture(repository)
+        _clear_read_view_cache()
         _clear_social_feed_cache()
         self.client = TestClient(app)
 
@@ -216,6 +217,17 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(payload["tournaments"], [])
         self.assertIn("live availability", payload["message"])
 
+    def test_where_to_play_question_uses_general_assistant(self):
+        response = self.client.post(
+            "/v1/sessions/search",
+            json={"query": "Where can I play pickleball near me?", "player_id": "p1"},
+        )
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["scope"], "sports_general")
+        self.assertEqual(payload["recommendations"], [])
+        self.assertIn("live availability", payload["message"])
+
     def test_court_information_question_uses_general_assistant(self):
         response = self.client.post(
             "/v1/sessions/search",
@@ -338,6 +350,112 @@ class ApiFlowTests(unittest.TestCase):
         updated_feed = self.client.get("/v1/social/feed", headers={"X-CourtMate-Player-ID": "p2"})
         updated_mvp = next(post for post in updated_feed.json()["posts"] if post["id"] == "session-activity-s1")["session_leaderboard"][0]
         self.assertGreater(updated_mvp["cmr_delta"], 0)
+
+    def test_any_confirmed_player_can_complete_a_game_and_notifies_the_lineup(self):
+        completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p2"})
+
+        self.assertEqual(completed.status_code, 200)
+        self.assertEqual(completed.json()["status"], "completed")
+        self.assertEqual(repository.get_session("s1").status, "completed")
+
+        for player_id in ("p1", "p3", "p6"):
+            notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": player_id}).json()["notifications"]
+            notification = next(item for item in notifications if item["kind"] == "game_completed" and item["session_id"] == "s1")
+            self.assertEqual(notification["actor_id"], "p2")
+            self.assertIn("rate", notification["message"].lower())
+
+        completer_notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": "p2"}).json()["notifications"]
+        self.assertFalse(any(item["kind"] == "game_completed" and item["session_id"] == "s1" for item in completer_notifications))
+
+    def test_feedback_requires_a_completed_game(self):
+        response = self.client.post(
+            "/v1/sessions/s1/feedback",
+            json={"fun": 5, "fairness": 5, "would_return": True, "ratings": [{"player_id": "p1", "rating_10": 8}, {"player_id": "p3", "rating_10": 7}, {"player_id": "p6", "rating_10": 6}]},
+            headers={"X-CourtMate-Player-ID": "p2"},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("marked complete", response.json()["detail"])
+
+    def test_feedback_accepts_private_player_ratings_on_a_ten_point_scale(self):
+        completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(completed.status_code, 200)
+
+        feedback = self.client.post(
+            "/v1/sessions/s1/feedback",
+            json={
+                "fun": 5,
+                "fairness": 5,
+                "would_return": True,
+                "ratings": [
+                    {"player_id": "p1", "rating_10": 10},
+                    {"player_id": "p3", "rating_10": 7},
+                    {"player_id": "p6", "rating_10": 4},
+                ],
+            },
+            headers={"X-CourtMate-Player-ID": "p2"},
+        )
+        self.assertEqual(feedback.status_code, 200)
+        self.assertEqual(feedback.json()["ratings"][0]["rating_10"], 10)
+
+        profile = self.client.get("/v1/me", headers={"X-CourtMate-Player-ID": "p1"})
+        history_point = next(point for point in profile.json()["cmr_history"]["pickleball"] if point["session_id"] == "s1")
+        self.assertEqual(history_point["game_rating"], 100.0)
+
+    def test_feedback_resubmission_replaces_the_previous_cmr_signal(self):
+        completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(completed.status_code, 200)
+        first = self.client.post(
+            "/v1/sessions/s1/feedback",
+            json={
+                "fun": 5,
+                "fairness": 5,
+                "would_return": True,
+                "ratings": [
+                    {"player_id": "p1", "rating_10": 10},
+                    {"player_id": "p3", "rating_10": 7},
+                    {"player_id": "p6", "rating_10": 5},
+                ],
+            },
+            headers={"X-CourtMate-Player-ID": "p2"},
+        )
+        self.assertEqual(first.status_code, 200)
+        replacement = self.client.post(
+            "/v1/sessions/s1/feedback",
+            json={
+                "fun": 4,
+                "fairness": 4,
+                "would_return": True,
+                "ratings": [
+                    {"player_id": "p1", "rating_10": 1},
+                    {"player_id": "p3", "rating_10": 7},
+                    {"player_id": "p6", "rating_10": 5},
+                ],
+            },
+            headers={"X-CourtMate-Player-ID": "p2"},
+        )
+        self.assertEqual(replacement.status_code, 200)
+        self.assertEqual(len(repository.list_feedback("s1")), 1)
+
+        profile = self.client.get("/v1/me", headers={"X-CourtMate-Player-ID": "p1"})
+        history_point = next(point for point in profile.json()["cmr_history"]["pickleball"] if point["session_id"] == "s1")
+        self.assertEqual(history_point["game_rating"], 0.0)
+
+    def test_private_feedback_requires_one_rating_for_each_other_player(self):
+        completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(completed.status_code, 200)
+        incomplete = self.client.post(
+            "/v1/sessions/s1/feedback",
+            json={
+                "fun": 5,
+                "fairness": 5,
+                "would_return": True,
+                "ratings": [{"player_id": "p1", "rating_10": 8}],
+            },
+            headers={"X-CourtMate-Player-ID": "p2"},
+        )
+        self.assertEqual(incomplete.status_code, 422)
+        self.assertIn("every other confirmed player", incomplete.json()["detail"])
 
     def test_social_feed_reuses_a_short_lived_player_scoped_cache(self):
         from unittest.mock import patch
@@ -573,6 +691,40 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(incoming.status_code, 200)
         request_views = incoming.json()["requests"]
         self.assertTrue(any(item["request"]["id"] == join.json()["id"] and item["session"]["id"] == "s1" for item in request_views))
+
+    def test_activity_snapshot_populates_every_games_tab_and_updates_after_join(self):
+        initial = self.client.get("/v1/me/activity", headers={"X-CourtMate-Player-ID": "p4"})
+        self.assertEqual(initial.status_code, 200)
+        self.assertIn("X-Response-Time-Ms", initial.headers)
+        self.assertEqual(set(initial.json()), {"requests", "incoming_requests", "groups", "games", "past_games"})
+
+        join = self.client.post("/v1/sessions/s1/join", headers={"X-CourtMate-Player-ID": "p4"})
+        self.assertEqual(join.status_code, 200)
+
+        requester_activity = self.client.get("/v1/me/activity", headers={"X-CourtMate-Player-ID": "p4"})
+        self.assertTrue(any(item["request"]["id"] == join.json()["id"] for item in requester_activity.json()["requests"]))
+        organizer_activity = self.client.get("/v1/me/activity", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertTrue(any(item["request"]["id"] == join.json()["id"] for item in organizer_activity.json()["incoming_requests"]))
+
+    def test_activity_snapshot_reuses_reads_until_a_successful_write_invalidates_them(self):
+        from unittest.mock import patch
+
+        with patch.object(repository, "list_sessions", wraps=repository.list_sessions) as list_sessions:
+            first = self.client.get("/v1/me/activity", headers={"X-CourtMate-Player-ID": "p1"})
+            first_read_count = list_sessions.call_count
+            second = self.client.get("/v1/me/activity", headers={"X-CourtMate-Player-ID": "p1"})
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertGreater(first_read_count, 0)
+        self.assertEqual(list_sessions.call_count, first_read_count)
+
+        updated = self.client.post("/v1/me/profile", json={"bio": "Ready for a rally."}, headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(updated.status_code, 200)
+        with patch.object(repository, "list_sessions", wraps=repository.list_sessions) as list_sessions:
+            refreshed = self.client.get("/v1/me/activity", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(refreshed.status_code, 200)
+        self.assertGreater(list_sessions.call_count, 0)
 
     def test_player_can_withdraw_a_pending_request(self):
         join = self.client.post("/v1/sessions/s1/join", headers={"X-CourtMate-Player-ID": "p5"})
@@ -904,6 +1056,13 @@ class ApiFlowTests(unittest.TestCase):
         self.assertIsNone(final["player_a_id"])
         self.assertIsNone(final["player_b_id"])
 
+        future_round_edit = self.client.put(
+            f"/v1/tournaments/{tournament_id}/matches/{final['id']}",
+            json={"round_number": 2, "match_number": 1, "player_a_id": "p1", "player_b_id": "p2"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(future_round_edit.status_code, 409)
+
         first_winner = first_round[0]["player_a_id"]
         second_winner = first_round[1]["player_b_id"]
         first_result = self.client.post(
@@ -912,6 +1071,12 @@ class ApiFlowTests(unittest.TestCase):
             headers={"X-CourtMate-Player-ID": first_winner},
         )
         self.assertEqual(first_result.status_code, 200)
+        locked_winner = self.client.post(
+            f"/v1/tournaments/{tournament_id}/matches/{first_round[0]['id']}/winner",
+            json={"winner_id": first_round[0]["player_b_id"]},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(locked_winner.status_code, 409)
         second_result = self.client.post(
             f"/v1/tournaments/{tournament_id}/matches/{first_round[1]['id']}/winner",
             json={"winner_id": second_winner},

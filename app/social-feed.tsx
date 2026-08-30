@@ -32,10 +32,17 @@ type SocialPost = {
   session_leaderboard?: SessionLeaderboardEntry[];
 };
 
-const SOCIAL_FEED_CACHE_TTL_MS = 60_000;
+const SOCIAL_FEED_CACHE_TTL_MS = 120_000;
+const SOCIAL_RECOMMENDATIONS_CACHE_TTL_MS = 300_000;
+const socialFeedRequests = new Map<string, Promise<SocialPost[]>>();
+const socialRecommendationRequests = new Map<string, Promise<RecommendedPlayer[]>>();
 
 function socialFeedCacheKey(playerId: string, feed: "all" | "following") {
   return `courtmate:social-feed:${playerId}:${feed}`;
+}
+
+function socialRecommendationsCacheKey(playerId: string) {
+  return `courtmate:social-recommendations:${playerId}`;
 }
 
 type SessionActivityPlayer = {
@@ -348,42 +355,57 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
   const [recommendedPlayers, setRecommendedPlayers] = useState<RecommendedPlayer[]>([]);
   const [recommendationsLoading, setRecommendationsLoading] = useState(true);
 
-  async function loadFeed(nextFilter = feedFilter) {
-    let hasCachedFeed = false;
-    if (typeof window !== "undefined") {
+  function clearFeedCache() {
+    try {
+      window.sessionStorage.removeItem(socialFeedCacheKey(currentUserId, "all"));
+      window.sessionStorage.removeItem(socialFeedCacheKey(currentUserId, "following"));
+    } catch {
+      // A disabled session storage should not affect feed interactions.
+    }
+  }
+
+  async function loadFeed(nextFilter = feedFilter, force = false) {
+    const key = socialFeedCacheKey(currentUserId, nextFilter);
+    if (!force) {
       try {
-        const key = socialFeedCacheKey(currentUserId, nextFilter);
         const raw = window.sessionStorage.getItem(key);
         const cached = raw ? JSON.parse(raw) as { cachedAt?: number; posts?: SocialPost[] } : null;
         if (cached?.cachedAt && Date.now() - cached.cachedAt < SOCIAL_FEED_CACHE_TTL_MS && Array.isArray(cached.posts)) {
           setPosts(cached.posts);
+          setLoadError("");
           setLoading(false);
-          hasCachedFeed = true;
-        } else if (raw) {
-          window.sessionStorage.removeItem(key);
+          return;
         }
+        if (raw) window.sessionStorage.removeItem(key);
       } catch {
         // A disabled or full session storage should never block the feed.
       }
     }
     try {
-      if (!hasCachedFeed) setLoading(true);
+      setLoading(true);
       setLoadError("");
-      const response = await authorizedFetch(`${apiUrl}/v1/social/feed?feed=${nextFilter}`);
-      if (!response.ok) throw new Error("Social feed unavailable");
-      const payload = await response.json() as { posts: SocialPost[] };
-      if (!Array.isArray(payload.posts)) throw new Error("Social feed payload is invalid");
-      setPosts(payload.posts);
+      let request = socialFeedRequests.get(key);
+      if (!request) {
+        request = authorizedFetch(`${apiUrl}/v1/social/feed?feed=${nextFilter}`)
+          .then(async (response) => {
+            if (!response.ok) throw new Error("Social feed unavailable");
+            const payload = await response.json() as { posts: SocialPost[] };
+            if (!Array.isArray(payload.posts)) throw new Error("Social feed payload is invalid");
+            return payload.posts;
+          })
+          .finally(() => socialFeedRequests.delete(key));
+        socialFeedRequests.set(key, request);
+      }
+      const nextPosts = await request;
+      setPosts(nextPosts);
       try {
-        window.sessionStorage.setItem(socialFeedCacheKey(currentUserId, nextFilter), JSON.stringify({ cachedAt: Date.now(), posts: payload.posts }));
+        window.sessionStorage.setItem(key, JSON.stringify({ cachedAt: Date.now(), posts: nextPosts }));
       } catch {
         // A disabled or full session storage should never block the feed.
       }
     } catch (error) {
-      if (!hasCachedFeed) {
-        setPosts([]);
-        setLoadError(error instanceof Error ? error.message : "Could not load the social feed");
-      }
+      setPosts([]);
+      setLoadError(error instanceof Error ? error.message : "Could not load the social feed");
     } finally {
       setLoading(false);
     }
@@ -391,16 +413,45 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
 
   useEffect(() => {
     void loadFeed();
-    void loadRecommendedPlayers();
+    const timer = window.setTimeout(() => void loadRecommendedPlayers(), 250);
+    return () => window.clearTimeout(timer);
   }, [currentUserId]);
 
-  async function loadRecommendedPlayers() {
+  async function loadRecommendedPlayers(force = false) {
+    const key = socialRecommendationsCacheKey(currentUserId);
+    if (!force) {
+      try {
+        const raw = window.sessionStorage.getItem(key);
+        const cached = raw ? JSON.parse(raw) as { cachedAt?: number; profiles?: RecommendedPlayer[] } : null;
+        if (cached?.cachedAt && Date.now() - cached.cachedAt < SOCIAL_RECOMMENDATIONS_CACHE_TTL_MS && Array.isArray(cached.profiles)) {
+          setRecommendedPlayers(cached.profiles.filter((profile) => !profile.is_following));
+          setRecommendationsLoading(false);
+          return;
+        }
+      } catch {
+        // Recommendations are optional, so storage failures stay silent.
+      }
+    }
     try {
       setRecommendationsLoading(true);
-      const response = await authorizedFetch(`${apiUrl}/v1/players/recommended`);
-      if (!response.ok) throw new Error("Recommendations unavailable");
-      const payload = await response.json() as { profiles: RecommendedPlayer[] };
-      setRecommendedPlayers(payload.profiles.filter((profile) => !profile.is_following));
+      let request = socialRecommendationRequests.get(key);
+      if (!request) {
+        request = authorizedFetch(`${apiUrl}/v1/players/recommended`)
+          .then(async (response) => {
+            if (!response.ok) throw new Error("Recommendations unavailable");
+            const payload = await response.json() as { profiles: RecommendedPlayer[] };
+            return payload.profiles;
+          })
+          .finally(() => socialRecommendationRequests.delete(key));
+        socialRecommendationRequests.set(key, request);
+      }
+      const profiles = await request;
+      setRecommendedPlayers(profiles.filter((profile) => !profile.is_following));
+      try {
+        window.sessionStorage.setItem(key, JSON.stringify({ cachedAt: Date.now(), profiles }));
+      } catch {
+        // Recommendations are optional, so storage failures stay silent.
+      }
     } catch {
       setRecommendedPlayers([]);
     } finally {
@@ -414,6 +465,12 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       const response = await authorizedFetch(`${apiUrl}/v1/players/${player.id}/follow`, { method: "POST" });
       if (!response.ok) throw new Error("Follow failed");
       setRecommendedPlayers((current) => current.filter((item) => item.id !== player.id));
+      clearFeedCache();
+      try {
+        window.sessionStorage.removeItem(socialRecommendationsCacheKey(currentUserId));
+      } catch {
+        // The visible recommendation list is already updated optimistically.
+      }
       onToast(`Following ${player.display_name}`);
     } catch {
       onToast("Could not follow this player");
@@ -435,6 +492,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       if (!response.ok) throw new Error("Fire reaction failed");
       const updated = await response.json() as SocialPost;
       setPosts((current) => current.map((item) => item.id === updated.id ? updated : item));
+      clearFeedCache();
     } catch {
       setPosts((current) => current.map((item) => item.id === post.id ? post : item));
       onToast("Could not update the fire reaction");
@@ -479,6 +537,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       setComments((current) => ({ ...current, [postId]: [...(current[postId] ?? []), comment] }));
       setPosts((current) => current.map((post) => post.id === postId ? { ...post, comment_count: post.comment_count + 1 } : post));
       setCommentDrafts((current) => ({ ...current, [postId]: "" }));
+      clearFeedCache();
     } catch {
       onToast("Could not add your comment");
     } finally {
@@ -494,6 +553,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       if (!response.ok) throw new Error("Share failed");
       const updated = await response.json() as SocialPost;
       setPosts((current) => current.map((item) => item.id === updated.id ? updated : item));
+      clearFeedCache();
       const image = await createShareCard(post);
       if (navigator.share && image && (!navigator.canShare || navigator.canShare({ files: [image] }))) {
         await navigator.share({ title: `${post.player_display_name} on CourtMate`, text: post.caption, url: shareUrl, files: [image] });
@@ -577,6 +637,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       }
       const createdPost = await response.json() as SocialPost;
       setPosts((current) => [createdPost, ...current]);
+      clearFeedCache();
       onToast("Photo added to the game post");
     } catch (error) {
       onToast(error instanceof Error ? error.message : "Could not add the photo");
@@ -602,7 +663,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
 
     <div className="social-feed-list" aria-busy={loading}>
       {loading && <div className="social-feed-loader"><TennisBallLoader label="Loading social feed" /></div>}
-      {!loading && loadError && <div className="social-feed-error" role="alert"><strong>Social is taking a breather.</strong><p>We couldn&apos;t load the latest court activity.</p><button type="button" onClick={() => void loadFeed()}>Try again <span>↗</span></button></div>}
+      {!loading && loadError && <div className="social-feed-error" role="alert"><strong>Social is taking a breather.</strong><p>We couldn&apos;t load the latest court activity.</p><button type="button" onClick={() => void loadFeed(feedFilter, true)}>Try again <span>↗</span></button></div>}
       {!loading && !loadError && posts.length === 0 && <div className="social-empty"><strong>{feedFilter === "following" ? "Follow players to build your feed." : "Your court activity starts here."}</strong><p>Published game sessions, leaderboards, and court moments will appear here.</p></div>}
       {!loading && posts.map((post) => post.activity_type === "session" ? <SessionActivityCard key={post.id} post={post} currentUserId={currentUserId} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments[post.id]} commentDraft={commentDrafts[post.id] ?? ""} fireBusy={busyAction === `fire-${post.id}`} commentsBusy={busyAction === `comments-${post.id}`} commentBusy={busyAction === `comment-${post.id}`} shareBusy={busyAction === `share-${post.id}`} onFire={(socialPost) => void toggleFire(socialPost)} onViewProfile={onViewProfile} onShare={(sessionPost) => void shareSessionLeaderboard(sessionPost)} onLoadComments={(postId) => void loadComments(postId)} onFocusComments={focusComments} onCommentDraftChange={(postId, value) => setCommentDrafts((current) => ({ ...current, [postId]: value }))} onAddComment={(event, postId) => void addComment(event, postId)} onAddPhoto={(sessionPost, file) => void addSessionPhoto(sessionPost, file)} photoBusy={busyAction === `photo-${post.id}`} /> : <article className="social-post-card" id={`social-post-${post.id}`} key={post.id}>
         <header className="social-post-header"><button type="button" className="social-profile-trigger" onClick={() => onViewProfile(post.player_id)} aria-label={`View ${post.player_display_name}'s profile`}><Avatar name={post.player_display_name} imageUrl={post.profile_image_url} large /><span><strong>{post.player_display_name}</strong><small>{sportLabel(post.sport)} · {relativeTime(post.created_at)}</small></span></button><span className="social-post-sport">{sportLabel(post.sport)}</span></header>

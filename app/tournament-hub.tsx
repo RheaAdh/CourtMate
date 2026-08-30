@@ -531,13 +531,14 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
                         const hasPlayers = Boolean(match.player_a_id && match.player_b_id);
                         const canScore = hasPlayers && (Boolean(isOrganizer) || (match.status !== "completed" && (currentUserId === match.player_a_id || currentUserId === match.player_b_id)));
                         const canConfirm = match.status === "pending_confirmation" && currentUserId !== match.score_entered_by && (Boolean(isOrganizer) || currentUserId === match.player_a_id || currentUserId === match.player_b_id);
-                        const canSelectWinner = hasPlayers && (match.status === "scheduled" || (match.status === "completed" && Boolean(isOrganizer))) && (Boolean(isOrganizer) || currentUserId === match.player_a_id || currentUserId === match.player_b_id);
+                        const canSelectWinner = hasPlayers && match.status === "scheduled" && (Boolean(isOrganizer) || currentUserId === match.player_a_id || currentUserId === match.player_b_id);
+                        const canEditFixture = Boolean(isOrganizer) && match.status === "scheduled" && (selected.tournament.format === "round_robin" || match.round_number === 1);
                         const draft = scores[match.id] ?? scoreDraftFor(match, selected.tournament.rules.best_of);
                         const fixtureEdit = fixtureEdits[match.id];
                         const winnerDraft = winnerDrafts[match.id] ?? match.winner_id ?? "";
                         return (
                           <article className={`fixture-card fixture-${match.status}${updatedMatchId === match.id ? " fixture-updated" : ""}`} key={match.id}>
-                            <div className="fixture-top"><span>Match {match.match_number}</span><span className="fixture-card-actions"><small>{matchStatusLabel(match.status)}</small>{isOrganizer && !fixtureEdit && <button className="fixture-edit-button" type="button" onClick={() => startFixtureEdit(match)}>Edit fixture</button>}</span></div>
+                            <div className="fixture-top"><span>Match {match.match_number}</span><span className="fixture-card-actions"><small>{matchStatusLabel(match.status)}</small>{canEditFixture && !fixtureEdit && <button className="fixture-edit-button" type="button" onClick={() => startFixtureEdit(match)}>Edit fixture</button>}</span></div>
                             <div className="fixture-players"><strong className={match.winner_id === match.player_a_id ? "winner" : ""}>{playerName(match.player_a_id)}</strong><b>{match.score_a ?? "-"}</b><strong className={match.winner_id === match.player_b_id ? "winner" : ""}>{playerName(match.player_b_id)}</strong><b>{match.score_b ?? "-"}</b></div>
                             {(match.set_scores_a?.length ?? 0) > 0 && <p className="fixture-set-summary">Set scores: {match.set_scores_a?.map((score, index) => `${score}-${match.set_scores_b?.[index] ?? "-"}`).join(" · ")}</p>}
                             {fixtureEdit && <div className="fixture-edit-entry">

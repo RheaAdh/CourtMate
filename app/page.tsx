@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, ReactNode, useEffect, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, User } from "firebase/auth";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 
@@ -298,6 +298,14 @@ type PastGame = {
   group_size: number;
 };
 
+type ActivitySnapshot = {
+  requests: ActivityRequest[];
+  incoming_requests: ActivityRequest[];
+  groups: ActivityGroup[];
+  games: ActivityGroup[];
+  past_games: PastGame[];
+};
+
 type ChatPost = {
   id: string;
   player_id: string;
@@ -312,7 +320,7 @@ type ChatPost = {
 
 type AppNotification = {
   id: string;
-  kind: "game_match" | "join_request" | "request_update" | "tournament_request" | "tournament_update" | "follow";
+  kind: "game_match" | "game_completed" | "join_request" | "request_update" | "tournament_request" | "tournament_update" | "follow";
   title: string;
   message: string;
   session_id: string;
@@ -348,7 +356,6 @@ type CMRHistoryPoint = {
   delta?: number | null;
 };
 
-type ActivityTab = "requests" | "groups" | "games" | "incoming";
 type AppTab = "home" | "social" | "games" | "profile" | "tournaments" | "about";
 type GamesViewTab = "explore" | "pending" | "upcoming" | "history" | "requested" | "confirmed" | "past" | "incoming";
 type ConnectionsTab = "following" | "followers";
@@ -478,6 +485,10 @@ function ChatIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-4.5 3v-3H5a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z" /><path d="M7 10h10M7 13.5h6" /></svg>;
 }
 
+function CopyIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>;
+}
+
 function activityDateKey(value: Date): string {
   const year = value.getFullYear();
   const month = String(value.getMonth() + 1).padStart(2, "0");
@@ -591,9 +602,6 @@ export default function Home() {
   const [feedbackMembers, setFeedbackMembers] = useState<GroupMember[]>([]);
   const [groupMembers, setGroupMembers] = useState<GroupMember[]>([]);
   const [groupWaitlist, setGroupWaitlist] = useState<GroupMember[]>([]);
-  const [activityProofs, setActivityProofs] = useState<ActivityProof[]>([]);
-  const [groupLeaderboard, setGroupLeaderboard] = useState<LeaderboardEntry[]>([]);
-  const [localLeaderboard, setLocalLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [feedbackFun, setFeedbackFun] = useState("5");
   const [feedbackFairness, setFeedbackFairness] = useState("5");
   const [feedbackWouldReturn, setFeedbackWouldReturn] = useState(true);
@@ -617,6 +625,7 @@ export default function Home() {
   const [profileSport, setProfileSport] = useState<Sport | null>(null);
   const [feedFilter, setFeedFilter] = useState("best");
   const [toast, setToast] = useState("");
+  const activityRequestRef = useRef<Promise<ActivitySnapshot> | null>(null);
 
   useEffect(() => {
     const savedTheme = window.localStorage.getItem("courtmate-theme");
@@ -810,45 +819,6 @@ export default function Home() {
     }
   }
 
-  async function analyzeActivityScreenshot(file: File, sessionId: string): Promise<ActivityProof | null> {
-    if (!user) return null;
-    if (!storage) {
-      setToast("Firebase Storage is not configured");
-      return null;
-    }
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
-      setToast("Choose a JPG, PNG, or WebP screenshot");
-      return null;
-    }
-    if (file.size > 8 * 1024 * 1024) {
-      setToast("Tracker screenshots must be smaller than 8 MB");
-      return null;
-    }
-    try {
-      const extension = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
-      const imageRef = ref(storage, `activity-proofs/${user.uid}/${sessionId}/${crypto.randomUUID()}.${extension}`);
-      const upload = await uploadBytes(imageRef, file, { contentType: file.type });
-      const imageUrl = await getDownloadURL(upload.ref);
-      setToast("Gemini is reading your game stats...");
-      const response = await authorizedFetch(`${apiUrl}/v1/sessions/${sessionId}/activity-proof/analyze`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ image_url: imageUrl }),
-      });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({})) as { detail?: string };
-        throw new Error(payload.detail ?? "Could not analyse tracker screenshot");
-      }
-      const proof = await response.json() as ActivityProof;
-      setActivityProofs((current) => [proof, ...current.filter((item) => item.id !== proof.id)]);
-      setToast("Game stats added");
-      return proof;
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "Could not analyse tracker screenshot");
-      return null;
-    }
-  }
-
   async function analyzeProfileActivityScreenshot(file: File, sport: string): Promise<ActivityProof | null> {
     if (!user) return null;
     if (!storage) {
@@ -918,10 +888,7 @@ export default function Home() {
       const payload = await response.json() as { notifications: AppNotification[] };
       setNotifications(payload.notifications);
       if (payload.notifications.some((notification) => notification.kind === "request_update" && !notification.read)) {
-        void Promise.all([
-          loadActivity("requests", authUser, false, false),
-          loadActivity("games", authUser, false, false),
-        ]);
+        void loadGamesActivity(authUser, false, false);
       }
     } catch {
       // Notifications are supplementary; keep the rest of the app usable if unavailable.
@@ -1051,13 +1018,24 @@ export default function Home() {
     if (notification.kind === "join_request") {
       setActiveTab("games");
       setGamesViewTab("upcoming");
-      void loadActivity("incoming");
+      void loadGamesActivity();
       return;
     }
     if (notification.kind === "request_update") {
       setActiveTab("games");
       setGamesViewTab("pending");
-      void loadActivity("requests");
+      void loadGamesActivity();
+      return;
+    }
+    if (notification.kind === "game_completed") {
+      const completedGame = [...approvedGames, ...myGroups, ...pastGames.map(({ session }) => session)].find((game) => game.id === notification.session_id);
+      if (completedGame) {
+        void openGroupSpace(completedGame);
+        return;
+      }
+      setActiveTab("games");
+      setGamesViewTab("history");
+      void loadGamesActivity();
       return;
     }
     if (notification.kind === "tournament_request" || notification.kind === "tournament_update") {
@@ -1103,15 +1081,13 @@ export default function Home() {
 
   async function signOutUser() {
     if (auth) await signOut(auth);
+    activityRequestRef.current = null;
     setProfile(null);
     setProfileDraft({ bio: "", is_profile_private: false, default_session_visibility: "public", area: "Whitefield", age: "", gender: "", preferred_age_range: "any", preferred_genders: [], travel_radius_km: "10", style: "casual", availability: [] });
     setManagedGroupId(null);
     setWorkspaceGroup(null);
     setChatPosts([]);
     setGroupMembers([]);
-    setActivityProofs([]);
-    setGroupLeaderboard([]);
-    setLocalLeaderboard([]);
     setJoinRequests([]);
     setMyRequests([]);
     setMyGroups([]);
@@ -1682,10 +1658,11 @@ export default function Home() {
       if (!response.ok) throw new Error(payload.detail ?? "Could not save game feedback");
       setFeedbackSessionId(null);
       setFeedbackMembers([]);
+      invalidateSocialFeedCache();
       setChatMessages((messages) => [...messages.slice(-8), { id: `${requestTimestamp}-feedback-assistant`, role: "assistant", text: `${selectedGame?.group_name ?? "Your game"} feedback is saved. CMR and player insights have been refreshed from confirmed scores and ratings.` }]);
       void loadProfile(user as User);
       void loadSocialProfile(user as User);
-      void loadActivity("games");
+      void loadGamesActivity(user as User, false);
     } catch (error) {
       setChatMessages((messages) => [...messages.slice(-8), { id: `${requestTimestamp}-feedback-error`, role: "assistant", text: error instanceof Error ? error.message : "I could not save that feedback." }]);
     } finally {
@@ -1856,7 +1833,7 @@ export default function Home() {
       setCreationStep("confirm");
       setManagedGroupId(createdSession.id);
       setChatMessages((messages) => [...messages.slice(-8), { id: `${Date.now()}-created-assistant`, role: "assistant", text: `${createdSession.group_name} is live. Head over to the Games tab to see it and manage requests.` }]);
-      void loadActivity("groups");
+      void loadGamesActivity(user, false);
       setToast(payload.message);
     } catch {
       setToast("Could not create the group. Check that the API is running.");
@@ -1935,7 +1912,7 @@ export default function Home() {
       if (!response.ok) throw new Error(payload.detail ?? "Unable to join");
       if (!payload.status) throw new Error("The join request response was incomplete");
       setLastChatRequest({ name, status: payload.status });
-      await loadActivity("requests", user, false);
+      await loadGamesActivity(user, false);
       setSessions((currentSessions) => currentSessions.filter((session) => session.id !== sessionId));
       setViewedGroup(null);
       const statusMessage = payload.status === "waitlisted"
@@ -1964,7 +1941,7 @@ export default function Home() {
       setWorkspaceGroup(null);
       setApprovedGames((games) => games.filter((game) => game.id !== sessionId));
       setMyRequests((requests) => requests.filter(({ request, session }) => requestId ? request.id !== requestId : session.id !== sessionId));
-      await Promise.all([loadActivity("requests"), loadActivity("games")]);
+      await loadGamesActivity(user, false);
       setToast(requestId ? `Request withdrawn from ${name}` : `You backed out of ${name}`);
     } catch (error) {
       setToast(error instanceof Error ? error.message : `Could not back out of ${name}`);
@@ -1982,7 +1959,8 @@ export default function Home() {
         const completedSession = await response.json() as Session;
         setWorkspaceGroup(toActivityGroup(completedSession));
       }
-      await loadActivity("groups");
+      invalidateSocialFeedCache();
+      await loadGamesActivity(user, false);
       setToast(`${name} is now closed. Players can still leave feedback.`);
     } catch {
       setToast(`Could not close ${name}`);
@@ -2060,9 +2038,6 @@ export default function Home() {
     setChatDraft("");
     setPlayerRatings({});
     try {
-      // Chat and roster are the core group space. Rankings are useful context,
-      // but should not prevent confirmed players from coordinating if one
-      // leaderboard request is unavailable.
       const [chatResponse, membersResponse] = await Promise.all([
         authorizedFetch(`${apiUrl}/v1/sessions/${normalizedGroup.id}/chat`, {}, authUser),
         authorizedFetch(`${apiUrl}/v1/sessions/${normalizedGroup.id}/group`, {}, authUser),
@@ -2077,23 +2052,6 @@ export default function Home() {
       setChatPosts(chatPayload.posts);
       setGroupMembers(membersPayload.members);
       setGroupWaitlist(membersPayload.waitlist ?? []);
-      setActivityProofs(membersPayload.activity_proofs ?? []);
-      // Chat and roster are enough to start coordinating. Load analytics after the space is visible.
-      setWorkspaceLoading(false);
-      const [groupResult, localResult] = await Promise.allSettled([
-        authorizedFetch(`${apiUrl}/v1/sessions/${normalizedGroup.id}/leaderboard`, {}, authUser),
-        authorizedFetch(`${apiUrl}/v1/leaderboards/local?area=${encodeURIComponent(normalizedGroup.area)}&sport=${encodeURIComponent(normalizedGroup.sport)}`, {}, authUser),
-      ]);
-      if (groupResult.status === "fulfilled" && groupResult.value.ok) {
-        setGroupLeaderboard((await groupResult.value.json() as { entries: LeaderboardEntry[] }).entries);
-      } else {
-        setGroupLeaderboard([]);
-      }
-      if (localResult.status === "fulfilled" && localResult.value.ok) {
-        setLocalLeaderboard((await localResult.value.json() as { entries: LeaderboardEntry[] }).entries);
-      } else {
-        setLocalLeaderboard([]);
-      }
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not open this group space");
       setWorkspaceGroup(null);
@@ -2108,8 +2066,9 @@ export default function Home() {
       const payload = await response.json().catch(() => ({})) as Session & { detail?: string };
       if (!response.ok) throw new Error(payload.detail ?? "Could not mark this game done");
       setWorkspaceGroup(toActivityGroup(payload));
-      setToast("Game marked done and posted to Home. Add your player order below to update CMR.");
-      void loadActivity("games");
+      invalidateSocialFeedCache();
+      setToast("Game marked done and posted to Home. Everyone can now add private player ratings.");
+      void loadGamesActivity(user, false);
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not mark this game done");
       throw error;
@@ -2197,36 +2156,40 @@ export default function Home() {
     }
   }
 
-  async function loadActivity(tab: ActivityTab, authUser: User | null = user, showLoader = true, notifyError = true) {
+  async function loadGamesActivity(authUser: User | null = user, showLoader = true, notifyError = true) {
     if (!authUser) return;
-    if (showLoader) setActivityLoading(true);
+    const hasCachedActivity = Boolean(myRequests.length || incomingRequests.length || myGroups.length || approvedGames.length || pastGames.length);
+    const shouldShowLoader = showLoader && !hasCachedActivity;
+    if (shouldShowLoader) setActivityLoading(true);
     try {
-      const endpoint = tab === "requests" ? "/v1/me/requests" : tab === "groups" ? "/v1/me/groups" : tab === "incoming" ? "/v1/me/incoming-requests" : "/v1/me/games";
-      const response = await authorizedFetch(`${apiUrl}${endpoint}`, {}, authUser);
-      if (!response.ok) throw new Error("Activity unavailable");
-      if (tab === "requests") {
-        const payload = await response.json() as { requests: ActivityRequest[] };
-        setMyRequests(payload.requests);
-      } else if (tab === "groups") {
-        const payload = await response.json() as { groups: ActivityGroup[] };
-        setMyGroups(payload.groups);
-      } else if (tab === "incoming") {
-        const payload = await response.json() as { requests: ActivityRequest[] };
-        setIncomingRequests(payload.requests);
-      } else {
-        const payload = await response.json() as { games: ActivityGroup[]; past_games: PastGame[] };
-        setApprovedGames(payload.games);
-        setPastGames((payload.past_games ?? []).filter((game) => game.session.status === "completed"));
+      let request = activityRequestRef.current;
+      if (!request) {
+        request = authorizedFetch(`${apiUrl}/v1/me/activity`, {}, authUser)
+          .then(async (response) => {
+            if (!response.ok) throw new Error("Activity unavailable");
+            return response.json() as Promise<ActivitySnapshot>;
+          })
+          .finally(() => {
+            activityRequestRef.current = null;
+          });
+        activityRequestRef.current = request;
       }
+      const payload = await request;
+      setMyRequests(payload.requests ?? []);
+      setIncomingRequests(payload.incoming_requests ?? []);
+      setMyGroups(payload.groups ?? []);
+      setApprovedGames(payload.games ?? []);
+      setPastGames((payload.past_games ?? []).filter((game) => game.session.status === "completed"));
     } catch {
       if (notifyError) setToast("Could not load your CourtMate activity");
     } finally {
-      if (showLoader) setActivityLoading(false);
+      if (shouldShowLoader) setActivityLoading(false);
     }
   }
 
-  async function loadExploreGames(authUser: User | null = user) {
+  async function loadExploreGames(authUser: User | null = user, force = false) {
     if (!authUser) return;
+    if (!force && exploreGames.length) return;
     setExploreLoading(true);
     try {
       const response = await authorizedFetch(`${apiUrl}/v1/me/explore`, {}, authUser);
@@ -2265,6 +2228,16 @@ export default function Home() {
     return shareUrl.toString();
   }
 
+  function invalidateSocialFeedCache() {
+    if (!user) return;
+    try {
+      window.sessionStorage.removeItem(`courtmate:social-feed:${user.uid}:all`);
+      window.sessionStorage.removeItem(`courtmate:social-feed:${user.uid}:following`);
+    } catch {
+      // The next feed request will still refresh from the API when storage is unavailable.
+    }
+  }
+
   async function copyGroupSpaceLink(game: Pick<ShareableGame, "id">) {
     try {
       await navigator.clipboard.writeText(getGroupSpaceUrl(game));
@@ -2275,18 +2248,27 @@ export default function Home() {
     window.setTimeout(() => setToast(""), 2600);
   }
 
-  function shareGameOnWhatsApp(game: ShareableGame) {
+  async function shareGame(game: ShareableGame) {
     const dateLabel = new Date(`${game.session_date}T12:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short" });
     const location = game.venue_name ? `${game.venue_name}, ${game.area}` : game.area;
     const groupSpaceUrl = getGroupSpaceUrl(game);
     const message = `Join me for ${game.group_name}\n${sportLabel(game.sport)} · ${dateLabel} · ${game.start_time}–${game.end_time}\n${location}\n\nOpen the CourtMate Group Space: ${groupSpaceUrl}`;
-    const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
-    const shareWindow = window.open(whatsappUrl, "_blank", "noopener,noreferrer");
-    if (shareWindow) {
-      setToast("Game details ready to share on WhatsApp");
-    } else {
-      void navigator.clipboard?.writeText(message);
-      setToast("WhatsApp could not open. Game details copied instead.");
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: game.group_name, text: message });
+        setToast("Game details shared");
+      } else {
+        await navigator.clipboard.writeText(message);
+        setToast("Game details copied");
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      try {
+        await navigator.clipboard.writeText(message);
+        setToast("Game details copied");
+      } catch {
+        setToast("Could not share game details");
+      }
     }
     window.setTimeout(() => setToast(""), 2600);
   }
@@ -2316,7 +2298,7 @@ export default function Home() {
           : group);
       }
       if (groupId === managedGroupId) await loadJoinRequests(groupId, false);
-      await Promise.all([loadActivity("groups"), loadActivity("incoming"), loadActivity("games")]);
+      await loadGamesActivity(user, false);
       setToast(payload.status === "approved" ? "Player approved for the group" : payload.status === "waitlisted" ? "Group is full. Player added to the waitlist" : "Request declined");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not update this join request");
@@ -2342,12 +2324,9 @@ export default function Home() {
         window.history.replaceState({ courtMatePage: tab }, "", `${window.location.pathname}${window.location.search}`);
       }
     }
-    if (tab === "home" && user) {
-      setQuery("");
-      void search(undefined, `Show me nearby ${selectedSport} games that match my saved preferences`, false);
-    }
+    if (tab === "home" && user) setQuery("");
     if (tab === "games") {
-      void Promise.all([loadActivity("requests"), loadActivity("games"), loadActivity("groups"), loadActivity("incoming"), loadExploreGames()]);
+      void loadGamesActivity();
     }
   }
 
@@ -2474,8 +2453,8 @@ export default function Home() {
         <button type="button" className="section-fab games-fab" onClick={toggleGamesForm} aria-label={showCreateGame ? "Close game form" : "Create a game"} title={showCreateGame ? "Close" : "Create a game"}>{showCreateGame ? "×" : "+"}</button>
         {showCreateGame && <form className="game-create-form" onSubmit={(event) => { event.preventDefault(); void createGroup(); }}><div className="game-create-heading"><div><span className="kicker">NEW GAME</span><h2>Create a game</h2></div><span>Fill in the details</span></div><div className="game-create-grid"><label className="game-create-wide"><span>Game name</span><input value={groupNameDraft} onChange={(event) => setGroupNameDraft(event.target.value)} placeholder="Whitefield Saturday Rally" required /></label><label><span>Sport</span><select value={createGroupDraft.sport} onChange={(event) => changeCreateSport(event.target.value as Sport)}>{sportOptions.map((sport) => <option value={sport.value} key={sport.value}>{sport.label}</option>)}</select></label><label><span>Area</span><input value={createGroupDraft.area} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, area: event.target.value })} placeholder="Any neighbourhood" required /></label><label><span>Date</span><input type="date" min={localDateInput()} value={createGroupDraft.session_date} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, session_date: event.target.value })} required /></label><label><span>Starts</span><input type="time" value={createGroupDraft.start_time} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, start_time: event.target.value })} required /></label><label><span>Ends</span><input type="time" value={createGroupDraft.end_time} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, end_time: event.target.value })} required /></label><label><span>Skill from</span><input type="number" min="1" max="8" step="0.1" value={createGroupDraft.skill_min} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, skill_min: event.target.value })} required /></label><label><span>Skill to</span><input type="number" min="1" max="8" step="0.1" value={createGroupDraft.skill_max} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, skill_max: event.target.value })} required /></label><label><span>Game mood</span><select value={createGroupDraft.style} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, style: event.target.value as CreateGroupDraft["style"] })}><option value="casual">Casual</option><option value="social">Social</option><option value="competitive">Competitive</option></select></label></div><div className="game-create-actions"><button className="dark-button" type="submit" disabled={createGroupLoading}>{createGroupLoading ? "Creating..." : "Create game"}<span>→</span></button><button className="text-button" type="button" onClick={() => setShowCreateGame(false)}>Cancel</button></div></form>}
         <div className="tournament-tabs" role="tablist" aria-label="Game views"><button className={gamesViewTab === "explore" ? "active" : ""} onClick={() => { setGamesViewTab("explore"); void loadExploreGames(); }}>Explore <span>{exploreGames.length}</span></button><button className={gamesViewTab === "upcoming" ? "active" : ""} onClick={() => setGamesViewTab("upcoming")}>Upcoming <span>{upcomingGames.length}</span></button><button className={gamesViewTab === "pending" ? "active" : ""} onClick={() => setGamesViewTab("pending")}>Pending <span>{requestedGames.length}</span></button><button className={gamesViewTab === "history" ? "active" : ""} onClick={() => setGamesViewTab("history")}>History <span>{pastGames.length}</span></button></div>
-        {gamesViewTab === "explore" && <div className="game-list">{exploreLoading ? <TennisBallLoader label="Finding nearby games" /> : exploreGames.length ? exploreGames.map((game) => <article className="game-row" key={game.id}><div className="game-date"><strong>{new Date(game.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><span>{new Date(game.session_date).getDate()}</span></div><div className="game-copy"><h2>{game.group_name}</h2><p>{sportLabel(game.sport)} · {game.session_date} · {game.start_time}–{game.end_time} · {game.area}</p><small className="waitlist-summary">{Math.round(game.score * 100)}% match · {game.open_slots} spot{game.open_slots === 1 ? "" : "s"} open</small></div><div className="game-row-actions"><button className="manage-group-button" onClick={() => void viewGroup(game.id)} disabled={loadingGroupId === game.id}>{loadingGroupId === game.id ? "Loading..." : "View group"}</button><button className="calendar-button" onClick={() => void copyGroupSpaceLink(game)}>Copy Group Space link</button><button className="game-share-button" onClick={() => shareGameOnWhatsApp(game)} aria-label={`Share ${game.group_name} on WhatsApp`}>WhatsApp <span>↗</span></button><button className="join-button" onClick={() => void joinSession(game.id, game.group_name, game.organizer_id)} disabled={joiningSessionId !== null}>{joiningSessionId === game.id ? "Requesting..." : "Request to join"}<span>→</span></button></div></article>) : <div className="page-empty"><strong>No nearby games match yet.</strong><p>Try a different sport or describe what you want on Home.</p><button className="dark-button" onClick={() => selectTab("home")}>Find a game <span>→</span></button></div>}</div>}
-        {!activityLoading && gamesViewTab === "upcoming" && <div className="game-list">{upcomingGames.length ? upcomingGames.map((game) => { const owned = myGroups.some((group) => group.id === game.id); const groupRequests = incomingRequests.filter(({ session }) => session.id === game.id); const waitlistCount = game.waitlist_player_ids?.length ?? 0; return <article className="game-row upcoming-game-row" key={game.id}><div className="game-date confirmed"><strong>{new Date(game.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><span>{new Date(game.session_date).getDate()}</span></div><div className="game-copy"><h2>{game.group_name}</h2><p>{sportLabel(game.sport)} · {game.session_date} · {game.start_time}–{game.end_time} · {game.area}</p><small className="waitlist-summary">{waitlistCount ? `${waitlistCount} player${waitlistCount === 1 ? "" : "s"} on waitlist` : "Waitlist empty"}</small></div><div className="game-row-actions"><button className="manage-group-button" onClick={() => void openGroupSpace(game)}>Group space</button><button className="calendar-button" onClick={() => void copyGroupSpaceLink(game)}>Copy Group Space link</button><button className="game-share-button" onClick={() => shareGameOnWhatsApp(game)} aria-label={`Share ${game.group_name} on WhatsApp`}>WhatsApp <span>↗</span></button>{owned && <button className="manage-group-button" onClick={() => { if (managedGroupId === game.id) { setManagedGroupId(null); setJoinRequests([]); } else { setManagedGroupId(game.id); void loadJoinRequests(game.id); } }}>{managedGroupId === game.id ? "Hide requests" : `${groupRequests.length ? `${groupRequests.length} ` : ""}Review requests`}</button>}{!owned && <><button className="calendar-button" onClick={() => addToGoogleCalendar(game)}>Add to Google Calendar</button><button className="leave-game-button" onClick={() => void leaveGame(game.id, game.group_name)}>Back out</button></>}</div>{managedGroupId === game.id && <div className="inline-request-list">{requestsLoading ? <p className="request-empty">Loading requests...</p> : joinRequests.length ? joinRequests.map((request) => <div className="request-row" key={request.id}><div><strong>{request.player_display_name ?? request.player_id.slice(0, 10)}</strong><small className={`status-badge ${request.status}`}>{request.status}</small></div>{request.status === "pending" && <div className="request-actions"><button onClick={() => void decideJoinRequest(request.id, "approved", game.id)}>Approve</button><button onClick={() => void decideJoinRequest(request.id, "declined", game.id)}>Decline</button></div>}</div>) : <p className="request-empty">No requests waiting for approval.</p>}</div>}</article>; }) : <div className="page-empty"><strong>No upcoming games yet.</strong><p>Join a nearby game or create a game from Home.</p><button className="dark-button" onClick={() => selectTab("home")}>Find a game <span>→</span></button></div>}</div>}
+        {gamesViewTab === "explore" && <div className="game-list">{exploreLoading ? <TennisBallLoader label="Finding nearby games" /> : exploreGames.length ? exploreGames.map((game) => <article className="game-row" key={game.id}><div className="game-date"><strong>{new Date(game.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><span>{new Date(game.session_date).getDate()}</span></div><div className="game-copy"><h2>{game.group_name}</h2><p>{sportLabel(game.sport)} · {game.session_date} · {game.start_time}–{game.end_time} · {game.area}</p><small className="waitlist-summary">{Math.round(game.score * 100)}% match · {game.open_slots} spot{game.open_slots === 1 ? "" : "s"} open</small></div><div className="game-row-actions"><button className="manage-group-button" onClick={() => void viewGroup(game.id)} disabled={loadingGroupId === game.id}>{loadingGroupId === game.id ? "Loading..." : "View group"}</button><button className="copy-link-button" onClick={() => void copyGroupSpaceLink(game)} aria-label={`Copy ${game.group_name} link`} title="Copy share link"><CopyIcon /><span>Copy link</span></button><button className="game-share-button" onClick={() => void shareGame(game)} aria-label={`Share ${game.group_name}`}>Share <span>↗</span></button><button className="join-button" onClick={() => void joinSession(game.id, game.group_name, game.organizer_id)} disabled={joiningSessionId !== null}>{joiningSessionId === game.id ? "Requesting..." : "Request to join"}<span>→</span></button></div></article>) : <div className="page-empty"><strong>No nearby games match yet.</strong><p>Try a different sport or describe what you want on Home.</p><button className="dark-button" onClick={() => selectTab("home")}>Find a game <span>→</span></button></div>}</div>}
+        {!activityLoading && gamesViewTab === "upcoming" && <div className="game-list">{upcomingGames.length ? upcomingGames.map((game) => { const owned = myGroups.some((group) => group.id === game.id); const groupRequests = incomingRequests.filter(({ session }) => session.id === game.id); const waitlistCount = game.waitlist_player_ids?.length ?? 0; return <article className="game-row upcoming-game-row" key={game.id}><div className="game-date confirmed"><strong>{new Date(game.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><span>{new Date(game.session_date).getDate()}</span></div><div className="game-copy"><h2>{game.group_name}</h2><p>{sportLabel(game.sport)} · {game.session_date} · {game.start_time}–{game.end_time} · {game.area}</p><small className="waitlist-summary">{waitlistCount ? `${waitlistCount} player${waitlistCount === 1 ? "" : "s"} on waitlist` : "Waitlist empty"}</small></div><div className="game-row-actions"><button className="manage-group-button" onClick={() => void openGroupSpace(game)}>Group space</button><button className="copy-link-button" onClick={() => void copyGroupSpaceLink(game)} aria-label={`Copy ${game.group_name} link`} title="Copy share link"><CopyIcon /><span>Copy link</span></button><button className="game-share-button" onClick={() => void shareGame(game)} aria-label={`Share ${game.group_name}`}>Share <span>↗</span></button>{owned && <button className="manage-group-button" onClick={() => { if (managedGroupId === game.id) { setManagedGroupId(null); setJoinRequests([]); } else { setManagedGroupId(game.id); void loadJoinRequests(game.id); } }}>{managedGroupId === game.id ? "Hide requests" : `${groupRequests.length ? `${groupRequests.length} ` : ""}Review requests`}</button>}{!owned && <><button className="calendar-button" onClick={() => addToGoogleCalendar(game)}>Add to Google Calendar</button><button className="leave-game-button" onClick={() => void leaveGame(game.id, game.group_name)}>Back out</button></>}</div>{managedGroupId === game.id && <div className="inline-request-list">{requestsLoading ? <p className="request-empty">Loading requests...</p> : joinRequests.length ? joinRequests.map((request) => <div className="request-row" key={request.id}><div><strong>{request.player_display_name ?? request.player_id.slice(0, 10)}</strong><small className={`status-badge ${request.status}`}>{request.status}</small></div>{request.status === "pending" && <div className="request-actions"><button onClick={() => void decideJoinRequest(request.id, "approved", game.id)}>Approve</button><button onClick={() => void decideJoinRequest(request.id, "declined", game.id)}>Decline</button></div>}</div>) : <p className="request-empty">No requests waiting for approval.</p>}</div>}</article>; }) : <div className="page-empty"><strong>No upcoming games yet.</strong><p>Join a nearby game or create a game from Home.</p><button className="dark-button" onClick={() => selectTab("home")}>Find a game <span>→</span></button></div>}</div>}
         {!activityLoading && gamesViewTab === "pending" && <div className="game-list">{requestedGames.length ? requestedGames.map(({ request, session }) => <article className="game-row" key={request.id}><div className="game-date"><strong>{new Date(session.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><span>{new Date(session.session_date).getDate()}</span></div><div className="game-copy"><h2>{session.group_name}</h2><p>{sportLabel(session.sport)} · {session.start_time}–{session.end_time} · {session.area}</p><small className="waitlist-summary">{request.status === "waitlisted" ? "On waitlist" : "Waiting for organizer approval"}</small></div><div className="game-row-actions"><span className={`status-badge ${request.status}`}>{request.status}</span><button className="leave-game-button" onClick={() => void leaveGame(session.id, session.group_name, request.id)} disabled={leavingGameId === session.id}>{leavingGameId === session.id ? "Withdrawing..." : request.status === "waitlisted" ? "Leave waitlist" : "Withdraw request"}</button></div></article>) : <div className="page-empty"><strong>No pending requests.</strong><p>Games you request will stay here until the organizer approves them.</p><button className="dark-button" onClick={() => selectTab("home")}>Find a game <span>→</span></button></div>}</div>}
         {!activityLoading && gamesViewTab === "history" && <div className="game-list">{pastGames.length ? pastGames.map((pastGame) => <article className="game-row past-game-row" key={pastGame.session.id}><div className="game-date completed"><strong>{new Date(pastGame.session.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><span>{new Date(pastGame.session.session_date).getDate()}</span></div><div className="game-copy"><h2>{pastGame.session.group_name}</h2><p>{sportLabel(pastGame.session.sport)} · {pastGame.session.session_date} · {pastGame.session.area}</p><small className="past-game-summary">{pastGame.rank ? `You ranked #${pastGame.rank} of ${pastGame.group_size}` : "Unranked for this game"}{pastGame.score != null ? ` · ${pastGame.score.toFixed(1)} rating` : ""}</small></div><div className="game-row-actions"><span className="status-badge completed">Completed</span><button className="manage-group-button" onClick={() => void openGroupSpace(pastGame.session)}>View ranking</button></div></article>) : <div className="page-empty"><strong>No history yet.</strong><p>Played games and your group ranking will appear here.</p><button className="dark-button" onClick={() => selectTab("home")}>Find a game <span>→</span></button></div>}</div>}
         {activityLoading && gamesViewTab !== "explore" && <TennisBallLoader label="Refreshing games" />}
@@ -2490,8 +2469,8 @@ export default function Home() {
 
         {activeTab === "about" && <section className="page-view about-page">
         <div className="about-hero"><span className="kicker">THE COURTMATE IDEA</span><h1>Don&apos;t just find a court. <em>Find your people.</em></h1><p>CourtMate helps you discover the group you&apos;ll actually enjoy playing with. Ask by voice or text, see the best-fit games, and let your rating improve through real play.</p><img className="about-logo" src="/courtmate-logo.png" alt="CourtMate logo" /></div>
-        <div className="about-grid"><article><span>01</span><h2>Describe the game</h2><p>Say the sport, place, time, and energy you want. Gemini understands the request and turns it into a search.</p></article><article><span>02</span><h2>See the group fit</h2><p>Results are ranked using distance, skill, availability, reliability, and the people you have enjoyed playing with.</p></article><article><span>03</span><h2>Keep the group alive</h2><p>Request to join, invite friends, coordinate in the group space, and replace dropouts without rebuilding a WhatsApp group.</p></article><article><span>04</span><h2>Build CMR by playing</h2><p>Your CourtMate Rating is computed from completed games and peer feedback. It is not a number you have to invent for yourself.</p></article></div>
-        <div className="about-note"><strong>Works with your existing habits.</strong><span>Use WhatsApp to share the link. Book on Playo, Hudle, or directly with the venue. CourtMate is the layer that helps make the game worth showing up for.</span></div>
+        <div className="about-grid"><article><span>01</span><h2>Describe the game</h2><p>Say the sport, place, time, and energy you want. Gemini understands the request and turns it into a search.</p></article><article><span>02</span><h2>See the group fit</h2><p>Results are ranked using distance, skill, availability, reliability, and the people you have enjoyed playing with.</p></article><article><span>03</span><h2>Keep the group alive</h2><p>Request to join, invite friends, coordinate in the group space, and replace dropouts without rebuilding a group chat.</p></article><article><span>04</span><h2>Build CMR by playing</h2><p>Your CourtMate Rating is computed from completed games and peer feedback. It is not a number you have to invent for yourself.</p></article></div>
+        <div className="about-note"><strong>Works with your existing habits.</strong><span>Use the share button to send the link. Book on Playo, Hudle, or directly with the venue. CourtMate is the layer that helps make the game worth showing up for.</span></div>
       </section>}
 
       {activeTab === "profile" && !viewedProfile && <section className="page-view profile-page">
@@ -2507,10 +2486,10 @@ export default function Home() {
       {settingsOpen && user && profile && <section className="utility-page settings-page" aria-labelledby="settings-title"><div className="utility-page-header"><button className="utility-back-button" type="button" onClick={closeUtilityPage} aria-label="Go back">←</button><div><span className="kicker">PREFERENCES</span><h1 id="settings-title">Your play setup</h1><p>Set the details CourtMate uses to find better games.</p></div></div><form className="settings-form" onSubmit={saveProfile}><div className="profile-form-grid"><label><span>Age</span><input type="number" min="13" max="100" step="1" value={profileDraft.age} onChange={(event) => setProfileDraft({ ...profileDraft, age: event.target.value })} placeholder="Optional" /></label><label><span>Gender</span><select value={profileDraft.gender} onChange={(event) => setProfileDraft({ ...profileDraft, gender: event.target.value as ProfileDraft["gender"] })}><option value="">Prefer not to say</option>{genderOptions.map((gender) => <option value={gender.value} key={gender.value}>{gender.label}</option>)}</select></label><label><span>Locality</span><input value={profileDraft.area} onChange={(event) => setProfileDraft({ ...profileDraft, area: event.target.value })} placeholder="e.g. Whitefield" /></label><label><span>Travel radius (km)</span><input type="number" min="1" max="100" step="1" value={profileDraft.travel_radius_km} onChange={(event) => setProfileDraft({ ...profileDraft, travel_radius_km: event.target.value })} placeholder="10" /></label><label className="location-field"><span>Map coordinates</span><button className="location-button" type="button" onClick={useCurrentLocation}>{profileDraft.latitude != null && profileDraft.longitude != null ? "Location saved" : "Use current location"}<span>⌖</span></button></label></div><fieldset className="settings-preference-fieldset"><legend>Who do you like to play with?</legend><label><span>Age range</span><select value={profileDraft.preferred_age_range} onChange={(event) => setProfileDraft({ ...profileDraft, preferred_age_range: event.target.value as AgeRange })}>{ageRangeOptions.map((range) => <option value={range.value} key={range.value}>{range.label}</option>)}</select></label><span className="settings-hint">Leave gender unselected to keep every group in the mix.</span><div className="gender-preference-grid">{genderOptions.map((gender) => <label className={`availability-option ${profileDraft.preferred_genders.includes(gender.value) ? "selected" : ""}`} key={gender.value}><input type="checkbox" checked={profileDraft.preferred_genders.includes(gender.value)} onChange={() => togglePreferredGender(gender.value)} /><span>{gender.label}</span></label>)}</div></fieldset><label><span>Play style</span><select value={profileDraft.style} onChange={(event) => setProfileDraft({ ...profileDraft, style: event.target.value as ProfileDraft["style"] })}><option value="casual">Casual and easy-going</option><option value="social">Social and chatty</option><option value="competitive">Competitive and focused</option></select></label><fieldset><legend>Usual availability</legend><div className="availability-grid">{availabilityOptions.map((slot) => <label className={`availability-option ${profileDraft.availability.includes(slot) ? "selected" : ""}`} key={slot}><input type="checkbox" checked={profileDraft.availability.includes(slot)} onChange={() => toggleAvailability(slot)} /><span>{slot}</span></label>)}</div></fieldset><div className="profile-form-actions"><button className="dark-button" type="submit">Save preferences <span>→</span></button></div></form></section>}
       {settingsOpen && user && profile && <section className="settings-privacy-panel" aria-labelledby="privacy-settings-title"><div className="settings-privacy-heading"><div><span className="kicker">PRIVACY</span><h2 id="privacy-settings-title">Who can see your play?</h2></div><span>Applies to new games</span></div><form className="settings-privacy-form" onSubmit={saveProfile}><label className="settings-toggle-row"><span><strong>Private profile</strong><small>Hide your profile from recommendations and public player pages.</small></span><input type="checkbox" checked={profileDraft.is_profile_private} onChange={(event) => setProfileDraft({ ...profileDraft, is_profile_private: event.target.checked })} /><span className="settings-switch" aria-hidden="true" /></label><label><span>Default game session visibility</span><select value={profileDraft.default_session_visibility} onChange={(event) => setProfileDraft({ ...profileDraft, default_session_visibility: event.target.value as SessionVisibility })}><option value="public">Everyone nearby</option><option value="followers">Followers of the organizer</option><option value="private">Only players in the game</option></select></label><p className="settings-hint">This controls who can discover the games you create. You can still share a private game directly.</p><button className="dark-button" type="submit">Save privacy settings <span>→</span></button></form></section>}
       {calendarOpen && user && socialProfile && <section className="utility-page profile-calendar-page" aria-labelledby="profile-calendar-title"><div className="utility-page-header"><button className="utility-back-button" type="button" onClick={closeUtilityPage} aria-label="Go back">←</button><div><span className="kicker">YOUR ACTIVITY</span><h1 id="profile-calendar-title">Activity calendar</h1><p>Every game day, all in one place.</p></div></div><ActivityCalendar activity={socialProfile.activity_by_date} /></section>}
-      {viewedGroup && <div className="group-modal-backdrop" onClick={() => setViewedGroup(null)}><section className="group-modal" onClick={(event) => event.stopPropagation()}><div className="group-modal-header"><div><span className="kicker">{sportLabel(viewedGroup.session.sport).toUpperCase()} GROUP PREVIEW</span><h2>{viewedGroup.session.group_name}</h2><p>{viewedGroup.session.start_time} – {viewedGroup.session.end_time} · {viewedGroup.session.area}</p></div><button className="close-button" onClick={() => setViewedGroup(null)}>×</button></div><div className="group-summary"><span><strong>{viewedGroup.members.length}/{viewedGroup.session.capacity}</strong><small>PLAYERS</small></span><span><strong>{viewedGroup.session.skill_min.toFixed(1)}–{viewedGroup.session.skill_max.toFixed(1)}</strong><small>SKILL BAND</small></span><span><strong>{viewedGroup.session.style}</strong><small>INTENSITY</small></span></div><div className="member-grid">{viewedGroup.members.map((member) => { const memberCmr = member.cmr_ratings?.[viewedGroup.session.sport]; const memberRating = memberCmr ?? member.sport_ratings?.[viewedGroup.session.sport] ?? (viewedGroup.session.sport === "pickleball" ? member.dupr_rating : undefined); return <button type="button" className="member-profile profile-link" key={member.id} onClick={() => void viewPlayerProfile(member.id)} disabled={profileLoadingId === member.id} aria-label={`View ${member.display_name}'s profile`}><div className="member-profile-avatar">{member.profile_image_url ? <img src={member.profile_image_url} alt="" /> : initials(member.display_name)}</div><div className="member-profile-copy"><h3>{member.display_name}</h3><p>{member.area} · {member.style}</p><div className="member-profile-meta"><strong>{memberCmr != null ? `CMR ${memberCmr.toFixed(1)} / 100` : memberRating ? `${sportLabel(viewedGroup.session.sport)} ${memberRating.toFixed(1)}` : "Rating not set"}</strong><span>{member.is_following ? "Following" : "View profile"}</span></div></div></button>; })}</div><div className="modal-game-actions"><button className="calendar-button" onClick={() => void copyGroupSpaceLink(viewedGroup.session)}>Copy Group Space link</button><button className="game-share-button" onClick={() => shareGameOnWhatsApp(viewedGroup.session)}>Share on WhatsApp <span>↗</span></button>{viewedGroup.session.organizer_id === user?.uid ? <span className="status-badge approved modal-join">You created this group</span> : <button className="dark-button modal-join" onClick={() => void joinSession(viewedGroup.session.id, viewedGroup.session.group_name, viewedGroup.session.organizer_id)} disabled={joiningSessionId !== null}>{joiningSessionId === viewedGroup.session.id ? "Requesting..." : "Request to join"} <span>→</span></button>}</div></section></div>}
+      {viewedGroup && <div className="group-modal-backdrop" onClick={() => setViewedGroup(null)}><section className="group-modal" onClick={(event) => event.stopPropagation()}><div className="group-modal-header"><div><span className="kicker">{sportLabel(viewedGroup.session.sport).toUpperCase()} GROUP PREVIEW</span><h2>{viewedGroup.session.group_name}</h2><p>{viewedGroup.session.start_time} – {viewedGroup.session.end_time} · {viewedGroup.session.area}</p></div><button className="close-button" onClick={() => setViewedGroup(null)}>×</button></div><div className="group-summary"><span><strong>{viewedGroup.members.length}/{viewedGroup.session.capacity}</strong><small>PLAYERS</small></span><span><strong>{viewedGroup.session.skill_min.toFixed(1)}–{viewedGroup.session.skill_max.toFixed(1)}</strong><small>SKILL BAND</small></span><span><strong>{viewedGroup.session.style}</strong><small>INTENSITY</small></span></div><div className="member-grid">{viewedGroup.members.map((member) => { const memberCmr = member.cmr_ratings?.[viewedGroup.session.sport]; const memberRating = memberCmr ?? member.sport_ratings?.[viewedGroup.session.sport] ?? (viewedGroup.session.sport === "pickleball" ? member.dupr_rating : undefined); return <button type="button" className="member-profile profile-link" key={member.id} onClick={() => void viewPlayerProfile(member.id)} disabled={profileLoadingId === member.id} aria-label={`View ${member.display_name}'s profile`}><div className="member-profile-avatar">{member.profile_image_url ? <img src={member.profile_image_url} alt="" /> : initials(member.display_name)}</div><div className="member-profile-copy"><h3>{member.display_name}</h3><p>{member.area} · {member.style}</p><div className="member-profile-meta"><strong>{memberCmr != null ? `CMR ${memberCmr.toFixed(1)} / 100` : memberRating ? `${sportLabel(viewedGroup.session.sport)} ${memberRating.toFixed(1)}` : "Rating not set"}</strong><span>{member.is_following ? "Following" : "View profile"}</span></div></div></button>; })}</div><div className="modal-game-actions"><button className="copy-link-button" onClick={() => void copyGroupSpaceLink(viewedGroup.session)} aria-label={`Copy ${viewedGroup.session.group_name} link`} title="Copy share link"><CopyIcon /><span>Copy link</span></button><button className="game-share-button" onClick={() => void shareGame(viewedGroup.session)}>Share game <span>↗</span></button>{viewedGroup.session.organizer_id === user?.uid ? <span className="status-badge approved modal-join">You created this group</span> : <button className="dark-button modal-join" onClick={() => void joinSession(viewedGroup.session.id, viewedGroup.session.group_name, viewedGroup.session.organizer_id)} disabled={joiningSessionId !== null}>{joiningSessionId === viewedGroup.session.id ? "Requesting..." : "Request to join"} <span>→</span></button>}</div></section></div>}
       {activeTab === "profile" && viewedProfile && <section className="page-view profile-page public-profile-page" aria-labelledby="public-profile-title"><header className="public-profile-header"><button type="button" className="profile-back-button" onClick={closePlayerProfile} aria-label="Back to previous page">←</button><div><span className="kicker">PLAYER PROFILE</span><h1 id="public-profile-title">{viewedProfile.display_name}</h1><p>{viewedProfile.area} · {viewedProfile.style}</p></div></header><section className="public-profile-identity"><div className="profile-photo-avatar">{viewedProfile.profile_image_url ? <img src={viewedProfile.profile_image_url} alt={`${viewedProfile.display_name} profile`} /> : initials(viewedProfile.display_name)}</div><div><strong>{viewedProfile.display_name}</strong><span>{viewedProfile.area}</span><div className="social-profile-stats"><span><strong>{totalGamesFor(viewedProfile)}</strong><small>GAMES</small></span><span><strong>{viewedProfile.followers_count}</strong><small>FOLLOWERS</small></span><span><strong>{viewedProfile.following_count}</strong><small>FOLLOWING</small></span></div></div></section><section className="public-profile-activity"><section className="profile-activity-card"><div className="profile-activity-heading"><div><span className="kicker">ACTIVITY</span><h2>Activity calendar</h2></div><span>Last 12 weeks</span></div><ActivityHeatmap activity={viewedProfile.activity_by_date} /></section><section className="profile-activity-card"><div className="profile-activity-heading"><div><span className="kicker">RECENT GAMES</span><h2>Where they played</h2></div><span>{viewedProfile.recent_games.length} shown</span></div><RecentGames games={viewedProfile.recent_games} /></section></section><section className="profile-sport-ratings public-profile-ratings"><span className="kicker">CMR BY SPORT</span>{Object.entries(viewedProfile.cmr_ratings ?? {}).length ? <div className="profile-rating-list">{Object.entries(viewedProfile.cmr_ratings ?? {}).map(([sport, rating]) => <span key={sport}><strong>{sportLabel(sport)}</strong><b>{rating.toFixed(1)} / 100</b></span>)}</div> : <p>No CMR ratings yet. Completed games will build them here.</p>}</section><div className="public-profile-follow"><button className={`dark-button ${viewedProfile.is_following ? "following-button" : ""}`} onClick={() => void toggleFollowProfile()}>{viewedProfile.is_following ? "Following" : "Follow"}<span>{viewedProfile.is_following ? "✓" : "+"}</span></button>{viewedProfile.follows_you && <span className="follows-you">Follows you</span>}</div></section>}
-      {workspaceGroup && workspaceLoading && <section className="group-space-page group-space-loading"><TennisBallLoader label="Opening group space" detail="Loading chat, players, and the latest leaderboard..." /></section>}
-      {workspaceGroup && !workspaceLoading && <GroupSpace group={workspaceGroup} members={groupMembers} waitlist={groupWaitlist} posts={chatPosts} leaderboard={groupLeaderboard} localLeaderboard={localLeaderboard} currentUserId={user?.uid} apiUrl={apiUrl} authorizedFetch={authorizedFetch} onClose={() => setWorkspaceGroup(null)} onRefresh={() => void openGroupSpace(workspaceGroup)} onMarkDone={() => markGroupDone(workspaceGroup.id)} onChatPosted={(post) => setChatPosts((current) => current.some((item) => item.id === post.id) ? current : [...current, post])} onToast={setToast} onViewProfile={(playerId) => void viewPlayerProfile(playerId)} activityProofs={activityProofs} onAnalyzeActivityProof={(file) => analyzeActivityScreenshot(file, workspaceGroup.id)} />}
+      {workspaceGroup && workspaceLoading && <section className="group-space-page group-space-loading"><TennisBallLoader label="Opening group space" detail="Loading chat, players, and the waitlist..." /></section>}
+      {workspaceGroup && !workspaceLoading && <GroupSpace group={workspaceGroup} members={groupMembers} waitlist={groupWaitlist} posts={chatPosts} currentUserId={user?.uid} apiUrl={apiUrl} authorizedFetch={authorizedFetch} onClose={() => setWorkspaceGroup(null)} onRefresh={() => void openGroupSpace(workspaceGroup)} onMarkDone={() => markGroupDone(workspaceGroup.id)} onChatPosted={(post) => setChatPosts((current) => current.some((item) => item.id === post.id) ? current : [...current, post])} onToast={setToast} onViewProfile={(playerId) => void viewPlayerProfile(playerId)} />}
       {rankingGame && <section className="ranking-page" aria-labelledby="ranking-page-title"><header className="ranking-page-header"><button type="button" className="ranking-back-button" onClick={() => { if (window.location.hash) window.history.back(); else setRankingGame(null); }} aria-label="Back to games">←</button><div><span className="kicker">FINAL RANKINGS</span><h1 id="ranking-page-title">{rankingGame.group_name}</h1><p>{sportLabel(rankingGame.sport)} · {rankingGame.session_date} · {rankingGame.area}</p></div></header>{rankingLoading ? <div className="ranking-loading"><TennisBallLoader label="Loading rankings" detail="Fetching the final table..." /></div> : <div className="ranking-page-content"><section className="ranking-only-panel"><div className="ranking-only-heading"><div><span className="kicker">THIS GAME</span><h2>Group rankings</h2></div><span>{rankingEntries.length} players</span></div>{rankingEntries.length ? <div className="ranking-only-list">{rankingEntries.map((entry) => <div className={`ranking-only-row ${entry.player.id === user?.uid ? "current" : ""}`} key={entry.player.id}><span className="ranking-only-rank">{entry.rank}</span><div><strong>{entry.player.display_name}</strong><small>{entry.ratings_count} rated game{entry.ratings_count === 1 ? "" : "s"}</small></div><b>{entry.score.toFixed(1)}</b></div>)}</div> : <p className="ranking-only-empty">No confirmed rankings for this game yet.</p>}</section>{localRankingEntries.length > 0 && <section className="ranking-only-panel local-ranking-only-panel"><div className="ranking-only-heading"><div><span className="kicker">{rankingGame.area.toUpperCase()} · LOCAL</span><h2>Local leaderboard</h2></div><span>Top {Math.min(localRankingEntries.length, 5)}</span></div><div className="ranking-only-list">{localRankingEntries.slice(0, 5).map((entry) => <div className="ranking-only-row" key={entry.player.id}><span className="ranking-only-rank">{entry.rank}</span><div><strong>{entry.player.display_name}</strong><small>{entry.ratings_count} rated game{entry.ratings_count === 1 ? "" : "s"}</small></div><b>{entry.score.toFixed(1)}</b></div>)}</div></section>}</div>}</section>}
       {toast && !(activeTab === "home" && user) && <div className="toast">{toast}</div>}
     </main>

@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, ExploreSessionsResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, PlayerRating, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListItem, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentRegistrationDecisionRequest, TournamentScoreRequest, TournamentWinnerRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, ExploreSessionsResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyActivityResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, PlayerRating, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListItem, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentRegistrationDecisionRequest, TournamentScoreRequest, TournamentWinnerRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
 from .tournaments import calculate_standings, generate_knockout_matches, generate_round_robin_matches, rules_for_sport, validate_score, validate_set_scores
 from .vector_search import VectorIndexer, VectorRetriever
@@ -41,6 +41,8 @@ async def add_request_timing(request, call_next):
     response = await call_next(request)
     elapsed_ms = round((perf_counter() - started) * 1000, 1)
     response.headers["X-Response-Time-Ms"] = str(elapsed_ms)
+    if request.method not in {"GET", "HEAD", "OPTIONS"} and request.url.path.startswith("/v1/") and response.status_code < 400:
+        _clear_read_view_cache()
     print(f"{request.method} {request.url.path} {response.status_code} {elapsed_ms}ms")
     return response
 repository = create_repository()
@@ -50,10 +52,15 @@ vector_indexer = VectorIndexer(repository)
 local_timezone = ZoneInfo(os.getenv("COURTMATE_TIMEZONE", "Asia/Kolkata"))
 _geocode_cache: dict[str, tuple[float, float] | None] = {}
 _social_feed_cache: dict[tuple[str, str, str], tuple[float, SocialFeedResponse]] = {}
+_read_view_cache: dict[tuple[str, ...], tuple[float, object]] = {}
 try:
     _social_feed_cache_ttl_seconds = max(0.0, float(os.getenv("COURTMATE_SOCIAL_FEED_CACHE_TTL_SECONDS", "15")))
 except ValueError:
     _social_feed_cache_ttl_seconds = 15.0
+try:
+    _read_view_cache_ttl_seconds = max(0.0, float(os.getenv("COURTMATE_READ_CACHE_TTL_SECONDS", "12")))
+except ValueError:
+    _read_view_cache_ttl_seconds = 12.0
 _fallback_area_coordinates = {
     "whitefield": (12.9698, 77.7499),
     "brookefield": (12.9665, 77.7168),
@@ -92,6 +99,34 @@ def _clear_social_feed_cache() -> None:
     _social_feed_cache.clear()
 
 
+def _clear_read_view_cache() -> None:
+    """Drop private read models after writes so interactive state is never stale."""
+    _read_view_cache.clear()
+
+
+def _read_view_cache_key(view: str, player_id: str, *parts: str) -> tuple[str, ...]:
+    return view, player_id, *parts
+
+
+def _get_cached_read_view(key: tuple[str, ...]):
+    if _read_view_cache_ttl_seconds <= 0:
+        return None
+    cached = _read_view_cache.get(key)
+    if not cached:
+        return None
+    created_at, response = cached
+    if monotonic() - created_at >= _read_view_cache_ttl_seconds:
+        _read_view_cache.pop(key, None)
+        return None
+    return response.model_copy(deep=True)
+
+
+def _cache_read_view(key: tuple[str, ...], response):
+    if _read_view_cache_ttl_seconds > 0:
+        _read_view_cache[key] = (monotonic(), response.model_copy(deep=True))
+    return response
+
+
 def _social_feed_cache_key(player_id: str, feed: str, sport: Sport | None) -> tuple[str, str, str]:
     return player_id, feed, sport or "all"
 
@@ -123,6 +158,11 @@ def get_current_player(identity: AuthIdentity = Depends(get_current_identity)) -
     default_area = os.getenv("COURTMATE_DEFAULT_AREA", "Whitefield")
     coordinates = _geocode_area(default_area)
     return repository.save_player(Player(id=identity.uid, display_name=display_name, area=default_area, latitude=coordinates[0] if coordinates else None, longitude=coordinates[1] if coordinates else None))
+
+
+def _local_today() -> date:
+    """Use the configured product timezone for every calendar-facing decision."""
+    return datetime.now(local_timezone).date()
 
 
 def _session_window(session: Session) -> tuple[datetime, datetime]:
@@ -164,7 +204,14 @@ def _refresh_all_session_statuses(persist: bool = False) -> list[Session]:
 
 def _require_active_session(session: Session) -> None:
     if session.status == "cancelled":
-        raise HTTPException(status_code=409, detail="Cancelled games do not accept chat messages")
+        raise HTTPException(status_code=409, detail="Cancelled games do not accept new activity")
+
+
+def _require_joinable_session(session: Session) -> None:
+    """Keep completed game history stable while leaving post-game chat available."""
+    _require_active_session(session)
+    if session.status == "completed":
+        raise HTTPException(status_code=409, detail="This completed game is closed to new players")
 
 
 def _geocode_area(area: str) -> tuple[float, float] | None:
@@ -235,6 +282,10 @@ def me(player: Player = Depends(get_current_player)) -> Player:
 
 @app.get("/v1/players/recommended", response_model=PublicPlayerProfilesResponse)
 def recommended_players(player: Player = Depends(get_current_player)) -> PublicPlayerProfilesResponse:
+    cache_key = _read_view_cache_key("recommended_players", player.id)
+    cached = _get_cached_read_view(cache_key)
+    if cached is not None:
+        return cached
     following_ids = {record.following_id for record in repository.list_following(player.id)}
     player_sports = set(player.cmr_ratings) | set(player.sport_ratings)
     all_sessions = repository.list_sessions()
@@ -253,7 +304,7 @@ def recommended_players(player: Player = Depends(get_current_player)) -> PublicP
         score = (5 if shared_area else 0) + shared_sports * 2 + (3 if shared_sessions else 0) + min(activity, 5) * .1
         candidates.append((score, candidate.display_name.lower(), candidate))
     candidates.sort(key=lambda item: (-item[0], item[1]))
-    return PublicPlayerProfilesResponse(profiles=[_public_profile(candidate, player.id, all_sessions) for _, _, candidate in candidates[:8]])
+    return _cache_read_view(cache_key, PublicPlayerProfilesResponse(profiles=[_public_profile(candidate, player.id, all_sessions) for _, _, candidate in candidates[:8]]))
 
 
 @app.get("/v1/players/{player_id}", response_model=PublicPlayerProfile)
@@ -573,7 +624,7 @@ def update_profile_image(request: ProfileImageUpdateRequest, player: Player = De
 
 
 def _profile_activity(player_id: str, sessions: list[Session] | None = None) -> tuple[list[ProfileGameSummary], dict[str, int]]:
-    today = date.today()
+    today = _local_today()
     window_start = today - timedelta(days=83)
     sessions = [session for session in (sessions if sessions is not None else repository.list_sessions()) if player_id in session.confirmed_player_ids and session.status != "cancelled"]
     played_sessions = [session for session in sessions if session.session_date < today or session.status == "completed"]
@@ -815,13 +866,15 @@ def _leaderboard(session_ids: list[str], scope: str, sport: str | None = None) -
 
 
 def _refresh_community_scores() -> None:
-    ratings_by_player: dict[tuple[str, str], list[int]] = {}
+    ratings_by_player: dict[tuple[str, str], list[float]] = {}
     sessions_by_id = {session.id: session for session in repository.list_sessions()}
     for feedback_item in repository.list_feedback():
         session = sessions_by_id.get(feedback_item.session_id)
         sport = session.sport if session else "pickleball"
         for rating in feedback_item.ratings:
             value = rating.rating
+            if value is None and rating.rating_10 is not None:
+                value = round(rating.rating_10 / 2, 2)
             if value is None and rating.skill_level:
                 value = {"beginner": 2, "intermediate": 3, "advanced": 4}[rating.skill_level]
             if value is not None:
@@ -883,14 +936,16 @@ def _refresh_cmr_ratings() -> None:
         if not session:
             continue
         for rating in feedback_item.ratings:
-            value = rating.rank_score
-            if value is None:
-                value = rating.rating
-            if value is None and rating.skill_level:
+            if rating.rank_score is not None:
+                value = rating.rank_score
+            elif rating.rating_10 is not None:
+                value = round((rating.rating_10 - 1) * 100 / 9, 2)
+            elif rating.rating is not None:
+                value = round((rating.rating - 1) * 100 / 4, 2)
+            elif rating.skill_level:
                 value = {"beginner": 25.0, "intermediate": 50.0, "advanced": 75.0}[rating.skill_level]
-            elif value is not None:
-                if rating.rank_score is None:
-                    value = round((value - 1) * 100 / 4, 2)
+            else:
+                value = None
             if value is not None:
                 game_ratings = ratings_by_player.setdefault((rating.player_id, session.sport), {})
                 game_ratings.setdefault(session.id, []).append(value)
@@ -991,6 +1046,27 @@ def _notify_players_about_game(session: Session) -> None:
             continue
 
 
+def _notify_confirmed_players_game_completed(session: Session, completed_by: Player) -> None:
+    """Let every participant know when post-game ratings are ready."""
+    for player_id in session.confirmed_player_ids:
+        if player_id == completed_by.id:
+            continue
+        try:
+            repository.save_notification(AppNotification(
+                id=f"game-completed-{session.id}-{player_id}",
+                player_id=player_id,
+                kind="game_completed",
+                title="Game complete - rate your lineup",
+                message=f"{completed_by.display_name} marked {session.group_name} as complete. Rate your fellow players privately to update CMR.",
+                session_id=session.id,
+                actor_id=completed_by.id,
+                created_at=datetime.now(timezone.utc),
+            ))
+        except Exception:
+            # Notifications are helpful, but a persistence issue must not block completion.
+            continue
+
+
 def _query_group_name(query: str, intent: SearchIntent, style: str) -> str:
     ignored_words = {"find", "me", "a", "an", "the", "show", "looking", "for", "create", "group", "game", "games", "near", "in", "at", "on", "this", "around", "please", "morning", "afternoon", "evening", "tonight", "beginner", "intermediate", "advanced", "casual", "social", "competitive", "pickleball", "badminton", "tennis", "padel", "squash", "table", "ping", "pong"}
     words = [word for word in re.findall(r"[a-zA-Z0-9]+", query.lower()) if word not in ignored_words]
@@ -1069,7 +1145,7 @@ def _search_tournaments(query: str, intent: SearchIntent, player: Player, exact:
             days_away = abs((tournament.tournament_date - intent.date).days)
             score += max(0.0, 4 - min(days_away, 4))
         else:
-            days_away = max(0, (tournament.tournament_date - date.today()).days)
+            days_away = max(0, (tournament.tournament_date - _local_today()).days)
             score += max(0.0, 2 - min(days_away / 30, 2))
         registrations = registrations_by_tournament.get(tournament.id, [])
         registered_count = sum(item.status == "registered" for item in registrations)
@@ -1186,7 +1262,7 @@ def join_session(session_id: str, request: JoinRequestRequest | None = None, pla
     session = _get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    _require_active_session(session)
+    _require_joinable_session(session)
     if player.id in session.confirmed_player_ids:
         raise HTTPException(status_code=409, detail="Player is already confirmed for this session")
     request_id = f"{session_id}_{player.id}"
@@ -1239,7 +1315,7 @@ def leave_session(session_id: str, player: Player = Depends(get_current_player))
     session = _get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    _require_active_session(session)
+    _require_joinable_session(session)
     if session.organizer_id == player.id:
         raise HTTPException(status_code=409, detail="The organizer cannot leave their own group")
     if player.id in session.confirmed_player_ids:
@@ -1323,7 +1399,7 @@ def decide_join_request(session_id: str, request_id: str, request: JoinRequestDe
     session = _get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    _require_active_session(session)
+    _require_joinable_session(session)
     if session.organizer_id != player.id:
         raise HTTPException(status_code=403, detail="Only the group organizer can decide join requests")
     join_request = next((candidate for candidate in repository.list_join_requests(session_id) if candidate.id == request_id), None)
@@ -1364,7 +1440,11 @@ def my_requests(player: Player = Depends(get_current_player)) -> MyRequestsRespo
 
 @app.get("/v1/me/notifications", response_model=NotificationsResponse)
 def notifications(player: Player = Depends(get_current_player)) -> NotificationsResponse:
-    return NotificationsResponse(notifications=repository.list_notifications_for_player(player.id))
+    cache_key = _read_view_cache_key("notifications", player.id)
+    cached = _get_cached_read_view(cache_key)
+    if cached is not None:
+        return cached
+    return _cache_read_view(cache_key, NotificationsResponse(notifications=repository.list_notifications_for_player(player.id)))
 
 
 @app.post("/v1/me/notifications/{notification_id}/read", response_model=AppNotification)
@@ -1402,7 +1482,7 @@ def my_groups(player: Player = Depends(get_current_player)) -> MyGroupsResponse:
 def my_games(player: Player = Depends(get_current_player)) -> MyGamesResponse:
     _refresh_all_session_statuses()
     player_sessions = repository.list_sessions_for_player(player.id)
-    games = [session for session in player_sessions if session.session_date >= date.today() and session.status not in {"completed", "cancelled"}]
+    games = [session for session in player_sessions if session.session_date >= _local_today() and session.status not in {"completed", "cancelled"}]
     games.sort(key=lambda session: (session.session_date, session.start_time))
     past_games = []
     for session in player_sessions:
@@ -1415,9 +1495,67 @@ def my_games(player: Player = Depends(get_current_player)) -> MyGamesResponse:
     return MyGamesResponse(games=games, past_games=past_games)
 
 
+@app.get("/v1/me/activity", response_model=MyActivityResponse)
+def my_activity(player: Player = Depends(get_current_player)) -> MyActivityResponse:
+    """Load all Games tabs from one shared snapshot instead of four separate reads."""
+    cache_key = _read_view_cache_key("activity", player.id)
+    cached = _get_cached_read_view(cache_key)
+    if cached is not None:
+        return cached
+
+    sessions = _refresh_all_session_statuses()
+    sessions_by_id = {session.id: session for session in sessions}
+    player_requests = repository.list_join_requests_for_player(player.id)
+    request_views = [
+        JoinRequestView(request=join_request, session=sessions_by_id[join_request.session_id])
+        for join_request in player_requests
+        if join_request.session_id in sessions_by_id
+    ]
+    request_views.sort(key=lambda item: item.request.created_at, reverse=True)
+
+    groups = sorted(
+        (session for session in sessions if session.organizer_id == player.id),
+        key=lambda session: (session.session_date, session.start_time),
+    )
+    incoming_requests = []
+    for session in groups:
+        if session.status in {"completed", "cancelled"}:
+            continue
+        incoming_requests.extend(
+            JoinRequestView(request=join_request, session=session)
+            for join_request in repository.list_join_requests(session.id)
+            if join_request.status == "pending"
+        )
+    incoming_requests.sort(key=lambda item: item.request.created_at, reverse=True)
+
+    player_sessions = [session for session in sessions if player.id in session.confirmed_player_ids]
+    games = [session for session in player_sessions if session.session_date >= _local_today() and session.status not in {"completed", "cancelled"}]
+    games.sort(key=lambda session: (session.session_date, session.start_time))
+    past_games = []
+    for session in player_sessions:
+        if session.status != "completed":
+            continue
+        entries = _leaderboard(session.confirmed_player_ids, f"group:{session.id}", session.sport).entries
+        player_entry = next((entry for entry in entries if entry.player.id == player.id), None)
+        past_games.append(PastGame(session=session, rank=player_entry.rank if player_entry else None, score=player_entry.score if player_entry else None, ratings_count=player_entry.ratings_count if player_entry else 0, group_size=len(session.confirmed_player_ids)))
+    past_games.sort(key=lambda item: (item.session.session_date, item.session.start_time), reverse=True)
+
+    return _cache_read_view(cache_key, MyActivityResponse(
+        requests=request_views,
+        incoming_requests=incoming_requests,
+        groups=groups,
+        games=games,
+        past_games=past_games,
+    ))
+
+
 @app.get("/v1/me/explore", response_model=ExploreSessionsResponse)
 def explore_sessions(player: Player = Depends(get_current_player)) -> ExploreSessionsResponse:
     """Recommend open games nearby that this player can still request to join."""
+    cache_key = _read_view_cache_key("explore", player.id)
+    cached = _get_cached_read_view(cache_key)
+    if cached is not None:
+        return cached
     _refresh_all_session_statuses()
     active_request_session_ids = {
         request.session_id
@@ -1452,7 +1590,7 @@ def explore_sessions(player: Player = Depends(get_current_player)) -> ExploreSes
             item.session.start_time,
         )
     )
-    return ExploreSessionsResponse(recommendations=recommendations[:50])
+    return _cache_read_view(cache_key, ExploreSessionsResponse(recommendations=recommendations[:50]))
 
 
 @app.get("/v1/sessions/{session_id}/group", response_model=GroupViewResponse)
@@ -1490,19 +1628,31 @@ def _advance_knockout_winner(tournament: Tournament, match: TournamentMatch, win
     if not next_match:
         return
     slot = "player_a_id" if match.match_number % 2 else "player_b_id"
-    updated_values = {slot: winner_id}
-    if getattr(next_match, slot) != winner_id and next_match.status in {"pending_confirmation", "completed"}:
-        updated_values.update({
-            "status": "scheduled",
-            "score_a": None,
-            "score_b": None,
-            "set_scores_a": [],
-            "set_scores_b": [],
-            "winner_id": None,
-            "score_entered_by": None,
-            "confirmed_by": None,
-        })
-    repository.save_tournament_match(next_match.model_copy(update=updated_values))
+    # A later round is immutable once either side has submitted a result. The
+    # caller rejects source-result changes before reaching this point; this
+    # guard is the final protection against corrupting an in-progress bracket.
+    if getattr(next_match, slot) not in {None, winner_id} and next_match.status in {"pending_confirmation", "completed"}:
+        return
+    repository.save_tournament_match(next_match.model_copy(update={slot: winner_id}))
+
+
+def _next_knockout_match(tournament: Tournament, match: TournamentMatch) -> TournamentMatch | None:
+    matches = repository.list_tournament_matches(tournament.id)
+    final_round = max((item.round_number for item in matches), default=match.round_number)
+    if match.round_number >= final_round:
+        return None
+    next_match_id = f"{tournament.id}-r{match.round_number + 1}-m{(match.match_number + 1) // 2}"
+    return next((item for item in matches if item.id == next_match_id), None)
+
+
+def _knockout_result_is_locked(tournament: Tournament, match: TournamentMatch, proposed_winner_id: str) -> bool:
+    """A winner cannot change once it would rewrite a downstream result."""
+    if match.winner_id in {None, proposed_winner_id}:
+        return False
+    if tournament.status == "completed":
+        return True
+    next_match = _next_knockout_match(tournament, match)
+    return bool(next_match and next_match.status in {"pending_confirmation", "completed"})
 
 
 def _complete_knockout_tournament_if_final(tournament: Tournament) -> None:
@@ -1715,6 +1865,9 @@ def enter_tournament_score(tournament_id: str, match_id: str, request: Tournamen
     if match.status == "completed":
         if not is_organizer:
             raise HTTPException(status_code=409, detail="This match result is already locked")
+        proposed_winner = match.player_a_id if score_a > score_b else match.player_b_id
+        if tournament.format == "knockout" and _knockout_result_is_locked(tournament, match, proposed_winner):
+            raise HTTPException(status_code=409, detail="This winner is locked because the next round has started")
         match.status = "completed"
         match.confirmed_by = player.id
         match.score_entered_by = player.id
@@ -1764,7 +1917,7 @@ def select_tournament_winner(tournament_id: str, match_id: str, request: Tournam
     is_organizer = player.id == tournament.organizer_id
     if player.id not in {match.player_a_id, match.player_b_id, tournament.organizer_id}:
         raise HTTPException(status_code=403, detail="Only match players or the organizer can select a winner")
-    if match.status == "completed" and not is_organizer:
+    if match.status == "completed":
         raise HTTPException(status_code=409, detail="This winner is already locked")
     if match.status == "pending_confirmation":
         raise HTTPException(status_code=409, detail="Confirm the submitted score before selecting a winner")
@@ -1797,6 +1950,13 @@ def update_tournament_fixture(tournament_id: str, match_id: str, request: Tourna
         raise HTTPException(status_code=404, detail="Tournament match not found")
     if tournament.organizer_id != player.id:
         raise HTTPException(status_code=403, detail="Only the organizer can edit fixtures")
+    if match.status != "scheduled":
+        raise HTTPException(status_code=409, detail="Only scheduled fixtures can be edited")
+    if tournament.format == "knockout":
+        if match.round_number != 1:
+            raise HTTPException(status_code=409, detail="Later knockout rounds are filled automatically as winners advance")
+        if (request.round_number, request.match_number) != (match.round_number, match.match_number):
+            raise HTTPException(status_code=422, detail="Keep knockout fixtures in their bracket slot")
     if request.player_a_id == request.player_b_id:
         raise HTTPException(status_code=422, detail="A fixture needs two different players")
     registrations = repository.list_tournament_registrations(tournament.id)
@@ -1979,16 +2139,19 @@ def complete_session(session_id: str, background_tasks: BackgroundTasks, player:
     session = _get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    if session.organizer_id != player.id:
-        raise HTTPException(status_code=403, detail="Only the group organizer can close this game")
+    if player.id not in session.confirmed_player_ids:
+        raise HTTPException(status_code=403, detail="Only confirmed players can complete this game")
     if session.status == "cancelled":
         raise HTTPException(status_code=409, detail="Cancelled games cannot be completed")
+    if session.status == "completed":
+        return session
     # Closing the game is the single publish action. The existing stable
     # session activity card will now show the completed leaderboard on Home.
     session.status = "completed"
     session.social_activity_published = True
     saved = repository.save_session(session)
     _clear_social_feed_cache()
+    _notify_confirmed_players_game_completed(saved, player)
     background_tasks.add_task(_index_session_best_effort, saved)
     background_tasks.add_task(_refresh_cmr_ratings)
     return saved
@@ -2004,12 +2167,12 @@ def create_group(background_tasks: BackgroundTasks, request: CreateGroupRequest,
         coordinates = _geocode_area(request.area)
         overrides.update({"area": request.area, "latitude": coordinates[0] if coordinates else None, "longitude": coordinates[1] if coordinates else None})
     proposal = proposal.model_copy(update=overrides)
-    session_date = proposal.session_date or date.today()
+    session_date = proposal.session_date or _local_today()
     start_time = proposal.start_time or time(19)
     end_time = proposal.end_time or (datetime.combine(session_date, start_time) + timedelta(hours=2)).time()
-    if session_date < date.today():
+    if session_date < _local_today():
         raise HTTPException(status_code=422, detail="Choose today or a future date")
-    if session_date == date.today() and datetime.combine(session_date, start_time, tzinfo=local_timezone) <= datetime.now(local_timezone):
+    if session_date == _local_today() and datetime.combine(session_date, start_time, tzinfo=local_timezone) <= datetime.now(local_timezone):
         session_date += timedelta(days=7)
     if end_time <= start_time:
         raise HTTPException(status_code=422, detail="End time must be after start time")
@@ -2050,6 +2213,8 @@ def replacement(session_id: str, player: Player = Depends(get_current_player)) -
 @app.post("/v1/sessions/{session_id}/feedback", response_model=Feedback)
 def feedback(session_id: str, request: FeedbackRequest, background_tasks: BackgroundTasks, player: Player = Depends(get_current_player)) -> Feedback:
     session = _member_session(session_id, player)
+    if session.status != "completed":
+        raise HTTPException(status_code=409, detail="Rate players after the game is marked complete")
     confirmed_others = [player_id for player_id in session.confirmed_player_ids if player_id != player.id]
     skipped_player_ids = set(request.skipped_player_ids)
     if request.player_order or request.skipped_player_ids:
@@ -2070,13 +2235,18 @@ def feedback(session_id: str, request: FeedbackRequest, background_tasks: Backgr
         ratings = request.ratings
     if request.player_id and request.rating is not None:
         ratings = [*ratings, PlayerRating(player_id=request.player_id, rating=request.rating)]
+    rated_player_ids = [rating.player_id for rating in ratings]
+    if len(rated_player_ids) != len(set(rated_player_ids)):
+        raise HTTPException(status_code=422, detail="Rate each player only once")
+    if any(rating.rating_10 is not None for rating in ratings) and set(rated_player_ids) != set(confirmed_others):
+        raise HTTPException(status_code=422, detail="Rate every other confirmed player before submitting")
     for rating in ratings:
         if rating.player_id == player.id:
             raise HTTPException(status_code=422, detail="You cannot rate yourself")
         if rating.player_id not in session.confirmed_player_ids:
             raise HTTPException(status_code=422, detail="You can only rate players from this group")
-        if rating.skill_level is None and rating.rating is None and rating.rank_score is None:
-            raise HTTPException(status_code=422, detail="Choose a skill level or skip this player")
+        if rating.skill_level is None and rating.rating is None and rating.rating_10 is None and rating.rank_score is None:
+            raise HTTPException(status_code=422, detail="Choose a rating for this player")
     seen_team_players: set[str] = set()
     if request.teams:
         if len(request.teams) < 2:

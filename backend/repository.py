@@ -1,9 +1,26 @@
+import hashlib
 import os
 from datetime import datetime
 from typing import Protocol
 
 from .models import ActivityProof, AppNotification, ChatPost, Feedback, FollowRecord, JoinRequest, Player, SearchDocument, Session, SocialComment, SocialPost, Tournament, TournamentMatch, TournamentRegistration, VectorSearchResult, normalize_cmr_player
 from .vector_search import cosine_similarity
+
+
+def _feedback_document_id(feedback: Feedback) -> str:
+    """Keep one current feedback submission per player for each session."""
+    return hashlib.sha256(f"{feedback.session_id}:{feedback.player_id}".encode("utf-8")).hexdigest()
+
+
+def _latest_feedback_by_submission(feedback_items: list[Feedback]) -> list[Feedback]:
+    """Collapse historical duplicate docs left by older append-only storage."""
+    latest: dict[tuple[str, str], Feedback] = {}
+    for item in feedback_items:
+        key = (item.session_id, item.player_id)
+        previous = latest.get(key)
+        if previous is None or item.created_at >= previous.created_at:
+            latest[key] = item
+    return list(latest.values())
 
 
 class Repository(Protocol):
@@ -97,13 +114,19 @@ class InMemoryRepository:
         return normalized
 
     def save_feedback(self, feedback: Feedback) -> Feedback:
+        self.feedback = [
+            item
+            for item in self.feedback
+            if (item.session_id, item.player_id) != (feedback.session_id, feedback.player_id)
+        ]
         self.feedback.append(feedback)
         return feedback
 
     def list_feedback(self, session_id: str | None = None) -> list[Feedback]:
+        items = _latest_feedback_by_submission(self.feedback)
         if session_id is None:
-            return list(self.feedback)
-        return [item for item in self.feedback if item.session_id == session_id]
+            return items
+        return [item for item in items if item.session_id == session_id]
 
     def save_activity_proof(self, proof: ActivityProof) -> ActivityProof:
         self.activity_proofs[proof.id] = proof
@@ -329,13 +352,13 @@ class FirestoreRepository:
         return normalized
 
     def save_feedback(self, feedback: Feedback) -> Feedback:
-        self.client.collection("feedback").add(feedback.model_dump(mode="json"))
+        self.client.collection("feedback").document(_feedback_document_id(feedback)).set(feedback.model_dump(mode="json"))
         return feedback
 
     def list_feedback(self, session_id: str | None = None) -> list[Feedback]:
         collection = self.client.collection("feedback")
         documents = collection.where("session_id", "==", session_id).limit(1000).stream() if session_id else collection.limit(1000).stream()
-        return [Feedback.model_validate(document.to_dict() or {}) for document in documents]
+        return _latest_feedback_by_submission([Feedback.model_validate(document.to_dict() or {}) for document in documents])
 
     def save_activity_proof(self, proof: ActivityProof) -> ActivityProof:
         reference = self.client.collection("activity_proofs").document(proof.id)
