@@ -9,7 +9,7 @@ os.environ["GEMINI_API_KEY"] = ""
 
 from fastapi.testclient import TestClient
 
-from backend.main import app, repository
+from backend.main import _clear_social_feed_cache, app, repository
 from backend.models import Session
 from tests.fixtures import load_repository_fixture
 
@@ -17,6 +17,7 @@ from tests.fixtures import load_repository_fixture
 class ApiFlowTests(unittest.TestCase):
     def setUp(self):
         load_repository_fixture(repository)
+        _clear_social_feed_cache()
         self.client = TestClient(app)
 
     def test_search_returns_existing_dupr_compatible_group(self):
@@ -201,7 +202,7 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(payload["scope"], "sports_general")
         self.assertEqual(payload["recommendations"], [])
         self.assertEqual(payload["tournaments"], [])
-        self.assertIn("general sports questions", payload["message"])
+        self.assertIn("racket", payload["message"])
 
     def test_venue_information_question_uses_general_assistant(self):
         response = self.client.post(
@@ -213,7 +214,29 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(payload["scope"], "sports_general")
         self.assertEqual(payload["recommendations"], [])
         self.assertEqual(payload["tournaments"], [])
-        self.assertIn("general sports questions", payload["message"])
+        self.assertIn("live availability", payload["message"])
+
+    def test_court_information_question_uses_general_assistant(self):
+        response = self.client.post(
+            "/v1/sessions/search",
+            json={"query": "Tell me about courts in Whitefield", "player_id": "p1"},
+        )
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["scope"], "sports_general")
+        self.assertEqual(payload["recommendations"], [])
+        self.assertIn("Whitefield", payload["message"])
+
+    def test_generic_padel_question_uses_general_assistant(self):
+        response = self.client.post(
+            "/v1/sessions/search",
+            json={"query": "Tell me more about padel", "player_id": "p1"},
+        )
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["scope"], "sports_general")
+        self.assertEqual(payload["recommendations"], [])
+        self.assertIn("doubles racket sport", payload["message"])
 
     def test_social_feed_supports_session_posts_likes_comments_and_shares(self):
         created = self.client.post(
@@ -245,6 +268,41 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(shared.json()["share_count"], 1)
         comments = self.client.get(f"/v1/social/posts/{post_id}/comments", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(len(comments.json()["comments"]), 1)
+
+    def test_session_activity_supports_likes_comments_and_shares(self):
+        feed = self.client.get("/v1/social/feed", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(feed.status_code, 200)
+        activity = next(post for post in feed.json()["posts"] if post["id"] == "session-activity-s1")
+
+        post_id = activity["id"]
+        comment = self.client.post(
+            f"/v1/social/posts/{post_id}/comments",
+            json={"message": "Great rally."},
+            headers={"X-CourtMate-Player-ID": "p2"},
+        )
+        self.assertEqual(comment.status_code, 200)
+
+        liked = self.client.post(f"/v1/social/posts/{post_id}/like", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(liked.status_code, 200)
+        self.assertTrue(liked.json()["liked_by_me"])
+        self.assertEqual(liked.json()["like_count"], 1)
+        self.assertEqual(liked.json()["comment_count"], 1)
+
+        shared = self.client.post(f"/v1/social/posts/{post_id}/share", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(shared.status_code, 200)
+        self.assertEqual(shared.json()["share_count"], 1)
+
+    def test_social_feed_reuses_a_short_lived_player_scoped_cache(self):
+        from unittest.mock import patch
+
+        with patch.object(repository, "list_sessions", wraps=repository.list_sessions) as list_sessions:
+            first = self.client.get("/v1/social/feed", headers={"X-CourtMate-Player-ID": "p2"})
+            second = self.client.get("/v1/social/feed", headers={"X-CourtMate-Player-ID": "p2"})
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(first.json(), second.json())
+        self.assertEqual(list_sessions.call_count, 1)
 
     def test_social_post_cannot_tag_a_game_the_player_did_not_play(self):
         response = self.client.post(

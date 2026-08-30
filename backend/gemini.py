@@ -45,7 +45,8 @@ class GeminiIntentParser:
         "what", "why", "how", "explain", "rule", "tip", "improve", "difference", "strategy",
         "technique", "drill", "training", "practice", "score", "scoring", "serve", "grip",
         "equipment", "benefit", "compare", "best", "meaning", "definition", "who", "when",
-        "can", "should", "tell me about", "asking about",
+        "can", "should", "tell me", "about", "describe", "overview", "information", "learn",
+        "asking about",
     )
 
     _VENUE_INFORMATION_PATTERNS = (
@@ -152,7 +153,7 @@ class GeminiIntentParser:
     @classmethod
     def _is_venue_information_query(cls, query: str) -> bool:
         """Detect informational venue questions without stealing court discovery."""
-        has_venue = bool(re.search(r"\b(venue|venues|club|clubs)\b", query))
+        has_venue = bool(re.search(r"\b(court|courts|venue|venues|club|clubs)\b", query))
         has_information_signal = any(re.search(pattern, query) for pattern in cls._VENUE_INFORMATION_PATTERNS)
         has_game_request = bool(re.search(r"\b(find|search|show|join|create|book)\b.*\b(game|games|group|groups|session|sessions|match|matches)\b", query))
         return has_venue and has_information_signal and not has_game_request
@@ -257,6 +258,26 @@ Verified records: {records}
         """Answer general sports questions without implying CourtMate has matching records."""
         fallback = "I can answer general sports questions about rules, technique, tactics, training, and equipment."
         if not self._client:
+            lowered = query.lower()
+            if re.search(r"\b(court|courts|venue|venues|club|clubs)\b", lowered):
+                sport = next((name for name in ("pickleball", "badminton", "tennis", "padel", "squash", "table tennis") if name in lowered), "racket-sport")
+                area_match = re.search(r"\b(?:near|around|in|at)\s+([a-z][a-z .'-]+?)(?:\?|$)", lowered)
+                area = area_match.group(1).strip().title() if area_match else "your area"
+                if area.lower() in {"me", "here", "my area", "my location"}:
+                    area = "your area"
+                return f"{area} may have {sport} courts and clubs, but live availability, pricing, and booking need a connected venue directory; tell me the sport and time and I can help narrow the options."
+            if "padel" in lowered:
+                return "Padel is a doubles racket sport played on an enclosed court with glass and mesh walls. It uses underarm serves, tennis-style scoring, and lets you play the ball after it rebounds off the walls."
+            if "pickleball" in lowered:
+                return "Pickleball is played on a smaller court with a perforated paddle and plastic ball. The serve is underarm, points are usually scored only by the serving side, and the non-volley zone is the key tactical area near the net."
+            if "badminton" in lowered:
+                return "Badminton is a racket sport where you send a shuttle over the net before it lands. Good play combines a high contact point, quick recovery, and changes of pace between clears, drops, drives, and smashes."
+            if "tennis" in lowered:
+                return "Tennis is played with a racket and felt ball, using a serve to start each point. The core tactics are creating space, recovering to a strong position, and changing height, speed, and direction without giving away control."
+            if "squash" in lowered:
+                return "Squash is played against four walls in a small court. Players alternate hitting the ball to the front wall, and the main skills are early preparation, efficient movement, and recovering to the T position."
+            if "table tennis" in lowered or "ping pong" in lowered:
+                return "Table tennis is played across a table with a small racket and lightweight ball. Spin, placement, and quick transitions matter more than simply hitting hard, especially on the serve and return."
             return fallback
         prompt = f"""You are CourtMate's general sports assistant. Answer the user's informational question using your general sports knowledge, even when the sport or topic is not present in CourtMate's database. Cover rules, technique, tactics, training, equipment, and comparisons when relevant. Do not invent live scores, current fixtures, athlete news, or CourtMate games, players, venues, or tournaments. If the question depends on current information, say that it needs a live source. Avoid medical diagnosis and recommend a qualified professional for injuries. Keep the answer concise, clear, and practical.
 

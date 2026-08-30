@@ -4,7 +4,7 @@ import json
 from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 from datetime import date, datetime, time, timedelta, timezone
-from time import perf_counter
+from time import monotonic, perf_counter
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -48,6 +48,11 @@ vector_retriever = VectorRetriever(repository)
 vector_indexer = VectorIndexer(repository)
 local_timezone = ZoneInfo(os.getenv("COURTMATE_TIMEZONE", "Asia/Kolkata"))
 _geocode_cache: dict[str, tuple[float, float] | None] = {}
+_social_feed_cache: dict[tuple[str, str, str], tuple[float, SocialFeedResponse]] = {}
+try:
+    _social_feed_cache_ttl_seconds = max(0.0, float(os.getenv("COURTMATE_SOCIAL_FEED_CACHE_TTL_SECONDS", "15")))
+except ValueError:
+    _social_feed_cache_ttl_seconds = 15.0
 _fallback_area_coordinates = {
     "whitefield": (12.9698, 77.7499),
     "brookefield": (12.9665, 77.7168),
@@ -80,6 +85,33 @@ def _index_tournament_best_effort(tournament: Tournament) -> None:
             vector_indexer.upsert_tournament(tournament)
     except Exception:
         return
+
+
+def _clear_social_feed_cache() -> None:
+    _social_feed_cache.clear()
+
+
+def _social_feed_cache_key(player_id: str, feed: str, sport: Sport | None) -> tuple[str, str, str]:
+    return player_id, feed, sport or "all"
+
+
+def _get_cached_social_feed(key: tuple[str, str, str]) -> SocialFeedResponse | None:
+    if _social_feed_cache_ttl_seconds <= 0:
+        return None
+    cached = _social_feed_cache.get(key)
+    if not cached:
+        return None
+    created_at, response = cached
+    if monotonic() - created_at >= _social_feed_cache_ttl_seconds:
+        _social_feed_cache.pop(key, None)
+        return None
+    return response.model_copy(deep=True)
+
+
+def _cache_social_feed(key: tuple[str, str, str], response: SocialFeedResponse) -> SocialFeedResponse:
+    if _social_feed_cache_ttl_seconds > 0:
+        _social_feed_cache[key] = (monotonic(), response.model_copy(deep=True))
+    return response
 
 
 def get_current_player(identity: AuthIdentity = Depends(get_current_identity)) -> Player:
@@ -242,6 +274,7 @@ def follow_player(player_id: str, player: Player = Depends(get_current_player)) 
         raise HTTPException(status_code=409, detail="You cannot follow yourself")
     if not repository.is_following(player.id, target.id):
         repository.save_follow(FollowRecord(id=f"{player.id}_{target.id}", follower_id=player.id, following_id=target.id, created_at=datetime.now(timezone.utc)))
+        _clear_social_feed_cache()
         try:
             repository.save_notification(AppNotification(
                 id=f"follow-{player.id}-{target.id}",
@@ -264,6 +297,7 @@ def unfollow_player(player_id: str, player: Player = Depends(get_current_player)
     if not target:
         raise HTTPException(status_code=404, detail="Player not found")
     repository.delete_follow(player.id, target.id)
+    _clear_social_feed_cache()
     return _public_profile(target, player.id)
 
 
@@ -294,11 +328,17 @@ def my_followers(player: Player = Depends(get_current_player)) -> PublicPlayerPr
 def social_feed(feed: str = "all", sport: Sport | None = None, player: Player = Depends(get_current_player)) -> SocialFeedResponse:
     if feed not in {"all", "following"}:
         raise HTTPException(status_code=422, detail="Feed must be all or following")
+    cache_key = _social_feed_cache_key(player.id, feed, sport)
+    cached = _get_cached_social_feed(cache_key)
+    if cached is not None:
+        return cached
     sessions = _refresh_all_session_statuses()
     sessions_by_id = {session.id: session for session in sessions}
     players_by_id = {candidate.id: candidate for candidate in repository.list_players()}
     following_ids = {record.following_id for record in repository.list_following(player.id)}
-    posts = repository.list_social_posts()
+    # Engagement for virtual session activity is persisted under the same ID;
+    # keep that bookkeeping record out of the authored-post feed.
+    posts = [post for post in repository.list_social_posts() if _session_id_from_activity_post_id(post.id) is None]
     posts = [
         post for post in posts
         if not (players_by_id.get(post.player_id) or player).is_profile_private
@@ -324,10 +364,10 @@ def social_feed(feed: str = "all", sport: Sport | None = None, player: Player = 
             continue
         if sport and session.sport != sport:
             continue
-        session_activities.append(_session_social_view(session, players_by_id))
+        session_activities.append(_session_social_view(session, players_by_id, player.id))
     feed_items = [_social_post_view(post, player.id, sessions_by_id.get(post.session_id), players_by_id) for post in posts] + session_activities
     feed_items.sort(key=lambda item: item.created_at, reverse=True)
-    return SocialFeedResponse(posts=feed_items[:50])
+    return _cache_social_feed(cache_key, SocialFeedResponse(posts=feed_items[:50]))
 
 
 def _session_visible_to_player(session: Session, player: Player, following_ids: set[str] | None = None) -> bool:
@@ -371,32 +411,38 @@ def create_social_post(request: SocialPostCreateRequest, player: Player = Depend
         media_type=request.media_type,
         created_at=datetime.now(timezone.utc),
     ))
+    _clear_social_feed_cache()
     return _social_post_view(post, player.id)
 
 
 @app.post("/v1/social/posts/{post_id}/like", response_model=SocialPostView)
 def toggle_social_like(post_id: str, player: Player = Depends(get_current_player)) -> SocialPostView:
-    post = repository.toggle_social_like(post_id, player.id)
-    if not post:
+    post, session = _ensure_social_target(post_id, player)
+    updated = repository.toggle_social_like(post.id, player.id)
+    if not updated:
         raise HTTPException(status_code=404, detail="Social post not found")
-    return _social_post_view(post, player.id)
+    _clear_social_feed_cache()
+    if session and _session_id_from_activity_post_id(post_id):
+        players_by_id = {candidate.id: candidate for candidate in repository.list_players()}
+        return _session_social_view(session, players_by_id, player.id)
+    return _social_post_view(updated, player.id, session)
 
 
 @app.get("/v1/social/posts/{post_id}/comments", response_model=SocialCommentsResponse)
 def list_social_comments(post_id: str, player: Player = Depends(get_current_player)) -> SocialCommentsResponse:
-    if not repository.get_social_post(post_id):
+    post, session = _social_target(post_id, player)
+    if not post or (session and not _session_visible_to_player(session, player)):
         raise HTTPException(status_code=404, detail="Social post not found")
     return SocialCommentsResponse(comments=repository.list_social_comments(post_id))
 
 
 @app.post("/v1/social/posts/{post_id}/comments", response_model=SocialComment)
 def create_social_comment(post_id: str, request: SocialCommentCreateRequest, player: Player = Depends(get_current_player)) -> SocialComment:
-    if not repository.get_social_post(post_id):
-        raise HTTPException(status_code=404, detail="Social post not found")
+    _ensure_social_target(post_id, player)
     message = request.message.strip()
     if not message:
         raise HTTPException(status_code=422, detail="Comment is required")
-    return repository.save_social_comment(SocialComment(
+    comment = repository.save_social_comment(SocialComment(
         id=f"comment-{uuid4().hex}",
         post_id=post_id,
         player_id=player.id,
@@ -405,14 +451,21 @@ def create_social_comment(post_id: str, request: SocialCommentCreateRequest, pla
         message=message,
         created_at=datetime.now(timezone.utc),
     ))
+    _clear_social_feed_cache()
+    return comment
 
 
 @app.post("/v1/social/posts/{post_id}/share", response_model=SocialPostView)
 def share_social_post(post_id: str, player: Player = Depends(get_current_player)) -> SocialPostView:
-    post = repository.record_social_share(post_id)
-    if not post:
+    post, session = _ensure_social_target(post_id, player)
+    updated = repository.record_social_share(post.id)
+    if not updated:
         raise HTTPException(status_code=404, detail="Social post not found")
-    return _social_post_view(post, player.id)
+    _clear_social_feed_cache()
+    if session and _session_id_from_activity_post_id(post_id):
+        players_by_id = {candidate.id: candidate for candidate in repository.list_players()}
+        return _session_social_view(session, players_by_id, player.id)
+    return _social_post_view(updated, player.id, session)
 
 
 @app.post("/v1/me/profile", response_model=Player)
@@ -614,15 +667,68 @@ def _social_post_view(post: SocialPost, viewer_id: str, session: Session | None 
     )
 
 
-def _session_social_view(session: Session, players_by_id: dict[str, Player] | None = None) -> SocialPostView:
+def _session_activity_post_id(session_id: str) -> str:
+    return f"session-activity-{session_id}"
+
+
+def _session_id_from_activity_post_id(post_id: str) -> str | None:
+    prefix = "session-activity-"
+    return post_id[len(prefix):] if post_id.startswith(prefix) else None
+
+
+def _virtual_session_social_post(session: Session, players_by_id: dict[str, Player] | None = None) -> SocialPost:
+    players_by_id = players_by_id or {candidate.id: candidate for candidate in repository.list_players()}
+    organizer = players_by_id.get(session.organizer_id)
+    organizer_name = organizer.display_name if organizer else "CourtMate player"
+    return SocialPost(
+        id=_session_activity_post_id(session.id),
+        player_id=session.organizer_id,
+        player_display_name=organizer_name,
+        profile_image_url=organizer.profile_image_url if organizer else None,
+        sport=session.sport,
+        session_id=session.id,
+        caption=f"{organizer_name} is playing in {session.group_name}.",
+        created_at=datetime.combine(session.session_date, session.start_time, tzinfo=local_timezone),
+    )
+
+
+def _social_target(post_id: str, player: Player) -> tuple[SocialPost | None, Session | None]:
+    post = repository.get_social_post(post_id)
+    if post:
+        session = _get_session(post.session_id) if post.session_id else None
+        if session and not _session_visible_to_player(session, player):
+            return None, None
+        return post, session
+
+    session_id = _session_id_from_activity_post_id(post_id)
+    if not session_id:
+        return None, None
+    session = _get_session(session_id)
+    if not session or not _session_visible_to_player(session, player):
+        return None, None
+    return _virtual_session_social_post(session), session
+
+
+def _ensure_social_target(post_id: str, player: Player) -> tuple[SocialPost, Session | None]:
+    post, session = _social_target(post_id, player)
+    if not post:
+        raise HTTPException(status_code=404, detail="Social post not found")
+    if repository.get_social_post(post_id) is None:
+        post = repository.save_social_post(post)
+    return post, session
+
+
+def _session_social_view(session: Session, players_by_id: dict[str, Player] | None = None, viewer_id: str | None = None) -> SocialPostView:
     players_by_id = players_by_id or {candidate.id: candidate for candidate in repository.list_players()}
     participants = [players_by_id.get(player_id) for player_id in session.confirmed_player_ids]
     players = [candidate for candidate in participants if candidate]
     leaderboard = _session_leaderboard(session, players_by_id)
     organizer = players_by_id.get(session.organizer_id) or (players[0] if players else None)
     organizer_name = organizer.display_name if organizer else "CourtMate player"
+    activity_post_id = _session_activity_post_id(session.id)
+    engagement = repository.get_social_post(activity_post_id)
     return SocialPostView(
-        id=f"session-activity-{session.id}",
+        id=activity_post_id,
         player_id=organizer.id if organizer else session.organizer_id,
         player_display_name=organizer_name,
         profile_image_url=organizer.profile_image_url if organizer else None,
@@ -637,6 +743,10 @@ def _session_social_view(session: Session, players_by_id: dict[str, Player] | No
         created_at=datetime.combine(session.session_date, session.start_time, tzinfo=local_timezone),
         activity_type="session",
         session_status=session.status,
+        like_count=len(engagement.liked_by) if engagement else 0,
+        comment_count=len(repository.list_social_comments(activity_post_id)),
+        share_count=engagement.share_count if engagement else 0,
+        liked_by_me=bool(engagement and viewer_id and viewer_id in engagement.liked_by),
         session_players=[
             SocialSessionPlayer(
                 id=candidate.id,

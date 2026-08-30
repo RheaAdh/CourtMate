@@ -32,6 +32,12 @@ type SocialPost = {
   session_leaderboard?: SessionLeaderboardEntry[];
 };
 
+const SOCIAL_FEED_CACHE_TTL_MS = 60_000;
+
+function socialFeedCacheKey(playerId: string, feed: "all" | "following") {
+  return `courtmate:social-feed:${playerId}:${feed}`;
+}
+
 type SessionActivityPlayer = {
   id: string;
   display_name: string;
@@ -307,17 +313,41 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
   const [recommendationsLoading, setRecommendationsLoading] = useState(true);
 
   async function loadFeed(nextFilter = feedFilter) {
+    let hasCachedFeed = false;
+    if (typeof window !== "undefined") {
+      try {
+        const key = socialFeedCacheKey(currentUserId, nextFilter);
+        const raw = window.sessionStorage.getItem(key);
+        const cached = raw ? JSON.parse(raw) as { cachedAt?: number; posts?: SocialPost[] } : null;
+        if (cached?.cachedAt && Date.now() - cached.cachedAt < SOCIAL_FEED_CACHE_TTL_MS && Array.isArray(cached.posts)) {
+          setPosts(cached.posts);
+          setLoading(false);
+          hasCachedFeed = true;
+        } else if (raw) {
+          window.sessionStorage.removeItem(key);
+        }
+      } catch {
+        // A disabled or full session storage should never block the feed.
+      }
+    }
     try {
-      setLoading(true);
+      if (!hasCachedFeed) setLoading(true);
       setLoadError("");
       const response = await authorizedFetch(`${apiUrl}/v1/social/feed?feed=${nextFilter}`);
       if (!response.ok) throw new Error("Social feed unavailable");
       const payload = await response.json() as { posts: SocialPost[] };
       if (!Array.isArray(payload.posts)) throw new Error("Social feed payload is invalid");
       setPosts(payload.posts);
+      try {
+        window.sessionStorage.setItem(socialFeedCacheKey(currentUserId, nextFilter), JSON.stringify({ cachedAt: Date.now(), posts: payload.posts }));
+      } catch {
+        // A disabled or full session storage should never block the feed.
+      }
     } catch (error) {
-      setPosts([]);
-      setLoadError(error instanceof Error ? error.message : "Could not load the social feed");
+      if (!hasCachedFeed) {
+        setPosts([]);
+        setLoadError(error instanceof Error ? error.message : "Could not load the social feed");
+      }
     } finally {
       setLoading(false);
     }

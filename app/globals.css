@@ -6392,12 +6392,12 @@ body::before { border-color: rgba(117, 140, 31, .18); }
   transition: color .16s ease, transform .16s ease, filter .16s ease;
 }
 
-.social-post-actions button:hover,
-.social-post-actions button.fire-active { color: #718f12; }
+.social-post-actions button:hover { color: #718f12; }
+.social-post-actions button.fire-active { color: #e5484d; }
 .social-post-actions button.fire-active > .social-fire-icon {
-  color: var(--lime);
-  fill: var(--lime);
-  filter: drop-shadow(0 2px 5px rgba(215, 242, 63, .3));
+  color: #e5484d;
+  fill: #e5484d;
+  filter: drop-shadow(0 2px 5px rgba(229, 72, 77, .32));
   transform: scale(1.12);
 }
 .social-post-actions button:disabled { cursor: wait; opacity: .5; }
@@ -6658,8 +6658,8 @@ html[data-theme="dark"] .social-comment-name {
 
 html[data-theme="dark"] .social-post-actions button.fire-active,
 html[data-theme="dark"] .social-post-actions button.fire-active > .social-fire-icon {
-  color: var(--lime);
-  fill: var(--lime);
+  color: #ff6b70;
+  fill: #ff6b70;
 }
 
 html[data-theme="dark"] .social-post-media {

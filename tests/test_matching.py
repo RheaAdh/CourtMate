@@ -91,6 +91,8 @@ class MatchingTests(unittest.TestCase):
         self.assertTrue(parser.is_general_sports_query("How can I improve my cricket batting?"))
         self.assertTrue(parser.is_general_sports_query("Tell me about pickleball venues near me"))
         self.assertTrue(parser.is_general_sports_query("I'm asking about venues near me"))
+        self.assertTrue(parser.is_general_sports_query("Tell me about courts in Whitefield"))
+        self.assertTrue(parser.is_general_sports_query("Tell me more about padel"))
         self.assertFalse(parser.is_in_scope("Tell me about pickleball venues near me"))
         self.assertFalse(parser.is_general_sports_query("Find a tennis game near Whitefield"))
         self.assertFalse(parser.is_general_sports_query("What is the weather near me?"))
