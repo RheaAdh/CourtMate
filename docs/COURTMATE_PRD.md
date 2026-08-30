@@ -14,7 +14,7 @@ CourtMate is not a court-booking replacement or an unrestricted general-purpose 
 
 - **Solo player:** wants a credible nearby game without joining many groups.
 - **Organizer:** wants approvals, waitlist replacement, coordination, and low-friction feedback in one place.
-- **Tournament organizer:** needs request-based registration, editable local fixtures, set scores, draw sheets, and live standings.
+- **Tournament organizer:** needs request-based registration, editable knockout draws, winner advancement, optional set scores, draw sheets, and live standings.
 - **Regular player:** wants sport-specific CMR, activity history, rematches, followers, and shareable results.
 
 Today, attendance is scattered across chat groups, skill labels are inconsistent, dropouts are difficult to replace, and scores, feedback, progress, and tournament results disappear after play.
@@ -41,7 +41,7 @@ Informational sports and venue questions are answered without returning unrelate
 
 Games uses the same single-line tab navigator as Tournaments: **Explore, Upcoming, Pending, History**. Explore places suggested nearby games first, followed by the remaining results. The sport control contains only pickleball, badminton, tennis, padel, squash, and table tennis.
 
-Every confirmed game has a full-page Group Space with member profiles, waitlist, venue/time/payment coordination, and voice-enabled chat. It is the main coordination surface before and after play. The organizer marks the game done to publish the activity to Home. After completion, each player can drag the other players into the order they felt played best, starting from sport CMR order; this updates sport-specific CMR without tedious score entry. Fun, fairness, and return intent remain lightweight check-in signals.
+Every confirmed game has a full-page Group Space with member profiles, waitlist, venue/time/payment coordination, and voice-enabled chat. It is the main coordination surface before and after play. The organizer marks the game done to publish the activity to Home. After completion, each player can drag the other players into the order they felt played best, starting from sport CMR order, or mark someone as unable to judge; this updates sport-specific CMR without tedious score entry. Fun, fairness, and return intent remain lightweight check-in signals.
 
 ### Social activity and sharing
 
@@ -61,7 +61,7 @@ Followers can see public or follower-visible session activity, subject to the or
 
 ### Tournaments
 
-The Tournaments area has **Explore, Upcoming, Pending, and History** views with the same compact mobile tab treatment as Games. Organizers create tournaments, receive registration requests, approve or decline players, maintain capacity and waitlists, generate local fixtures, edit pairings, enter match scores, and enter optional per-set scores. Standings and the draw sheet update from stored match results.
+The Tournaments area has **Explore, Upcoming, Pending, and History** views with the same compact mobile tab treatment as Games. Organizers create single-elimination tournaments, receive registration requests, approve or decline players, maintain capacity and waitlists, generate seeded knockout draws, edit pairings, select the winner of each match from a player dropdown, and optionally enter match or per-set scores. Byes advance automatically, selected winners populate the next round, and standings and the draw sheet update from stored match results. Older round-robin tournaments remain readable for compatibility.
 
 ## 4. Profile, Settings, And Navigation
 

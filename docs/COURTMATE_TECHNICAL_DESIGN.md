@@ -44,7 +44,7 @@ Game states are `open`, `full`, `in_progress`, `completed`, and `cancelled`. Req
 
 Every confirmed game opens in a full-page Group Space. Members use its chat to coordinate venue, arrival, payments, and post-match notes; the visible waitlist and current sport leaderboard keep the group state in one place. The organizer marks the game done once play is over, which publishes one stable session activity card to Home. Post-game feedback stores fun, fairness, return intent, and a drag-ordered ranking of the other confirmed players. The order starts from sport CMR and is converted server-side into a bounded CMR signal, so players do not need to enter scores.
 
-CMR is calculated independently per supported sport on a 0-100 scale. Post-game player order feedback updates ratings, game counts, history, and deltas without requiring score entry. Performance chat retrieves only the authenticated player’s own history, completed games, feedback, and wearable proofs.
+CMR is calculated independently per supported sport on a 0-100 scale. Post-game player order feedback updates ratings, game counts, history, and deltas without requiring score entry. A ranked order is converted to a percentile performance score, multiple raters are combined with a median per player, and each subjective game update is capped at five CMR points. Players marked as unable to judge are omitted from that game’s CMR signal. Performance chat retrieves only the authenticated player’s own history, completed games, feedback, and wearable proofs.
 
 ### Social data and permissions
 
@@ -64,7 +64,7 @@ The client uses optimistic fire reactions and rolls back on failure. Comments lo
 
 ### Tournaments
 
-Tournaments use request-based registration and editable fixtures. Organizer or authorized match players submit a match score. Optional `set_scores_a` and `set_scores_b` arrays contain up to seven set scores; the service validates each pair, derives the match score from sets won, and recalculates standings. Changing a fixture pairing or round clears its prior result and reopens a completed tournament when necessary.
+Tournaments use request-based registration and editable seeded single-elimination fixtures. New tournaments default to `knockout`; legacy `round_robin` records remain readable. Byes auto-advance, future bracket slots wait for the preceding winner, and the organizer or either match player can select a winner through `POST /v1/tournaments/{tournament_id}/matches/{match_id}/winner`. Optional `score_a`/`score_b` values and `set_scores_a`/`set_scores_b` arrays contain detailed results; the service validates them, derives the winner, and recalculates standings. Changing a fixture pairing or round clears its prior result and reopens a completed tournament when necessary.
 
 ## 5. Profile, Privacy, And Theming
 
@@ -78,7 +78,7 @@ All asynchronous surfaces use the shared tennis-ball loader with contextual labe
 
 ## 6. API, Security, And Operations
 
-Core routes include `/health`, `/v1/intent/parse`, `/v1/me`, `/v1/me/profile`, `/v1/me/profile-image/*`, `/v1/players/recommended`, `/v1/players/{id}`, `/v1/me/following`, `/v1/me/followers`, `/v1/sessions/search`, `/v1/me/explore`, `/v1/me/games`, `/v1/me/requests`, `/v1/me/groups`, `/v1/me/incoming-requests`, `/v1/me/notifications`, `/v1/groups`, `/v1/sessions/{id}/join`, `/v1/sessions/{id}/leave`, `/v1/sessions/{id}/group`, `/v1/sessions/{id}/chat`, `/v1/sessions/{id}/feedback`, `/v1/sessions/{id}/leaderboard`, `/v1/sessions/{id}/complete`, `/v1/leaderboards/local`, `/v1/me/activity-proof/*`, `/v1/me/performance-chat`, `/v1/social/feed`, `/v1/social/posts`, `/v1/social/posts/{id}/like`, `/comments`, `/share`, and `/v1/tournaments/*`.
+Core routes include `/health`, `/v1/intent/parse`, `/v1/me`, `/v1/me/profile`, `/v1/me/profile-image/*`, `/v1/players/recommended`, `/v1/players/{id}`, `/v1/me/following`, `/v1/me/followers`, `/v1/sessions/search`, `/v1/me/explore`, `/v1/me/games`, `/v1/me/requests`, `/v1/me/groups`, `/v1/me/incoming-requests`, `/v1/me/notifications`, `/v1/groups`, `/v1/sessions/{id}/join`, `/v1/sessions/{id}/leave`, `/v1/sessions/{id}/group`, `/v1/sessions/{id}/chat`, `/v1/sessions/{id}/feedback`, `/v1/sessions/{id}/leaderboard`, `/v1/sessions/{id}/complete`, `/v1/leaderboards/local`, `/v1/me/activity-proof/*`, `/v1/me/performance-chat`, `/v1/social/feed`, `/v1/social/posts`, `/v1/social/posts/{id}/like`, `/comments`, `/share`, and `/v1/tournaments/*` including `/matches/{match_id}/winner`.
 
 FastAPI verifies Firebase ID tokens and enforces organizer, member, player, follower, and tournament permissions. Vector similarity is not an authorization boundary. Exact home coordinates and private group data are never exposed. Uploaded media is restricted to approved storage hosts, MIME types, and size limits.
 

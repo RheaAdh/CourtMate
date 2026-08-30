@@ -5,6 +5,7 @@ from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 from datetime import date, datetime, time, timedelta, timezone
 from time import monotonic, perf_counter
+from statistics import median
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -15,9 +16,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, ExploreSessionsResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, PlayerRating, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListItem, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentRegistrationDecisionRequest, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, ExploreSessionsResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, PlayerRating, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListItem, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentRegistrationDecisionRequest, TournamentScoreRequest, TournamentWinnerRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
-from .tournaments import calculate_standings, generate_round_robin_matches, rules_for_sport, validate_score, validate_set_scores
+from .tournaments import calculate_standings, generate_knockout_matches, generate_round_robin_matches, rules_for_sport, validate_score, validate_set_scores
 from .vector_search import VectorIndexer, VectorRetriever
 
 
@@ -29,7 +30,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -868,6 +869,7 @@ def _relative_match_ratings(session: Session, teams: list, players: dict[str, Pl
 def _refresh_cmr_ratings() -> None:
     """Recompute CMR and a chronological per-game history from completed-game feedback."""
     ratings_by_player: dict[tuple[str, str], dict[str, list[float]]] = {}
+    ranked_feedback_sessions: set[tuple[str, str]] = set()
     sessions_by_id = {session.id: session for session in repository.list_sessions() if session.status == "completed"}
     players_by_id = {player.id: player for player in repository.list_players()}
     for session in sessions_by_id.values():
@@ -892,6 +894,8 @@ def _refresh_cmr_ratings() -> None:
             if value is not None:
                 game_ratings = ratings_by_player.setdefault((rating.player_id, session.sport), {})
                 game_ratings.setdefault(session.id, []).append(value)
+            if rating.rank_score is not None:
+                ranked_feedback_sessions.add((session.id, session.sport))
     completed_sessions_by_player: dict[str, list[Session]] = {}
     for session in sessions_by_id.values():
         for player_id in session.confirmed_player_ids:
@@ -915,11 +919,17 @@ def _refresh_cmr_ratings() -> None:
             for session in sorted(sport_sessions, key=lambda item: (item.session_date, item.start_time)):
                 values = ratings_by_player.get((player_id, sport), {}).get(session.id, [])
                 if values:
-                    game_rating = round(sum(values) / len(values), 2)
-                    game_total += game_rating
+                    game_rating = round(median(values), 2) if (session.id, sport) in ranked_feedback_sessions else round(sum(values) / len(values), 2)
                     rated_game_count += 1
                     previous_rating = running_rating if running_rating is not None else prior
-                    running_rating = round((prior * 3 + game_total) / (3 + rated_game_count), 2)
+                    if (session.id, sport) in ranked_feedback_sessions:
+                        # Rank feedback is subjective, so use a small bounded
+                        # step from the current rating rather than a raw reset.
+                        movement = max(-5.0, min(5.0, game_rating - previous_rating))
+                        running_rating = round(previous_rating + movement, 2)
+                    else:
+                        game_total += game_rating
+                        running_rating = round((prior * 3 + game_total) / (3 + rated_game_count), 2)
                     delta = round(running_rating - previous_rating, 2)
                     history.append(CMRHistoryPoint(session_id=session.id, session_date=session.session_date, group_name=session.group_name, game_rating=game_rating, rating=running_rating, delta=delta))
                 else:
@@ -1469,6 +1479,40 @@ def _tournament_details(tournament: Tournament) -> TournamentDetailsResponse:
     )
 
 
+def _advance_knockout_winner(tournament: Tournament, match: TournamentMatch, winner_id: str) -> None:
+    """Place a completed knockout winner into the next bracket match."""
+    matches = repository.list_tournament_matches(tournament.id)
+    final_round = max((item.round_number for item in matches), default=match.round_number)
+    if match.round_number >= final_round:
+        return
+    next_match_id = f"{tournament.id}-r{match.round_number + 1}-m{(match.match_number + 1) // 2}"
+    next_match = next((item for item in matches if item.id == next_match_id), None)
+    if not next_match:
+        return
+    slot = "player_a_id" if match.match_number % 2 else "player_b_id"
+    updated_values = {slot: winner_id}
+    if getattr(next_match, slot) != winner_id and next_match.status in {"pending_confirmation", "completed"}:
+        updated_values.update({
+            "status": "scheduled",
+            "score_a": None,
+            "score_b": None,
+            "set_scores_a": [],
+            "set_scores_b": [],
+            "winner_id": None,
+            "score_entered_by": None,
+            "confirmed_by": None,
+        })
+    repository.save_tournament_match(next_match.model_copy(update=updated_values))
+
+
+def _complete_knockout_tournament_if_final(tournament: Tournament) -> None:
+    matches = repository.list_tournament_matches(tournament.id)
+    final_round = max((item.round_number for item in matches), default=0)
+    final_match = next((item for item in matches if item.round_number == final_round and item.match_number == 1), None)
+    if final_match and final_match.status == "completed":
+        repository.save_tournament(tournament.model_copy(update={"status": "completed"}))
+
+
 @app.get("/v1/tournaments", response_model=TournamentListResponse)
 def list_tournaments(player: Player = Depends(get_current_player)) -> TournamentListResponse:
     tournaments = repository.list_tournaments()
@@ -1628,11 +1672,17 @@ def generate_tournament_fixtures(tournament_id: str, background_tasks: Backgroun
         raise HTTPException(status_code=409, detail="Fixtures have already been generated")
     registrations = repository.list_tournament_registrations(tournament.id)
     try:
-        matches = generate_round_robin_matches(tournament.id, registrations)
+        generator = generate_knockout_matches if tournament.format == "knockout" else generate_round_robin_matches
+        matches = generator(tournament.id, registrations)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    repository.delete_tournament_matches(tournament.id)
     for match in matches:
         repository.save_tournament_match(match)
+    if tournament.format == "knockout":
+        for match in matches:
+            if match.status == "bye" and match.winner_id:
+                _advance_knockout_winner(tournament, match, match.winner_id)
     tournament.status = "in_progress"
     repository.save_tournament(tournament)
     background_tasks.add_task(_index_tournament_best_effort, tournament)
@@ -1645,6 +1695,10 @@ def enter_tournament_score(tournament_id: str, match_id: str, request: Tournamen
     match = repository.get_tournament_match(match_id)
     if not tournament or not match or match.tournament_id != tournament_id:
         raise HTTPException(status_code=404, detail="Tournament match not found")
+    if tournament.format == "knockout" and (not match.player_a_id or not match.player_b_id):
+        raise HTTPException(status_code=409, detail="This bracket match is waiting for the previous winner")
+    if match.status == "bye":
+        raise HTTPException(status_code=409, detail="A bye advances automatically")
     is_organizer = player.id == tournament.organizer_id
     if tournament.status not in {"in_progress", "registration"} and not is_organizer:
         raise HTTPException(status_code=409, detail="This tournament is closed")
@@ -1684,9 +1738,53 @@ def enter_tournament_score(tournament_id: str, match_id: str, request: Tournamen
     match.set_scores_b = request.set_scores_b
     match.score_entered_by = match.score_entered_by or player.id
     saved_match = repository.save_tournament_match(match)
-    if all(item.status == "completed" for item in repository.list_tournament_matches(tournament.id)):
+    if tournament.format == "knockout" and saved_match.status == "completed" and saved_match.winner_id:
+        _advance_knockout_winner(tournament, saved_match, saved_match.winner_id)
+        _complete_knockout_tournament_if_final(tournament)
+    elif all(item.status == "completed" for item in repository.list_tournament_matches(tournament.id)):
         tournament.status = "completed"
         repository.save_tournament(tournament)
+        background_tasks.add_task(_index_tournament_best_effort, tournament)
+    return saved_match
+
+
+@app.post("/v1/tournaments/{tournament_id}/matches/{match_id}/winner", response_model=TournamentMatch)
+def select_tournament_winner(tournament_id: str, match_id: str, request: TournamentWinnerRequest, background_tasks: BackgroundTasks, player: Player = Depends(get_current_player)) -> TournamentMatch:
+    """Record a knockout winner and advance them without requiring a score."""
+    tournament = repository.get_tournament(tournament_id)
+    match = repository.get_tournament_match(match_id)
+    if not tournament or not match or match.tournament_id != tournament_id:
+        raise HTTPException(status_code=404, detail="Tournament match not found")
+    if tournament.format != "knockout":
+        raise HTTPException(status_code=409, detail="Winner selection is only available for knockout draws")
+    if tournament.status != "in_progress":
+        raise HTTPException(status_code=409, detail="This tournament is not accepting results")
+    if not match.player_a_id or not match.player_b_id:
+        raise HTTPException(status_code=409, detail="This bracket match is waiting for the previous winner")
+    is_organizer = player.id == tournament.organizer_id
+    if player.id not in {match.player_a_id, match.player_b_id, tournament.organizer_id}:
+        raise HTTPException(status_code=403, detail="Only match players or the organizer can select a winner")
+    if match.status == "completed" and not is_organizer:
+        raise HTTPException(status_code=409, detail="This winner is already locked")
+    if match.status == "pending_confirmation":
+        raise HTTPException(status_code=409, detail="Confirm the submitted score before selecting a winner")
+    if request.winner_id not in {match.player_a_id, match.player_b_id}:
+        raise HTTPException(status_code=422, detail="Winner must be one of the two players")
+    updated = match.model_copy(update={
+        "status": "completed",
+        "winner_id": request.winner_id,
+        "score_entered_by": player.id,
+        "confirmed_by": player.id,
+        "score_a": None,
+        "score_b": None,
+        "set_scores_a": [],
+        "set_scores_b": [],
+    })
+    saved_match = repository.save_tournament_match(updated)
+    _advance_knockout_winner(tournament, saved_match, request.winner_id)
+    previous_status = tournament.status
+    _complete_knockout_tournament_if_final(tournament)
+    if previous_status != "completed" and repository.get_tournament(tournament.id).status == "completed":
         background_tasks.add_task(_index_tournament_best_effort, tournament)
     return saved_match
 
@@ -1953,9 +2051,15 @@ def replacement(session_id: str, player: Player = Depends(get_current_player)) -
 def feedback(session_id: str, request: FeedbackRequest, background_tasks: BackgroundTasks, player: Player = Depends(get_current_player)) -> Feedback:
     session = _member_session(session_id, player)
     confirmed_others = [player_id for player_id in session.confirmed_player_ids if player_id != player.id]
+    skipped_player_ids = set(request.skipped_player_ids)
+    if request.player_order or request.skipped_player_ids:
+        if skipped_player_ids - set(confirmed_others) or len(skipped_player_ids) != len(request.skipped_player_ids):
+            raise HTTPException(status_code=422, detail="Only other confirmed players can be skipped")
+        if set(request.player_order) & skipped_player_ids or len(request.player_order) != len(set(request.player_order)):
+            raise HTTPException(status_code=422, detail="A player cannot be both ranked and skipped")
+        if set(request.player_order) | skipped_player_ids != set(confirmed_others):
+            raise HTTPException(status_code=422, detail="Rank or skip every other confirmed player")
     if request.player_order:
-        if set(request.player_order) != set(confirmed_others) or len(request.player_order) != len(set(request.player_order)):
-            raise HTTPException(status_code=422, detail="Rank every other confirmed player exactly once")
         denominator = max(len(request.player_order) - 1, 1)
         ranked_ratings = [
             PlayerRating(player_id=player_id, rank_score=round(100 - (index * 100 / denominator), 2))

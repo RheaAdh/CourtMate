@@ -244,7 +244,7 @@ class Tournament(BaseModel):
     area: str
     venue_name: str | None = None
     tournament_date: date_type
-    format: Literal["round_robin"] = "round_robin"
+    format: Literal["knockout", "round_robin"] = "knockout"
     capacity: int = Field(ge=2, le=16)
     status: Literal["registration", "in_progress", "completed", "cancelled"] = "registration"
     registration_ids: list[str] = Field(default_factory=list)
@@ -271,9 +271,9 @@ class TournamentMatch(BaseModel):
     tournament_id: str
     round_number: int = Field(ge=1)
     match_number: int = Field(ge=1)
-    player_a_id: str
-    player_b_id: str
-    status: Literal["scheduled", "pending_confirmation", "completed"] = "scheduled"
+    player_a_id: str | None = None
+    player_b_id: str | None = None
+    status: Literal["scheduled", "pending_confirmation", "completed", "bye"] = "scheduled"
     score_a: int | None = Field(default=None, ge=0, le=999)
     score_b: int | None = Field(default=None, ge=0, le=999)
     set_scores_a: list[int] = Field(default_factory=list, max_length=7)
@@ -315,7 +315,7 @@ class CreateTournamentRequest(BaseModel):
     venue_name: str | None = Field(default=None, max_length=120)
     tournament_date: date_type
     capacity: int = Field(ge=2, le=16, default=8)
-    format: Literal["round_robin"] = "round_robin"
+    format: Literal["knockout", "round_robin"] = "knockout"
 
 
 class TournamentScoreRequest(BaseModel):
@@ -324,6 +324,10 @@ class TournamentScoreRequest(BaseModel):
     set_scores_a: list[int] = Field(default_factory=list, max_length=7)
     set_scores_b: list[int] = Field(default_factory=list, max_length=7)
     confirm: bool = False
+
+
+class TournamentWinnerRequest(BaseModel):
+    winner_id: str = Field(min_length=1, max_length=120)
 
 
 class TournamentRegistrationDecisionRequest(BaseModel):
@@ -706,6 +710,7 @@ class FeedbackRequest(BaseModel):
     # Ordered from strongest to weakest for this session. The server converts
     # the order into a bounded CMR signal so clients do not submit raw scores.
     player_order: list[str] = Field(default_factory=list, max_length=16)
+    skipped_player_ids: list[str] = Field(default_factory=list, max_length=16)
     teams: list["MatchTeam"] = Field(default_factory=list, max_length=4)
 
 

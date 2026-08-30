@@ -15,7 +15,7 @@ type Tournament = {
   area: string;
   venue_name?: string | null;
   tournament_date: string;
-  format: "round_robin";
+  format: "knockout" | "round_robin";
   capacity: number;
   status: TournamentStatus;
   registration_ids: string[];
@@ -39,9 +39,9 @@ type TournamentMatch = {
   tournament_id: string;
   round_number: number;
   match_number: number;
-  player_a_id: string;
-  player_b_id: string;
-  status: "scheduled" | "pending_confirmation" | "completed";
+  player_a_id?: string | null;
+  player_b_id?: string | null;
+  status: "scheduled" | "pending_confirmation" | "completed" | "bye";
   score_a?: number | null;
   score_b?: number | null;
   set_scores_a?: number[];
@@ -134,6 +134,7 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
   const [capacity, setCapacity] = useState("8");
   const [scores, setScores] = useState<Record<string, ScoreDraft>>({});
   const [fixtureEdits, setFixtureEdits] = useState<Record<string, FixtureEdit>>({});
+  const [winnerDrafts, setWinnerDrafts] = useState<Record<string, string>>({});
   const [updatedMatchId, setUpdatedMatchId] = useState("");
   const [drawNotice, setDrawNotice] = useState("");
 
@@ -182,7 +183,7 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
       const response = await authorizedFetch(`${apiUrl}/v1/tournaments`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), sport, area: area.trim(), venue_name: venue.trim() || null, tournament_date: date, capacity: Number(capacity), format: "round_robin" }),
+        body: JSON.stringify({ name: name.trim(), sport, area: area.trim(), venue_name: venue.trim() || null, tournament_date: date, capacity: Number(capacity), format: "knockout" }),
       });
       if (!response.ok) throw new Error("Tournament creation failed");
       setSelected(await response.json() as TournamentDetails);
@@ -282,8 +283,8 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
       [match.id]: {
         round: String(match.round_number),
         match: String(match.match_number),
-        a: match.player_a_id,
-        b: match.player_b_id,
+        a: match.player_a_id ?? "",
+        b: match.player_b_id ?? "",
       },
     }));
   }
@@ -373,6 +374,36 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
     }
   }
 
+  async function selectWinner(match: TournamentMatch) {
+    if (!selected) return;
+    const winnerId = winnerDrafts[match.id] ?? match.winner_id ?? "";
+    if (!winnerId) {
+      onToast("Choose the player who won");
+      return;
+    }
+    try {
+      setBusyId(`winner-${match.id}`);
+      const response = await authorizedFetch(`${apiUrl}/v1/tournaments/${selected.tournament.id}/matches/${match.id}/winner`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ winner_id: winnerId }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { detail?: string };
+        throw new Error(payload.detail ?? "Winner update failed");
+      }
+      await openTournament(selected.tournament.id);
+      setUpdatedMatchId(match.id);
+      setDrawNotice(`${playerName(winnerId)} advances to the next round.`);
+      onToast("Winner saved and next round updated");
+      window.setTimeout(() => setUpdatedMatchId(""), 2200);
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : "Could not save this winner");
+    } finally {
+      setBusyId("");
+    }
+  }
+
   if (!currentUserId) {
     return (
       <section className="page-view tournament-page">
@@ -387,10 +418,11 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
   const registration = selected?.registrations.find((item) => item.player_id === currentUserId);
   const isOrganizer = selected?.tournament.organizer_id === currentUserId;
   const names = new Map(selected?.registrations.map((item) => [item.player_id, item.display_name]));
-  const playerName = (id: string) => names.get(id) ?? id.slice(0, 8);
+  const playerName = (id?: string | null) => id ? names.get(id) ?? id.slice(0, 8) : "Waiting for winner";
   const registeredPlayers = selected?.registrations.filter((item) => item.status === "registered") ?? [];
   const rounds = Array.from(new Set(selected?.matches.map((match) => match.round_number) ?? [])).sort((a, b) => a - b);
   const matchStatusLabel = (status: TournamentMatch["status"]) => {
+    if (status === "bye") return "Bye · advances";
     if (status === "pending_confirmation") return "Awaiting confirmation";
     if (status === "completed") return "Final result";
     return "Score not entered";
@@ -432,7 +464,7 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
         <form className="tournament-create-card" onSubmit={createTournament}>
           <div className="tournament-create-heading">
             <div><h2>New tournament</h2></div>
-            <span>Round robin</span>
+            <span>Single elimination</span>
           </div>
           <div className="tournament-form-grid">
             <label><span>Tournament name</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Whitefield Rally Cup" required /></label>
@@ -451,7 +483,7 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
           <div className="tournament-detail-nav"><button className="back-link" onClick={() => setSelected(null)}>&lt;- All tournaments</button><button className="share-tournament-button" onClick={() => void shareTournament()}>Share tournament <span>↑</span></button></div>
           <div className="tournament-detail-header">
             <div>
-              <span className="kicker">{sportLabel(selected.tournament.sport).toUpperCase()} · {selected.tournament.status.replace("_", " ").toUpperCase()}</span>
+            <span className="kicker">{sportLabel(selected.tournament.sport).toUpperCase()} · {selected.tournament.format === "knockout" ? "KNOCKOUT" : "ROUND ROBIN"} · {selected.tournament.status.replace("_", " ").toUpperCase()}</span>
               <h2>{selected.tournament.name}</h2>
               <p>{selected.tournament.tournament_date} · {selected.tournament.area}{selected.tournament.venue_name ? ` · ${selected.tournament.venue_name}` : ""}</p>
             </div>
@@ -466,7 +498,7 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
           {selected.tournament.status === "registration" && (
             <div className="tournament-action-row">
               {registration && registration.status !== "declined" && registration.status !== "withdrawn" ? <span className={`status-badge ${registration.status}`}>{registration.status === "pending" ? "Request pending" : registration.status}</span> : <button className="dark-button" onClick={() => void register()} disabled={busyId === "register"}>{busyId === "register" ? "Requesting..." : "Request to play"} <span>-&gt;</span></button>}
-              {isOrganizer && <button className="manage-group-button" onClick={() => void generateFixtures()} disabled={busyId === "fixtures"}>{busyId === "fixtures" ? "Generating..." : "Generate fixtures"}</button>}
+              {isOrganizer && <button className="manage-group-button" onClick={() => void generateFixtures()} disabled={busyId === "fixtures"}>{busyId === "fixtures" ? "Generating..." : "Generate knockout draw"}</button>}
             </div>
           )}
 
@@ -489,17 +521,20 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
             <div className="tournament-layout">
               <section className="tournament-panel">
                 <div className="tournament-panel-heading"><div><span className="kicker">THE DRAW</span><h3>Draw sheet</h3></div><span>{selected.tournament.rules.score_label} · win by {selected.tournament.rules.win_by}</span></div>
-                <p className="draw-sheet-help">Enter scores directly on a match below. Players submit, then the opponent or organizer confirms.</p>
+                <p className="draw-sheet-help">Choose a winner to advance them instantly. You can also add an optional score for a richer result.</p>
                 {drawNotice && <div className="draw-sheet-notice" role="status">{drawNotice}</div>}
                 <div className="fixture-rounds">
                   {rounds.map((round) => (
                     <div className="fixture-round" key={round}>
                       <strong>Round {round}</strong>
                       {selected.matches.filter((match) => match.round_number === round).map((match) => {
-                        const canScore = Boolean(isOrganizer) || (match.status !== "completed" && (currentUserId === match.player_a_id || currentUserId === match.player_b_id));
+                        const hasPlayers = Boolean(match.player_a_id && match.player_b_id);
+                        const canScore = hasPlayers && (Boolean(isOrganizer) || (match.status !== "completed" && (currentUserId === match.player_a_id || currentUserId === match.player_b_id)));
                         const canConfirm = match.status === "pending_confirmation" && currentUserId !== match.score_entered_by && (Boolean(isOrganizer) || currentUserId === match.player_a_id || currentUserId === match.player_b_id);
+                        const canSelectWinner = hasPlayers && (match.status === "scheduled" || (match.status === "completed" && Boolean(isOrganizer))) && (Boolean(isOrganizer) || currentUserId === match.player_a_id || currentUserId === match.player_b_id);
                         const draft = scores[match.id] ?? scoreDraftFor(match, selected.tournament.rules.best_of);
                         const fixtureEdit = fixtureEdits[match.id];
+                        const winnerDraft = winnerDrafts[match.id] ?? match.winner_id ?? "";
                         return (
                           <article className={`fixture-card fixture-${match.status}${updatedMatchId === match.id ? " fixture-updated" : ""}`} key={match.id}>
                             <div className="fixture-top"><span>Match {match.match_number}</span><span className="fixture-card-actions"><small>{matchStatusLabel(match.status)}</small>{isOrganizer && !fixtureEdit && <button className="fixture-edit-button" type="button" onClick={() => startFixtureEdit(match)}>Edit fixture</button>}</span></div>
@@ -514,7 +549,8 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
                               </div>
                               <div className="fixture-edit-actions"><button className="score-button" type="button" onClick={() => void saveFixture(match)} disabled={busyId === `fixture-${match.id}`}>{busyId === `fixture-${match.id}` ? "Saving..." : "Save fixture"}</button><button className="fixture-swap-button" type="button" onClick={() => setFixtureEdits({ ...fixtureEdits, [match.id]: { ...fixtureEdit, a: fixtureEdit.b, b: fixtureEdit.a } })}>Swap sides</button><button className="fixture-cancel-button" type="button" onClick={() => cancelFixtureEdit(match.id)}>Cancel</button></div>
                             </div>}
-                            {canScore && !fixtureEdit && <><div className="fixture-score-entry"><span className="fixture-score-label">{match.status === "completed" ? "Edit final" : "Enter score"}</span><input type="number" min="0" value={draft.a} onChange={(event) => setScores({ ...scores, [match.id]: { ...draft, a: event.target.value } })} placeholder="0" aria-label={`${playerName(match.player_a_id)} score`} /><span>:</span><input type="number" min="0" value={draft.b} onChange={(event) => setScores({ ...scores, [match.id]: { ...draft, b: event.target.value } })} placeholder="0" aria-label={`${playerName(match.player_b_id)} score`} /><button className="score-button" onClick={() => void submitScore(match, canConfirm)} disabled={busyId === match.id}>{match.status === "completed" ? "Update" : canConfirm ? "Confirm" : "Save"}</button></div>{draft.sets.length > 0 && <div className="fixture-set-scores"><span className="fixture-score-label">Set scores <small>(optional)</small></span><div className="fixture-set-score-grid">{draft.sets.map((set, index) => <label key={index}><span>Set {index + 1}</span><input type="number" min="0" value={set.a} onChange={(event) => { const sets = draft.sets.map((item, itemIndex) => itemIndex === index ? { ...item, a: event.target.value } : item); setScores({ ...scores, [match.id]: { ...draft, sets } }); }} placeholder="0" aria-label={`${playerName(match.player_a_id)} set ${index + 1} score`} /><b>:</b><input type="number" min="0" value={set.b} onChange={(event) => { const sets = draft.sets.map((item, itemIndex) => itemIndex === index ? { ...item, b: event.target.value } : item); setScores({ ...scores, [match.id]: { ...draft, sets } }); }} placeholder="0" aria-label={`${playerName(match.player_b_id)} set ${index + 1} score`} /></label>)}</div></div>}</>}
+                            {canSelectWinner && !fixtureEdit && <div className="fixture-winner-entry"><label><span>Who won?</span><select value={winnerDraft} onChange={(event) => setWinnerDrafts({ ...winnerDrafts, [match.id]: event.target.value })}><option value="">Choose a player</option><option value={match.player_a_id ?? ""}>{playerName(match.player_a_id)}</option><option value={match.player_b_id ?? ""}>{playerName(match.player_b_id)}</option></select></label><button className="advance-button" type="button" onClick={() => void selectWinner(match)} disabled={busyId === `winner-${match.id}`}>{busyId === `winner-${match.id}` ? "Updating..." : "Save winner"}</button></div>}
+                            {canScore && !fixtureEdit && <><div className="fixture-score-entry"><span className="fixture-score-label">{match.status === "completed" ? "Edit final" : "Optional score"}</span><input type="number" min="0" value={draft.a} onChange={(event) => setScores({ ...scores, [match.id]: { ...draft, a: event.target.value } })} placeholder="0" aria-label={`${playerName(match.player_a_id)} score`} /><span>:</span><input type="number" min="0" value={draft.b} onChange={(event) => setScores({ ...scores, [match.id]: { ...draft, b: event.target.value } })} placeholder="0" aria-label={`${playerName(match.player_b_id)} score`} /><button className="score-button" onClick={() => void submitScore(match, canConfirm)} disabled={busyId === match.id}>{match.status === "completed" ? "Update" : canConfirm ? "Confirm" : "Save"}</button></div>{draft.sets.length > 0 && <div className="fixture-set-scores"><span className="fixture-score-label">Set scores <small>(optional)</small></span><div className="fixture-set-score-grid">{draft.sets.map((set, index) => <label key={index}><span>Set {index + 1}</span><input type="number" min="0" value={set.a} onChange={(event) => { const sets = draft.sets.map((item, itemIndex) => itemIndex === index ? { ...item, a: event.target.value } : item); setScores({ ...scores, [match.id]: { ...draft, sets } }); }} placeholder="0" aria-label={`${playerName(match.player_a_id)} set ${index + 1} score`} /><b>:</b><input type="number" min="0" value={set.b} onChange={(event) => { const sets = draft.sets.map((item, itemIndex) => itemIndex === index ? { ...item, b: event.target.value } : item); setScores({ ...scores, [match.id]: { ...draft, sets } }); }} placeholder="0" aria-label={`${playerName(match.player_b_id)} set ${index + 1} score`} /></label>)}</div></div>}</>}
                             {match.status === "pending_confirmation" && !canConfirm && <p className="fixture-note">Waiting for the opponent to confirm this score.</p>}
                           </article>
                         );

@@ -21,7 +21,7 @@ The first implementation slice is a Python API with:
 - A free-tier deployment profile with bounded Firestore reads and scale-to-zero Cloud Run
 - Post-game feedback with fun/fairness signals, broad player skill levels, and optional team/score context
 - Gemini vision analysis of optional watch-tracker screenshots, with extracted game stats saved as activity proof
-- Tournament desk for racket-sport registration, round-robin fixtures, score confirmation, and live standings
+- Tournament desk for racket-sport registration, single-elimination draws, winner advancement, optional scores, and live standings
 
 ## Run locally
 
@@ -74,7 +74,7 @@ gcloud firestore indexes composite create \
 
 Search falls back to the existing deterministic matcher if Vertex AI, the vector index, or embeddings are unavailable. The index can take a few minutes to become ready.
 
-The Tournament Desk is a racket-sport competition MVP. Open `Tournaments`, create a pickleball, badminton, tennis, padel, squash, or table-tennis event, register players, and generate a round-robin draw. A match player can submit a result and the opponent or organizer can confirm it; only confirmed results contribute to the live leaderboard. Tournament data is stored in `tournaments`, `tournament_registrations`, and `tournament_matches` in Firestore.
+The Tournament Desk is a racket-sport competition MVP. Open `Tournaments`, create a pickleball, badminton, tennis, padel, squash, or table-tennis event, register players, and generate a single-elimination draw. Byes advance automatically; match players or the organizer select who won from the bracket and the winner advances into the next round. Optional scores and per-set scores can still be recorded, and only completed results contribute to the live leaderboard. Tournament data is stored in `tournaments`, `tournament_registrations`, and `tournament_matches` in Firestore.
 
 For coordinate-aware locality matching, set `GOOGLE_MAPS_API_KEY` with the Google Maps Geocoding API enabled. The key stays server-side; the backend geocodes search localities and profile locality labels, while browser location permission can provide more precise coordinates. If the key is absent, textual locality matching remains available.
 
@@ -120,7 +120,16 @@ COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
   python -m backend.seed_synthetic_firestore
 ```
 
-The script upserts only `demo-` records in the CourtMate collections: players, sessions, join requests, chat posts, social posts and comments, feedback, follows, notifications, tournaments, tournament registrations, and tournament matches. Social data includes multi-sport session updates, image/video examples, reactions, comments, and share counts. It does not touch Firebase Authentication or unrelated collections. To attach the Rhea Adhikari demo profile to your signed-in Firebase account, pass the Firebase Auth UID from that account:
+The script upserts only `demo-` records in the CourtMate collections: players, sessions, join requests, chat posts, session feedback, follows, notifications, tournaments, tournament registrations, and tournament matches. Home activity cards are generated from completed demo sessions and include multi-sport leaderboards, CMR movement, reactions, comments, and share counts. It does not touch Firebase Authentication or unrelated collections. To replace old authored social data, explicitly clear `social_posts` and `social_comments` while rebuilding the activity cards:
+
+```bash
+COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
+  python -m backend.seed_synthetic_firestore --replace-social
+```
+
+`--replace-social` is intentionally opt-in and deletes every document in only those two CourtMate collections. To attach the Rhea Adhikari demo profile to your signed-in Firebase account, pass the Firebase Auth UID from that account:
+
+For a faster social-only reset that skips unrelated requests, notifications, and tournament writes, add `--social-only` to the replacement command.
 
 ```bash
 COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
@@ -128,7 +137,7 @@ COURTMATE_DEMO_RHEA_UID=YOUR_FIREBASE_AUTH_UID \
   python -m backend.seed_synthetic_firestore
 ```
 
-Without `COURTMATE_DEMO_RHEA_UID`, Rhea is created as the isolated `demo-rhea-adhikari` player. The seed includes 15 synthetic multi-sport players, 68 active/upcoming sessions across 10 Bangalore areas, seven tournaments, notifications, group requests, leaderboards, social posts, and tournament fixtures so the Profile, Home, Games, social, and tournament flows are ready for a hackathon walkthrough. It is safe to rerun because the demo IDs are stable and writes are upserts.
+Without `COURTMATE_DEMO_RHEA_UID`, Rhea is created as the isolated `demo-rhea-adhikari` player. The seed includes 15 synthetic multi-sport players, 71 sessions across 10 Bangalore areas, seven tournaments, notifications, group requests, leaderboards, completed-session Home activities, and tournament fixtures so the Profile, Home, Games, social, and tournament flows are ready for a hackathon walkthrough. It is safe to rerun because the demo IDs are stable and writes are upserts.
 
 Existing player documents created before the 0-100 CMR update are converted safely when read. To permanently rewrite those records in Firestore, run the one-time migration with Application Default Credentials:
 

@@ -48,6 +48,63 @@ def generate_round_robin_matches(tournament_id: str, registrations: list[Tournam
     return matches
 
 
+def _bracket_seed_positions(size: int) -> list[int]:
+    positions = [1, 2]
+    while len(positions) < size:
+        next_size = len(positions) * 2
+        positions = [position for seed in positions for position in (seed, next_size + 1 - seed)]
+    return positions
+
+
+def generate_knockout_matches(tournament_id: str, registrations: list[TournamentRegistration]) -> list[TournamentMatch]:
+    """Build a seeded single-elimination bracket with future slots left open."""
+    players = [registration for registration in registrations if registration.status == "registered"]
+    if len(players) < 2:
+        raise ValueError("At least two registered players are needed to generate fixtures")
+    bracket_size = 1
+    while bracket_size < len(players):
+        bracket_size *= 2
+    seed_slots: list[TournamentRegistration | None] = [*players, *([None] * (bracket_size - len(players)))]
+    seed_positions = _bracket_seed_positions(bracket_size)
+    matches: list[TournamentMatch] = []
+    round_match_count = bracket_size // 2
+    for match_number in range(round_match_count):
+        player_a = seed_slots[seed_positions[match_number * 2] - 1]
+        player_b = seed_slots[seed_positions[match_number * 2 + 1] - 1]
+        if player_a is None and player_b is None:
+            continue
+        if player_a is None or player_b is None:
+            winner_id = (player_a or player_b).player_id
+            status = "bye"
+        else:
+            winner_id = None
+            status = "scheduled"
+        matches.append(TournamentMatch(
+            id=f"{tournament_id}-r1-m{match_number + 1}",
+            tournament_id=tournament_id,
+            round_number=1,
+            match_number=match_number + 1,
+            player_a_id=player_a.player_id if player_a else None,
+            player_b_id=player_b.player_id if player_b else None,
+            status=status,
+            winner_id=winner_id,
+        ))
+    round_number = 2
+    previous_match_count = round_match_count
+    while previous_match_count > 1:
+        current_match_count = previous_match_count // 2
+        for match_number in range(current_match_count):
+            matches.append(TournamentMatch(
+                id=f"{tournament_id}-r{round_number}-m{match_number + 1}",
+                tournament_id=tournament_id,
+                round_number=round_number,
+                match_number=match_number + 1,
+            ))
+        previous_match_count = current_match_count
+        round_number += 1
+    return matches
+
+
 def validate_score(score_a: int, score_b: int, rules: TournamentRules) -> None:
     if score_a == score_b:
         raise ValueError("A completed match cannot be a tie")
@@ -98,7 +155,7 @@ def calculate_standings(
         if registration.status == "registered"
     }
     for match in matches:
-        if match.status != "completed" or match.score_a is None or match.score_b is None:
+        if match.status != "completed" or not match.player_a_id or not match.player_b_id:
             continue
         player_a = entries.get(match.player_a_id)
         player_b = entries.get(match.player_b_id)
@@ -106,10 +163,11 @@ def calculate_standings(
             continue
         player_a.played += 1
         player_b.played += 1
-        player_a.points_for += match.score_a
-        player_a.points_against += match.score_b
-        player_b.points_for += match.score_b
-        player_b.points_against += match.score_a
+        if match.score_a is not None and match.score_b is not None:
+            player_a.points_for += match.score_a
+            player_a.points_against += match.score_b
+            player_b.points_for += match.score_b
+            player_b.points_against += match.score_a
         if match.winner_id == match.player_a_id:
             player_a.wins += 1
             player_b.losses += 1
@@ -118,7 +176,7 @@ def calculate_standings(
             player_b.wins += 1
             player_a.losses += 1
             player_b.table_points += 3
-        else:
+        elif match.score_a is not None and match.score_b is not None:
             player_a.draws += 1
             player_b.draws += 1
             player_a.table_points += 1

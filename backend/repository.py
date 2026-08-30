@@ -49,6 +49,7 @@ class Repository(Protocol):
     def save_tournament_match(self, match: TournamentMatch) -> TournamentMatch: ...
     def get_tournament_match(self, match_id: str) -> TournamentMatch | None: ...
     def list_tournament_matches(self, tournament_id: str) -> list[TournamentMatch]: ...
+    def delete_tournament_matches(self, tournament_id: str) -> None: ...
     def save_search_document(self, document: SearchDocument) -> SearchDocument: ...
     def delete_search_document(self, document_id: str) -> None: ...
     def list_search_documents(self) -> list[SearchDocument]: ...
@@ -237,6 +238,11 @@ class InMemoryRepository:
 
     def list_tournament_matches(self, tournament_id: str) -> list[TournamentMatch]:
         return sorted((item for item in self.tournament_matches.values() if item.tournament_id == tournament_id), key=lambda item: (item.round_number, item.match_number))
+
+    def delete_tournament_matches(self, tournament_id: str) -> None:
+        for match_id, match in list(self.tournament_matches.items()):
+            if match.tournament_id == tournament_id:
+                del self.tournament_matches[match_id]
 
     def save_search_document(self, document: SearchDocument) -> SearchDocument:
         self.search_documents[document.id] = document
@@ -520,6 +526,14 @@ class FirestoreRepository:
         documents = self.client.collection("tournament_matches").where("tournament_id", "==", tournament_id).limit(500).stream()
         matches = [TournamentMatch.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
         return sorted(matches, key=lambda item: (item.round_number, item.match_number))
+
+    def delete_tournament_matches(self, tournament_id: str) -> None:
+        documents = list(self.client.collection("tournament_matches").where("tournament_id", "==", tournament_id).limit(500).stream())
+        for start in range(0, len(documents), 400):
+            batch = self.client.batch()
+            for document in documents[start:start + 400]:
+                batch.delete(document.reference)
+            batch.commit()
 
     @staticmethod
     def _as_search_document(document) -> SearchDocument:

@@ -1,11 +1,15 @@
 """Populate Firestore with clearly marked synthetic CourtMate demo data.
 
-This script only upserts records whose IDs start with ``demo-``, plus the
-optional player ID supplied through ``COURTMATE_DEMO_RHEA_UID``. It never
-touches Firebase Authentication or non-CourtMate collections.
+By default this script only upserts synthetic ``demo-`` records, stable
+``session-activity-demo-*`` engagement records, plus the optional player ID
+supplied through ``COURTMATE_DEMO_RHEA_UID``. The
+explicit ``--replace-social`` mode clears only the CourtMate social collections
+before rebuilding completed-session activity cards. It never touches Firebase
+Authentication or unrelated collections.
 """
 
 from datetime import date, datetime, time, timedelta, timezone
+import argparse
 import os
 import re
 
@@ -26,7 +30,7 @@ from .models import (
     cmr_from_legacy_rating,
 )
 from .repository import FirestoreRepository
-from .tournaments import generate_round_robin_matches, rules_for_sport
+from .tournaments import generate_knockout_matches, rules_for_sport
 
 
 COORDINATES = {
@@ -111,63 +115,93 @@ def make_session(session_id: str, name: str, organizer_id: str, sport: str, area
         waitlist_player_ids=waitlist or [],
         external_booking_url="https://playo.co/",
         status=status,
-        social_activity_published=True,
+        social_activity_published=status == "completed",
     )
 
 
-def seed_social_content(repository: FirestoreRepository, players: list[Player], sessions: list[Session], rhea_id: str, now: datetime) -> tuple[int, int]:
-    """Create stable feed posts and comments for the social demo experience."""
+def delete_firestore_collection(repository: FirestoreRepository, collection_name: str, batch_size: int = 250) -> int:
+    """Delete one collection in bounded batches for an explicit social reset."""
+    deleted = 0
+    while True:
+        documents = list(repository.client.collection(collection_name).limit(batch_size).stream())
+        if not documents:
+            return deleted
+        batch = repository.client.batch()
+        for document in documents:
+            batch.delete(document.reference)
+        batch.commit()
+        deleted += len(documents)
+
+
+def seed_activity_history(repository: FirestoreRepository, players: list[Player], sessions: list[Session]) -> None:
+    """Attach realistic CMR movement points to completed synthetic activities."""
     players_by_id = {player.id: player for player in players}
-    sessions_by_id = {session.id: session for session in sessions}
+    movement_by_rank = (2.4, 1.2, -0.6, -1.4, 0.8, -0.9, 1.6, -0.4)
+    for session in sessions:
+        if session.status != "completed":
+            continue
+        for rank, player_id in enumerate(session.confirmed_player_ids):
+            player = players_by_id.get(player_id)
+            if not player or session.sport not in player.cmr_ratings:
+                continue
+            current = round(player.cmr_ratings[session.sport], 2)
+            delta = movement_by_rank[(rank + len(session.id)) % len(movement_by_rank)]
+            history = [point for point in player.cmr_history.get(session.sport, []) if point.session_id != session.id]
+            history.append(CMRHistoryPoint(
+                session_id=session.id,
+                session_date=session.session_date,
+                group_name=session.group_name,
+                game_rating=round(max(0.0, min(100.0, current + delta)), 2),
+                rating=current,
+                delta=delta,
+            ))
+            updated_history = dict(player.cmr_history)
+            updated_history[session.sport] = history
+            players_by_id[player_id] = player.model_copy(update={"cmr_history": updated_history})
+    for index, player in enumerate(players):
+        players[index] = players_by_id[player.id]
+        repository.save_player(players[index])
 
-    post_specs = [
-        ("demo-social-rhea-sunset", rhea_id, "pickleball", "demo-pb-sat-evening", "Sunset games are becoming my favourite way to reset after work. The rallies were close and the group energy was spot on.", None, None, ["demo-kavya", "demo-sana"], now - timedelta(hours=2)),
-        ("demo-social-meera-ladder", "demo-meera", "pickleball", "demo-pb-sun-competitive", "Competitive morning ladder at Varthur. Three tight games, one new personal best, and plenty to work on before next Sunday.", "https://images.unsplash.com/photo-1626224583764-f87db24ac4ea?auto=format&fit=crop&w=1000&q=80", "image", [rhea_id, "demo-vikram", "demo-kabir"], now - timedelta(hours=5)),
-        ("demo-social-rohit-shuttle", "demo-rohit", "badminton", "demo-badminton-evening", "Fast doubles, lots of rotation, and no one left sitting out. This is exactly what a weeknight shuttle session should feel like.", "https://images.unsplash.com/photo-1622279457486-62dcc4a431d6?auto=format&fit=crop&w=1000&q=80", "image", ["demo-sana", "demo-pooja"], now - timedelta(hours=8)),
-        ("demo-social-neil-tennis", "demo-neil", "tennis", "demo-tennis-evening", "Working on the first serve before Saturday's doubles. The new Whitefield court has a great evening setup.", "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4", "video", [rhea_id, "demo-meera"], now - timedelta(days=1)),
-        ("demo-social-vikram-padel", "demo-vikram", "padel", "demo-padel-sunday", "Padel pairs are back this weekend. Looking for steady rallies, clean lobs, and a friendly match that runs on time.", "https://images.unsplash.com/photo-1554068865-24cecd4e34b8?auto=format&fit=crop&w=1000&q=80", "image", ["demo-meera", "demo-neil"], now - timedelta(days=1, hours=4)),
-        ("demo-social-isha-squash", "demo-isha", "squash", None, "A short squash session still counts. Forty minutes on court and my legs definitely know it.", None, None, ["demo-arjun", "demo-tara"], now - timedelta(days=2)),
-        ("demo-social-nisha-table-tennis", "demo-nisha", "table_tennis", None, "Table tennis doubles night: quick hands, questionable serves, excellent laughs.", "https://images.unsplash.com/photo-1534158914592-062992fbe900?auto=format&fit=crop&w=1000&q=80", "image", ["demo-dev"], now - timedelta(days=2, hours=5)),
-        ("demo-social-kavya-rally", "demo-kavya", "pickleball", "demo-pb-sat-evening", "Brought the spare balls and somehow stayed for the longest rally of the evening. Same time next week?", None, None, [rhea_id, "demo-sana", "demo-pooja"], now - timedelta(days=3)),
-    ]
 
-    comment_specs = {
-        "demo-social-rhea-sunset": [("demo-kavya", "Count me in for the next one. I can bring the neon balls."), ("demo-sana", "That last rally was ridiculous in the best way.")],
-        "demo-social-meera-ladder": [(rhea_id, "The pace was intense. I learned a lot from the third game."), ("demo-vikram", "Next week we add a proper final." )],
-        "demo-social-rohit-shuttle": [("demo-sana", "The rotation worked really well."), ("demo-pooja", "Please keep this slot open every Wednesday.")],
-        "demo-social-neil-tennis": [("demo-meera", "That serve was looking sharp." )],
-        "demo-social-vikram-padel": [("demo-neil", "I am in if we keep the same format."), ("demo-kabir", "The lobs are getting serious.")],
-        "demo-social-isha-squash": [("demo-arjun", "Forty minutes of squash is never short." )],
-        "demo-social-nisha-table-tennis": [("demo-dev", "The serve replay is still under review." )],
-        "demo-social-kavya-rally": [(rhea_id, "Absolutely. Same court, same time."), ("demo-sana", "I will join the warm-up this time.")],
+def seed_social_content(repository: FirestoreRepository, players: list[Player], sessions: list[Session], rhea_id: str, now: datetime) -> tuple[int, int]:
+    """Create engagement records for completed session activity cards only."""
+    players_by_id = {player.id: player for player in players}
+    completed_sessions = [session for session in sessions if session.status == "completed" and session.social_activity_published]
+    engagement_specs = {
+        "demo-pb-completed": ([rhea_id, "demo-kavya", "demo-rohit"], 2, [("demo-kavya", "That final rally was a great one."), ("demo-rohit", "Good rotation and a really balanced group.")]),
+        "demo-tennis-completed": (["demo-neil", rhea_id, "demo-vikram"], 1, [(rhea_id, "The doubles format worked really well.")]),
+        "demo-badminton-completed": (["demo-rohit", "demo-isha", "demo-dev"], 3, [("demo-isha", "Fast games and smooth partner changes."), ("demo-dev", "Would happily play this format again.")]),
+        "demo-padel-completed": (["demo-meera", "demo-isha", "demo-kabir"], 1, [("demo-kabir", "The lobs were getting serious by the last game.")]),
     }
 
     post_count = 0
     comment_count = 0
-    for post_id, player_id, sport, session_id, caption, media_url, media_type, liked_by, created_at in post_specs:
-        player = players_by_id[player_id]
-        session = sessions_by_id.get(session_id) if session_id else None
-        post = SocialPost(
+    for session in completed_sessions:
+        player = players_by_id.get(session.organizer_id)
+        if not player:
+            continue
+        liked_by, share_count, comments = engagement_specs.get(session.id, ([], 0, []))
+        post_id = f"session-activity-{session.id}"
+        created_at = datetime.combine(session.session_date, session.start_time, tzinfo=now.tzinfo)
+        repository.save_social_post(SocialPost(
             id=post_id,
-            player_id=player_id,
+            player_id=session.organizer_id,
             player_display_name=player.display_name,
             profile_image_url=player.profile_image_url,
-            sport=sport,
-            session_id=session.id if session else None,
-            caption=caption,
-            media_url=media_url,
-            media_type=media_type,
-            liked_by=[player_id, *[item for item in liked_by if item != player_id]],
-            # save_social_comment increments this counter as each demo comment is written.
+            sport=session.sport,
+            session_id=session.id,
+            caption=f"{player.display_name} completed {session.group_name}.",
+            liked_by=[item for item in liked_by if item in players_by_id],
             comment_count=0,
-            share_count=2 if post_id in {"demo-social-meera-ladder", "demo-social-vikram-padel"} else 0,
+            share_count=share_count,
             created_at=created_at,
-        )
-        repository.save_social_post(post)
+        ))
         post_count += 1
 
-        for index, (commenter_id, message) in enumerate(comment_specs.get(post_id, []), start=1):
-            commenter = players_by_id[commenter_id]
+        for index, (commenter_id, message) in enumerate(comments, start=1):
+            commenter = players_by_id.get(commenter_id)
+            if not commenter:
+                continue
             repository.save_social_comment(SocialComment(
                 id=f"{post_id}-comment-{index}",
                 post_id=post_id,
@@ -370,34 +404,64 @@ def seed_tournaments(repository: FirestoreRepository, players: list[Player], org
         if event.status == "registration":
             continue
 
-        matches = generate_round_robin_matches(event.id, registrations)
+        repository.delete_tournament_matches(event.id)
+        matches = generate_knockout_matches(event.id, registrations)
+        playable_match_index = 0
         for index, match in enumerate(matches):
-            if event.id == "demo-tournament-live" and index < 4:
-                match.score_a = 11 if index % 2 == 0 else 8
-                match.score_b = 8 if index % 2 == 0 else 11
+            if event.id == "demo-tournament-live" and match.round_number == 1 and match.status == "scheduled" and match.player_a_id and match.player_b_id:
+                match.score_a = 11 if playable_match_index % 2 == 0 else 8
+                match.score_b = 8 if playable_match_index % 2 == 0 else 11
                 match.winner_id = match.player_a_id if match.score_a > match.score_b else match.player_b_id
-                match.status = "completed" if index < 3 else "pending_confirmation"
-                match.score_entered_by = organizer_id if index == 3 else match.player_a_id
-                match.confirmed_by = organizer_id if index < 3 else None
-            elif event.id == "demo-tournament-tennis":
+                match.status = "completed" if playable_match_index % 2 == 0 else "pending_confirmation"
+                match.score_entered_by = organizer_id if playable_match_index % 2 else match.player_a_id
+                match.confirmed_by = organizer_id if playable_match_index % 2 == 0 else None
+                playable_match_index += 1
+            elif event.id == "demo-tournament-tennis" and match.round_number == 1:
                 match.score_a = 2 if index % 2 == 0 else 1
                 match.score_b = 1 if index % 2 == 0 else 2
                 match.winner_id = match.player_a_id if match.score_a > match.score_b else match.player_b_id
                 match.status = "completed"
                 match.score_entered_by = event.organizer_id
                 match.confirmed_by = event.organizer_id
-            else:
+            elif event.id == "demo-tournament-tennis" and match.round_number == 2:
+                semifinal_winners = [
+                    item.winner_id for item in matches
+                    if item.round_number == 1 and item.winner_id
+                ]
+                if len(semifinal_winners) == 2:
+                    match.player_a_id, match.player_b_id = semifinal_winners
+                    match.score_a = 2
+                    match.score_b = 1
+                    match.winner_id = match.player_a_id
+                    match.status = "completed"
+                    match.score_entered_by = event.organizer_id
+                    match.confirmed_by = event.organizer_id
+            elif match.status != "bye":
                 match.status = "scheduled"
+        for match in matches:
+            if match.round_number == 1 and match.status in {"bye", "completed"} and match.winner_id:
+                next_match = next((item for item in matches if item.round_number == 2 and item.match_number == (match.match_number + 1) // 2), None)
+                if next_match:
+                    if match.match_number % 2:
+                        next_match.player_a_id = match.winner_id
+                    else:
+                        next_match.player_b_id = match.winner_id
+        for match in matches:
             repository.save_tournament_match(match)
     return len(events)
 
 
-def seed() -> None:
+def seed(replace_social: bool = False, social_only: bool = False) -> None:
     project = os.getenv("GOOGLE_CLOUD_PROJECT", "mttn-portal")
     rhea_id = os.getenv("COURTMATE_DEMO_RHEA_UID", "demo-rhea-adhikari").strip() or "demo-rhea-adhikari"
     repository = FirestoreRepository(project=project)
     today = date.today()
     now = datetime.now(timezone.utc)
+    deleted_social_posts = 0
+    deleted_social_comments = 0
+    if replace_social:
+        deleted_social_comments = delete_firestore_collection(repository, "social_comments")
+        deleted_social_posts = delete_firestore_collection(repository, "social_posts")
 
     players = [
         make_player(rhea_id, "Rhea Adhikari", "Whitefield", {"pickleball": 3.9, "tennis": 4.3, "badminton": 3.6, "padel": 3.2}, "casual", 0.95, history_games=8, age=29, gender="woman"),
@@ -437,11 +501,19 @@ def seed() -> None:
         make_session("demo-badminton-evening", "Brookefield Badminton Mix", "demo-rohit", "badminton", "Brookefield", today + timedelta(days=2), time(20), time(22), 2.8, 4.2, "social", ["demo-rohit", "demo-sana", "demo-pooja"]),
         make_session("demo-padel-sunday", "Varthur Padel Pairs", "demo-vikram", "padel", "Varthur", today + timedelta(days=4), time(9), time(11), 3.0, 4.5, "competitive", ["demo-vikram", "demo-meera"]),
         make_session("demo-pb-completed", "Past Sunday Rally", rhea_id, "pickleball", "Whitefield", today - timedelta(days=7), time(8), time(10), 3.0, 4.1, "casual", [rhea_id, "demo-kavya", "demo-rohit", "demo-sana"], status="completed"),
+        make_session("demo-tennis-completed", "Whitefield Doubles Recap", "demo-neil", "tennis", "Whitefield", today - timedelta(days=5), time(19), time(21), 3.0, 4.6, "casual", ["demo-neil", rhea_id, "demo-vikram", "demo-meera"], status="completed"),
+        make_session("demo-badminton-completed", "Brookefield Shuttle Recap", "demo-rohit", "badminton", "Brookefield", today - timedelta(days=3), time(20), time(22), 2.8, 4.2, "social", ["demo-rohit", "demo-sana", "demo-isha", "demo-dev"], status="completed"),
+        make_session("demo-padel-completed", "Varthur Padel Recap", "demo-vikram", "padel", "Varthur", today - timedelta(days=1), time(9), time(11), 3.0, 4.5, "competitive", ["demo-vikram", "demo-meera", "demo-isha", "demo-kabir"], status="completed"),
     ]
     for session in sessions:
         repository.save_session(session)
     generated_sessions = seed_additional_sessions(repository, players, today)
+    seed_activity_history(repository, players, sessions)
     social_post_count, social_comment_count = seed_social_content(repository, players, sessions, rhea_id, now)
+    if social_only:
+        replacement = f" Replaced {deleted_social_posts} social posts and {deleted_social_comments} social comments." if replace_social else ""
+        print(f"Seeded synthetic CourtMate social data into {project}: {len(players)} players, {len(sessions) + generated_sessions} sessions, {social_post_count} session activity engagement records, {social_comment_count} social comments.{replacement}")
+        return
 
     requests = [
         JoinRequest(id="demo-pb-sat-evening:demo-rohit", session_id="demo-pb-sat-evening", player_id="demo-rohit", player_display_name="Demo Rohit", status="pending", created_at=now - timedelta(hours=2)),
@@ -463,12 +535,39 @@ def seed() -> None:
     for post in posts:
         repository.save_chat_post(post)
 
-    feedback = [
-        Feedback(session_id="demo-pb-completed", player_id=rhea_id, fun=5, fairness=5, would_return=True, ratings=[PlayerRating(player_id="demo-kavya", rating=5), PlayerRating(player_id="demo-rohit", rating=4), PlayerRating(player_id="demo-sana", rating=5)], created_at=now - timedelta(days=6)),
-        Feedback(session_id="demo-pb-completed", player_id="demo-kavya", fun=5, fairness=4, would_return=True, ratings=[PlayerRating(player_id=rhea_id, rating=5), PlayerRating(player_id="demo-rohit", rating=4), PlayerRating(player_id="demo-sana", rating=4)], created_at=now - timedelta(days=6)),
-    ]
+    feedback: list[Feedback] = []
+    players_by_id = {player.id: player for player in players}
+    for session in sessions:
+        if session.status != "completed":
+            continue
+        session_players = [players_by_id[player_id] for player_id in session.confirmed_player_ids if player_id in players_by_id]
+        baseline_order = sorted(
+            session_players,
+            key=lambda candidate: candidate.cmr_ratings.get(session.sport, 0),
+            reverse=True,
+        )
+        for reviewer_index, reviewer in enumerate(session_players):
+            ordered_players = [candidate for candidate in baseline_order if candidate.id != reviewer.id]
+            if ordered_players:
+                rotation = reviewer_index % len(ordered_players)
+                ordered_players = ordered_players[rotation:] + ordered_players[:rotation]
+            feedback.append(Feedback(
+                session_id=session.id,
+                player_id=reviewer.id,
+                fun=5,
+                fairness=5,
+                would_return=True,
+                ratings=[
+                    PlayerRating(
+                        player_id=candidate.id,
+                        rank_score=round(100 - (index * 100 / max(len(ordered_players) - 1, 1)), 2),
+                    )
+                    for index, candidate in enumerate(ordered_players)
+                ],
+                created_at=now - timedelta(days=max((date.today() - session.session_date).days - 1, 0)),
+            ))
     for item in feedback:
-        repository.client.collection("feedback").document(f"demo-feedback-{item.player_id}").set(item.model_dump(mode="json"))
+        repository.client.collection("feedback").document(f"demo-feedback-{item.session_id}-{item.player_id}").set(item.model_dump(mode="json"))
 
     notifications = [
         make_notification("demo-notification-rhea-match", rhea_id, "game_match", "A game fits your profile", "East Bengaluru Ladder has a competitive spot near your usual area.", "demo-pb-sun-competitive", now - timedelta(hours=1)),
@@ -482,8 +581,23 @@ def seed() -> None:
 
     tournament_count = seed_tournaments(repository, players, rhea_id, today, now)
 
-    print(f"Seeded synthetic CourtMate data into {project}: {len(players)} players, {len(sessions) + generated_sessions} sessions, {len(requests)} requests, {len(posts)} chat posts, {social_post_count} social posts, {social_comment_count} social comments, {len(feedback)} feedback records, {len(follows)} follows, {len(notifications)} notifications, {tournament_count} tournaments.")
+    replacement = f" Replaced {deleted_social_posts} social posts and {deleted_social_comments} social comments." if replace_social else ""
+    print(f"Seeded synthetic CourtMate data into {project}: {len(players)} players, {len(sessions) + generated_sessions} sessions, {len(requests)} requests, {len(posts)} chat posts, {social_post_count} session activity engagement records, {social_comment_count} social comments, {len(feedback)} feedback records, {len(follows)} follows, {len(notifications)} notifications, {tournament_count} tournaments.{replacement}")
 
 
 if __name__ == "__main__":
-    seed()
+    parser = argparse.ArgumentParser(description="Seed synthetic CourtMate data.")
+    parser.add_argument(
+        "--replace-social",
+        action="store_true",
+        help="Delete all Firestore social_posts and social_comments before seeding completed-session activity cards.",
+    )
+    parser.add_argument(
+        "--social-only",
+        action="store_true",
+        help="Stop after rebuilding players, sessions, and completed-session social activity data.",
+    )
+    arguments = parser.parse_args()
+    if arguments.social_only and not arguments.replace_social:
+        parser.error("--social-only requires --replace-social")
+    seed(replace_social=arguments.replace_social, social_only=arguments.social_only)
