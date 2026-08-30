@@ -111,6 +111,7 @@ def make_session(session_id: str, name: str, organizer_id: str, sport: str, area
         waitlist_player_ids=waitlist or [],
         external_booking_url="https://playo.co/",
         status=status,
+        social_activity_published=True,
     )
 
 

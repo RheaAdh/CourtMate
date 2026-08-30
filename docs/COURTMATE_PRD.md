@@ -13,7 +13,7 @@ CourtMate is not a court-booking replacement or an unrestricted general-purpose 
 ## 2. Users And Problems
 
 - **Solo player:** wants a credible nearby game without joining many groups.
-- **Organizer:** wants approvals, waitlist replacement, coordination, scores, and feedback in one place.
+- **Organizer:** wants approvals, waitlist replacement, coordination, and low-friction feedback in one place.
 - **Tournament organizer:** needs request-based registration, editable local fixtures, set scores, draw sheets, and live standings.
 - **Regular player:** wants sport-specific CMR, activity history, rematches, followers, and shareable results.
 
@@ -23,7 +23,7 @@ Today, attendance is scattered across chat groups, skill labels are inconsistent
 
 ### Home activity feed
 
-For signed-in players, the first tab is **Home** and shows the social activity feed. It has Discover and Following views, synthetic/demo activity when configured, recommended players to follow, and a floating action button for creating a post. The former chat-first screen is now the **Assistant** tab and remains available through the chat icon.
+For signed-in players, the first tab is **Home** and shows the activity feed. It has Discover and Following views, synthetic/demo activity when configured, recommended players to follow, and activity-only posts from completed games. The former chat-first screen is now the **Assistant** tab and remains available through the chat icon. Home has no generic post composer.
 
 Session activity is published as leaderboard content so followers can see when someone is playing, view the current or final CMR order, and open any player profile from the author, avatar, or ranking row.
 
@@ -41,18 +41,19 @@ Informational sports and venue questions are answered without returning unrelate
 
 Games uses the same single-line tab navigator as Tournaments: **Explore, Upcoming, Pending, History**. Explore places suggested nearby games first, followed by the remaining results. The sport control contains only pickleball, badminton, tennis, padel, squash, and table tennis.
 
-Every confirmed game has a group space with member profiles, waitlist, venue/time/payment coordination, and voice-enabled chat. Players can select an active game before logging a score, or record a result in group chat. Participants can agree or dispute the result. A conversational feedback flow collects fairness, fun, skill, and return intent after completion. Confirmed scores and feedback update sport-specific CMR.
+Every confirmed game has a full-page Group Space with member profiles, waitlist, venue/time/payment coordination, and voice-enabled chat. It is the main coordination surface before and after play. The organizer marks the game done to publish the activity to Home. After completion, each player can drag the other players into the order they felt played best, starting from sport CMR order; this updates sport-specific CMR without tedious score entry. Fun, fairness, and return intent remain lightweight check-in signals.
 
 ### Social activity and sharing
 
 Social is a lightweight activity feed, not a doomscrolling network. Players can:
 
-- create text posts from the FAB;
+- share completed game activity from Group Space;
 - attach a photo or video only when tagging a game they played in;
 - add photos to a session leaderboard only as a confirmed participant;
 - react with a fire icon, with an immediate filled-yellow state and updated count;
 - view and add comments beneath every post;
-- share a post or leaderboard through the device share sheet;
+- mark a game done from its Group Space to publish one activity card with the venue, date, sport, players, and current/final CMR order;
+- share a post or creative leaderboard card through the device share sheet, including each player's CMR uptick or downtick;
 - fall back to downloading a branded CourtMate PNG and copying a deep link;
 - follow recommended players and open public profiles from avatars, comments, authors, and leaderboard rows.
 
@@ -76,6 +77,6 @@ Settings, Notifications, Activity Calendar, Connections, group spaces, rankings,
 
 Firebase sign-in, approximate locations, profile visibility, session visibility, and authorization rules protect players. AI cannot bypass authorization, capacity, privacy, approval, score confirmation, or tournament rules. Uploaded profile, session, and activity-proof media must use approved storage locations and size/type limits.
 
-The demo success path is: open Home, discover or follow a player, use Assistant to find a fit, request to join, approve, coordinate, select the active game, record and confirm a score, submit feedback, see CMR and leaderboard movement, publish activity, and share the leaderboard image.
+The demo success path is: open Home, discover or follow a player, use Assistant to find a fit, request to join, approve, coordinate in the full-page Group Space, inspect the waitlist, mark the game done, submit a drag-ordered post-game check-in, see CMR and leaderboard movement on the same activity post, and share the leaderboard image.
 
-Key signals are search-to-request conversion, confirmed attendance, repeat play, completed score/feedback, follower engagement, tournament participation, and share-card usage. All loading states use the tennis-ball loader and should communicate the specific operation, such as finding a match, opening a group, loading rankings, or refreshing games.
+Key signals are search-to-request conversion, confirmed attendance, repeat play, completed group feedback, follower engagement, tournament participation, and share-card usage. All loading states use the tennis-ball loader and should communicate the specific operation, such as finding a match, opening a group, loading rankings, or refreshing games.

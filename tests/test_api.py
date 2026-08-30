@@ -238,6 +238,17 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(payload["recommendations"], [])
         self.assertIn("doubles racket sport", payload["message"])
 
+    def test_generic_court_question_is_not_routed_to_game_search(self):
+        response = self.client.post(
+            "/v1/sessions/search",
+            json={"query": "How do I book a tennis court?", "player_id": "p1"},
+        )
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["scope"], "sports_general")
+        self.assertEqual(payload["recommendations"], [])
+        self.assertIn("book a tennis court", payload["message"].lower())
+
     def test_social_feed_supports_session_posts_likes_comments_and_shares(self):
         created = self.client.post(
             "/v1/social/posts",
@@ -270,6 +281,11 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(len(comments.json()["comments"]), 1)
 
     def test_session_activity_supports_likes_comments_and_shares(self):
+        published = self.client.post(
+            "/v1/sessions/s1/social-activity",
+            headers={"X-CourtMate-Player-ID": "p2"},
+        )
+        self.assertEqual(published.status_code, 200)
         feed = self.client.get("/v1/social/feed", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(feed.status_code, 200)
         activity = next(post for post in feed.json()["posts"] if post["id"] == "session-activity-s1")
@@ -291,6 +307,37 @@ class ApiFlowTests(unittest.TestCase):
         shared = self.client.post(f"/v1/social/posts/{post_id}/share", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(shared.status_code, 200)
         self.assertEqual(shared.json()["share_count"], 1)
+
+    def test_group_member_can_publish_live_session_that_becomes_final_leaderboard(self):
+        session = repository.get_session("s1")
+        session.social_activity_published = False
+        repository.save_session(session)
+        before = self.client.get("/v1/social/feed", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertFalse(any(post["id"] == "session-activity-s1" for post in before.json()["posts"]))
+
+        completed = self.client.post(
+            "/v1/sessions/s1/complete",
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(completed.status_code, 200)
+        self.assertTrue(completed.json()["social_activity_published"])
+
+        feed = self.client.get("/v1/social/feed", headers={"X-CourtMate-Player-ID": "p2"})
+        published = next(post for post in feed.json()["posts"] if post["id"] == "session-activity-s1")
+        self.assertEqual(published["activity_type"], "session")
+        self.assertEqual(published["session_status"], "completed")
+
+        feedback = self.client.post(
+            "/v1/sessions/s1/feedback",
+            json={"fun": 5, "fairness": 5, "would_return": True, "player_order": ["p1", "p3", "p6"]},
+            headers={"X-CourtMate-Player-ID": "p2"},
+        )
+        self.assertEqual(feedback.status_code, 200)
+        self.assertEqual(feedback.json()["ratings"][0]["player_id"], "p1")
+        self.assertEqual(feedback.json()["ratings"][0]["rank_score"], 100.0)
+        updated_feed = self.client.get("/v1/social/feed", headers={"X-CourtMate-Player-ID": "p2"})
+        updated_mvp = next(post for post in updated_feed.json()["posts"] if post["id"] == "session-activity-s1")["session_leaderboard"][0]
+        self.assertGreater(updated_mvp["cmr_delta"], 0)
 
     def test_social_feed_reuses_a_short_lived_player_scoped_cache(self):
         from unittest.mock import patch
@@ -575,7 +622,7 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(past_game["rank"], 1)
 
         chat = self.client.post(f"/v1/sessions/{session_id}/chat", json={"message": "Can we still join?"}, headers={"X-CourtMate-Player-ID": "p1"})
-        self.assertEqual(chat.status_code, 409)
+        self.assertEqual(chat.status_code, 200)
 
     def test_no_match_proposes_group_and_join_request_is_explicit(self):
         response = self.client.post("/v1/sessions/search", json={"query": "Find an advanced game near Indiranagar this Sunday evening", "player_id": "p1"})

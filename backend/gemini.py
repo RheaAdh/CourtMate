@@ -41,6 +41,10 @@ class GeminiIntentParser:
         "skiing", "snowboarding", "tennis", "badminton", "pickleball", "padel", "squash",
         "table tennis", "ping pong", "racket", "racquet",
     )
+    _GENERAL_COURT_TERMS = (
+        "court", "courts", "venue", "venues", "club", "clubs", "paddle", "shuttle",
+        "net", "volley", "serve", "serving", "rally", "ball", "racket", "racquet",
+    )
     _GENERAL_SPORT_QUESTION_TERMS = (
         "what", "why", "how", "explain", "rule", "tip", "improve", "difference", "strategy",
         "technique", "drill", "training", "practice", "score", "scoring", "serve", "grip",
@@ -57,6 +61,8 @@ class GeminiIntentParser:
         r"\bwhat are the\b",
         r"\bwhich are the\b",
         r"\brecommend(?:ed)?\b",
+        r"\bhow (?:do|can) i (?:book|reserve|choose)\b",
+        r"\b(?:cost|price|pricing|opening hours|amenities|surface)\b",
     )
 
     def __init__(self) -> None:
@@ -143,12 +149,13 @@ class GeminiIntentParser:
         if cls.is_in_scope(current, context):
             return False
         has_sport = any(term in current for term in cls._GENERAL_SPORT_TERMS)
+        has_court_topic = any(term in current for term in cls._GENERAL_COURT_TERMS)
         has_question_signal = "?" in query or any(term in current for term in cls._GENERAL_SPORT_QUESTION_TERMS)
-        has_discovery_request = bool(
+        has_session_discovery_request = bool(
             re.search(r"\b(find|search|show|join|invite|create|book|nearby|around|available)\b", current)
-            and re.search(r"\b(game|games|group|groups|session|sessions|court|courts|venue|venues|player|players|people|match|matches)\b", current)
+            and re.search(r"\b(game|games|group|groups|session|sessions|player|players|people|match|matches|tournament|tournaments)\b", current)
         )
-        return has_sport and has_question_signal and not has_discovery_request
+        return (has_sport or has_court_topic) and has_question_signal and not has_session_discovery_request
 
     @classmethod
     def _is_venue_information_query(cls, query: str) -> bool:
@@ -265,7 +272,25 @@ Verified records: {records}
                 area = area_match.group(1).strip().title() if area_match else "your area"
                 if area.lower() in {"me", "here", "my area", "my location"}:
                     area = "your area"
+                if re.search(r"\b(?:cost|price|pricing)\b", lowered):
+                    return f"{sport.title()} court prices in {area} depend on the venue, time, and whether equipment or coaching is included. Check the venue directly for live rates and availability."
+                if re.search(r"\b(?:book|reserve)\b", lowered):
+                    return f"To book a {sport} court in {area}, compare the surface, lighting, cancellation policy, and equipment rental before choosing a time. CourtMate can help find players, but live court booking needs a connected venue directory."
                 return f"{area} may have {sport} courts and clubs, but live availability, pricing, and booking need a connected venue directory; tell me the sport and time and I can help narrow the options."
+            if re.search(r"\b(?:shoe|shoes|equipment|gear|paddle|racket|racquet)\b", lowered):
+                return "Choose non-marking court shoes with stable side-to-side support and a comfortable fit. Match the racket, paddle, or strings to your level, and prioritize control and durability before extra power."
+            if re.search(r"\b(?:rule|rules|scoring|score|serve|serving)\b", lowered):
+                if "pickleball" in lowered:
+                    return "In pickleball, the serve is underarm and must land diagonally beyond the non-volley zone. Traditional scoring gives points only to the serving side, and games are commonly played to 11, win by 2."
+                if "badminton" in lowered:
+                    return "Badminton uses rally scoring: every rally awards a point, and a game is usually played to 21, win by 2 up to 30. The serve is diagonal, and the shuttle must land inside the opponent's court."
+                if "table tennis" in lowered or "ping pong" in lowered:
+                    return "Table tennis uses rally scoring, with games commonly played to 11, win by 2. Serves alternate every two points, and the ball must bounce on both sides in a legal serve."
+                if "padel" in lowered:
+                    return "Padel uses tennis-style scoring and an underarm serve. The ball can rebound off the walls after bouncing, so positioning and patience are as important as hitting power."
+                return "Most racket sports start each rally with a serve, award the point after every rally, and require the ball or shuttle to land in the opponent's legal court. Tell me the sport for exact scoring rules."
+            if re.search(r"\b(?:improve|training|train|practice|drill|technique|tactic|tactics|strategy)\b", lowered):
+                return "Build improvement around consistent serves and returns, one focused footwork drill, and short games with a clear goal. Record one thing that worked after each session and increase difficulty gradually."
             if "padel" in lowered:
                 return "Padel is a doubles racket sport played on an enclosed court with glass and mesh walls. It uses underarm serves, tennis-style scoring, and lets you play the ball after it rebounds off the walls."
             if "pickleball" in lowered:
@@ -279,7 +304,7 @@ Verified records: {records}
             if "table tennis" in lowered or "ping pong" in lowered:
                 return "Table tennis is played across a table with a small racket and lightweight ball. Spin, placement, and quick transitions matter more than simply hitting hard, especially on the serve and return."
             return fallback
-        prompt = f"""You are CourtMate's general sports assistant. Answer the user's informational question using your general sports knowledge, even when the sport or topic is not present in CourtMate's database. Cover rules, technique, tactics, training, equipment, and comparisons when relevant. Do not invent live scores, current fixtures, athlete news, or CourtMate games, players, venues, or tournaments. If the question depends on current information, say that it needs a live source. Avoid medical diagnosis and recommend a qualified professional for injuries. Keep the answer concise, clear, and practical.
+        prompt = f"""You are CourtMate's friendly general sports assistant. Answer the user's informational question using your general sports knowledge, even when the sport or topic is not present in CourtMate's database. Cover rules, technique, tactics, training, equipment, venues, and comparisons when relevant. Do not invent live scores, current fixtures, athlete news, or CourtMate games, players, venues, or tournaments. If the question depends on current information, say that it needs a live source. Avoid medical diagnosis and recommend a qualified professional for injuries. Keep the answer concise, clear, practical, and polite. Use readable Markdown: a short opening sentence, then a brief `###` heading and 2-5 bullet points or numbered steps only when they improve clarity. Do not use horizontal rules, decorative emoji headings, or repeated bold markers.
 
 User question: {query}
 """

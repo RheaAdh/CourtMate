@@ -40,25 +40,27 @@ Index only open/upcoming public games, recurring group profiles, upcoming tourna
 
 Firestore collections include `players`, `sessions`, `join_requests`, `chat_posts`, `feedback`, `notifications`, `follows`, `social_posts`, `social_comments`, `activity_proofs`, `tournaments`, `tournament_registrations`, `tournament_matches`, and `search_documents`.
 
-Game states are `open`, `full`, `in_progress`, `completed`, and `cancelled`. Requests are `pending`, `approved`, `declined`, `waitlisted`, or `withdrawn`; capacity rules can promote the next waitlisted player. Confirmed games expose group chat, member profiles, organizer requests, replacements, local leaderboards, feedback, and activity proofs.
+Game states are `open`, `full`, `in_progress`, `completed`, and `cancelled`. Requests are `pending`, `approved`, `declined`, `waitlisted`, or `withdrawn`; capacity rules can promote the next waitlisted player. Confirmed games expose full-page Group Space chat, member profiles, organizer requests, replacements, waitlist, local leaderboards, feedback, and activity proofs.
 
-Players select an active game before logging a score from Home. Group chat can parse a result into two teams, restrict players to confirmed members, and require confirmation from the involved players before CMR changes. Feedback stores fun, fairness, return intent, optional player skill levels/comments, and optional team scores.
+Every confirmed game opens in a full-page Group Space. Members use its chat to coordinate venue, arrival, payments, and post-match notes; the visible waitlist and current sport leaderboard keep the group state in one place. The organizer marks the game done once play is over, which publishes one stable session activity card to Home. Post-game feedback stores fun, fairness, return intent, and a drag-ordered ranking of the other confirmed players. The order starts from sport CMR and is converted server-side into a bounded CMR signal, so players do not need to enter scores.
 
-CMR is calculated independently per supported sport on a 0-100 scale. Confirmed results update ratings, game counts, history, and deltas. Performance chat retrieves only the authenticated player’s own history, completed games, feedback, and wearable proofs.
+CMR is calculated independently per supported sport on a 0-100 scale. Post-game player order feedback updates ratings, game counts, history, and deltas without requiring score entry. Performance chat retrieves only the authenticated player’s own history, completed games, feedback, and wearable proofs.
 
 ### Social data and permissions
 
-Social feed entries are authored posts or verified session activity. `SocialPostView` includes author, sport, optional media, like/comment/share counts, the viewer’s reaction, session metadata, session players, session status, and a CMR leaderboard. Feed visibility respects public/follower/private session settings and private profiles.
+Social feed entries are authored posts or verified session activity. `SocialPostView` includes author, sport, optional media, like/comment/share counts, the viewer’s reaction, session metadata, session players, session status, and a CMR leaderboard. Each leaderboard entry includes the player's session CMR and per-session delta when available. Feed visibility respects public/follower/private session settings and private profiles.
+
+`POST /v1/sessions/{session_id}/complete` is the Group Space publish action. It is organizer-only, sets `social_activity_published`, clears the short-lived feed cache, and materializes the stable `session-activity-{session_id}` engagement record on first feed access. The feed renders the same record with current player CMR order while a game is open or in progress; after completion and feedback processing, it renders the final leaderboard and refreshed CMR values. Completion is idempotent at the session state level and never creates duplicate activity engagement records.
 
 Media rules are enforced in both client and API layers:
 
-- a text post may be created through the Home FAB;
+- Home activity posts are created from completed sessions;
 - an image or video must reference a game and match its sport;
 - only the organizer or a confirmed participant can tag that game;
 - only confirmed session players see the Add photo control for a session activity post;
 - profile images and social media use approved Cloud Storage URLs and size/type limits.
 
-The client uses optimistic fire reactions and rolls back on failure. Comments load per post and can navigate to the commenter’s public profile. Sharing increments the API share count, renders a 1080x1350 branded leaderboard/post PNG in the browser, uses the native share sheet when available, and otherwise downloads the image and copies a deep link.
+The client uses optimistic fire reactions and rolls back on failure. Comments load per post and can navigate to the commenter’s public profile. Sharing increments the API share count, renders a 1080x1350 branded leaderboard/post PNG with a highlighted match MVP, podium-style ranks, and CMR movement indicators in the browser, uses the native share sheet when available, and otherwise downloads the image and copies a deep link.
 
 ### Tournaments
 

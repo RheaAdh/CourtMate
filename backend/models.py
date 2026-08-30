@@ -222,6 +222,7 @@ class Session(BaseModel):
     status: Literal["open", "full", "in_progress", "completed", "cancelled"] = "open"
     sport: Sport = "pickleball"
     visibility: SessionVisibility = "public"
+    social_activity_published: bool = False
 
     @property
     def open_slots(self) -> int:
@@ -654,6 +655,7 @@ class SocialLeaderboardEntry(BaseModel):
     display_name: str
     profile_image_url: str | None = None
     cmr_rating: float | None = Field(default=None, ge=0, le=100)
+    cmr_delta: float | None = None
     wins: int = 0
     losses: int = 0
     table_points: int = 0
@@ -701,12 +703,16 @@ class FeedbackRequest(BaseModel):
     fairness: int = Field(ge=1, le=5)
     would_return: bool
     ratings: list["PlayerRating"] = Field(default_factory=list)
+    # Ordered from strongest to weakest for this session. The server converts
+    # the order into a bounded CMR signal so clients do not submit raw scores.
+    player_order: list[str] = Field(default_factory=list, max_length=16)
     teams: list["MatchTeam"] = Field(default_factory=list, max_length=4)
 
 
 class PlayerRating(BaseModel):
     player_id: str
     skill_level: SkillLevel | None = None
+    rank_score: float | None = Field(default=None, ge=0, le=100)
     # Kept for old feedback documents and API clients. New feedback uses skill_level.
     rating: int | None = Field(default=None, ge=1, le=5)
     comment: str | None = Field(default=None, max_length=300)

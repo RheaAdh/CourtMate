@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, ExploreSessionsResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListItem, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentRegistrationDecisionRequest, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, ExploreSessionsResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, PlayerRating, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListItem, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentRegistrationDecisionRequest, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
 from .tournaments import calculate_standings, generate_round_robin_matches, rules_for_sport, validate_score, validate_set_scores
 from .vector_search import VectorIndexer, VectorRetriever
@@ -162,8 +162,8 @@ def _refresh_all_session_statuses(persist: bool = False) -> list[Session]:
 
 
 def _require_active_session(session: Session) -> None:
-    if session.status in {"completed", "cancelled", "in_progress"}:
-        raise HTTPException(status_code=409, detail="This game is closed and no longer accepts changes")
+    if session.status == "cancelled":
+        raise HTTPException(status_code=409, detail="Cancelled games do not accept chat messages")
 
 
 def _geocode_area(area: str) -> tuple[float, float] | None:
@@ -358,7 +358,7 @@ def social_feed(feed: str = "all", sport: Sport | None = None, player: Player = 
         posts = [post for post in posts if post.sport == sport]
     session_activities = []
     for session in sessions:
-        if session.status == "cancelled" or not session.confirmed_player_ids or not _session_visible_to_player(session, player, following_ids):
+        if not session.social_activity_published or session.status == "cancelled" or not session.confirmed_player_ids or not _session_visible_to_player(session, player, following_ids):
             continue
         if feed == "following" and not ({*following_ids, player.id} & set(session.confirmed_player_ids)):
             continue
@@ -368,6 +368,20 @@ def social_feed(feed: str = "all", sport: Sport | None = None, player: Player = 
     feed_items = [_social_post_view(post, player.id, sessions_by_id.get(post.session_id), players_by_id) for post in posts] + session_activities
     feed_items.sort(key=lambda item: item.created_at, reverse=True)
     return _cache_social_feed(cache_key, SocialFeedResponse(posts=feed_items[:50]))
+
+
+@app.post("/v1/sessions/{session_id}/social-activity", response_model=SocialPostView)
+def publish_session_social_activity(session_id: str, player: Player = Depends(get_current_player)) -> SocialPostView:
+    """Publish the stable live session card that later becomes the final leaderboard."""
+    session = _member_session(session_id, player)
+    if session.status == "cancelled":
+        raise HTTPException(status_code=409, detail="Cancelled games cannot be posted")
+    if not session.social_activity_published:
+        session = repository.save_session(session.model_copy(update={"social_activity_published": True}))
+    activity_post, _ = _ensure_social_target(_session_activity_post_id(session.id), player)
+    _clear_social_feed_cache()
+    players_by_id = {candidate.id: candidate for candidate in repository.list_players()}
+    return _session_social_view(session, players_by_id, player.id)
 
 
 def _session_visible_to_player(session: Session, player: Player, following_ids: set[str] | None = None) -> bool:
@@ -620,6 +634,11 @@ def _session_cmr_rating(candidate: Player, sport: str) -> float | None:
     return round(cmr_from_legacy_rating(legacy), 1) if legacy is not None else None
 
 
+def _session_cmr_delta(candidate: Player, session: Session) -> float | None:
+    point = next((item for item in candidate.cmr_history.get(session.sport, []) if item.session_id == session.id), None)
+    return round(point.delta, 1) if point and point.delta is not None else None
+
+
 def _session_leaderboard(session: Session, players_by_id: dict[str, Player]) -> list[SocialLeaderboardEntry]:
     players = [players_by_id[player_id] for player_id in session.confirmed_player_ids if player_id in players_by_id]
     ranked_players = sorted(
@@ -637,6 +656,7 @@ def _session_leaderboard(session: Session, players_by_id: dict[str, Player]) -> 
             display_name=candidate.display_name,
             profile_image_url=candidate.profile_image_url,
             cmr_rating=_session_cmr_rating(candidate, session.sport),
+            cmr_delta=_session_cmr_delta(candidate, session),
         )
         for index, candidate in enumerate(ranked_players, start=1)
     ]
@@ -861,11 +881,14 @@ def _refresh_cmr_ratings() -> None:
         if not session:
             continue
         for rating in feedback_item.ratings:
-            value = rating.rating
-            if rating.skill_level:
+            value = rating.rank_score
+            if value is None:
+                value = rating.rating
+            if value is None and rating.skill_level:
                 value = {"beginner": 25.0, "intermediate": 50.0, "advanced": 75.0}[rating.skill_level]
             elif value is not None:
-                value = round((value - 1) * 100 / 4, 2)
+                if rating.rank_score is None:
+                    value = round((value - 1) * 100 / 4, 2)
             if value is not None:
                 game_ratings = ratings_by_player.setdefault((rating.player_id, session.sport), {})
                 game_ratings.setdefault(session.id, []).append(value)
@@ -906,6 +929,8 @@ def _refresh_cmr_ratings() -> None:
                 cmr_ratings[sport] = running_rating
                 cmr_game_counts[sport] = rated_game_count
         repository.save_player(player.model_copy(update={"cmr_ratings": cmr_ratings, "cmr_game_counts": cmr_game_counts, "cmr_history": cmr_history, "cmr_scale": 100}))
+    # Feedback changes the leaderboard data embedded in cached Home cards.
+    _clear_social_feed_cache()
 
 
 def _notification_day_part(session: Session) -> str:
@@ -1860,8 +1885,12 @@ def complete_session(session_id: str, background_tasks: BackgroundTasks, player:
         raise HTTPException(status_code=403, detail="Only the group organizer can close this game")
     if session.status == "cancelled":
         raise HTTPException(status_code=409, detail="Cancelled games cannot be completed")
+    # Closing the game is the single publish action. The existing stable
+    # session activity card will now show the completed leaderboard on Home.
     session.status = "completed"
+    session.social_activity_published = True
     saved = repository.save_session(session)
+    _clear_social_feed_cache()
     background_tasks.add_task(_index_session_best_effort, saved)
     background_tasks.add_task(_refresh_cmr_ratings)
     return saved
@@ -1923,15 +1952,26 @@ def replacement(session_id: str, player: Player = Depends(get_current_player)) -
 @app.post("/v1/sessions/{session_id}/feedback", response_model=Feedback)
 def feedback(session_id: str, request: FeedbackRequest, background_tasks: BackgroundTasks, player: Player = Depends(get_current_player)) -> Feedback:
     session = _member_session(session_id, player)
-    ratings = request.ratings
+    confirmed_others = [player_id for player_id in session.confirmed_player_ids if player_id != player.id]
+    if request.player_order:
+        if set(request.player_order) != set(confirmed_others) or len(request.player_order) != len(set(request.player_order)):
+            raise HTTPException(status_code=422, detail="Rank every other confirmed player exactly once")
+        denominator = max(len(request.player_order) - 1, 1)
+        ranked_ratings = [
+            PlayerRating(player_id=player_id, rank_score=round(100 - (index * 100 / denominator), 2))
+            for index, player_id in enumerate(request.player_order)
+        ]
+        ratings = [*ranked_ratings, *request.ratings]
+    else:
+        ratings = request.ratings
     if request.player_id and request.rating is not None:
-        ratings = [*ratings, {"player_id": request.player_id, "rating": request.rating}]
+        ratings = [*ratings, PlayerRating(player_id=request.player_id, rating=request.rating)]
     for rating in ratings:
         if rating.player_id == player.id:
             raise HTTPException(status_code=422, detail="You cannot rate yourself")
         if rating.player_id not in session.confirmed_player_ids:
             raise HTTPException(status_code=422, detail="You can only rate players from this group")
-        if rating.skill_level is None and rating.rating is None:
+        if rating.skill_level is None and rating.rating is None and rating.rank_score is None:
             raise HTTPException(status_code=422, detail="Choose a skill level or skip this player")
     seen_team_players: set[str] = set()
     if request.teams:

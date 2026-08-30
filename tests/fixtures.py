@@ -59,6 +59,7 @@ def load_repository_fixture(repository: InMemoryRepository) -> None:
             id="s1", sport="pickleball", group_name="Sunday Rally Crew", organizer_id="p1", area="Whitefield",
             latitude=12.9698, longitude=77.7499, session_date=date(2026, 8, 30), start_time=time(8), end_time=time(10),
             skill_min=3.0, skill_max=3.5, style="casual", capacity=8, confirmed_player_ids=["p1", "p2", "p3", "p6"],
+            social_activity_published=True,
         ),
         Session(
             id="s2", sport="pickleball", group_name="East Bengaluru Social", organizer_id="p3", area="Brookefield",

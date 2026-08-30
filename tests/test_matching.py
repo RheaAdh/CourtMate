@@ -93,9 +93,19 @@ class MatchingTests(unittest.TestCase):
         self.assertTrue(parser.is_general_sports_query("I'm asking about venues near me"))
         self.assertTrue(parser.is_general_sports_query("Tell me about courts in Whitefield"))
         self.assertTrue(parser.is_general_sports_query("Tell me more about padel"))
+        self.assertTrue(parser.is_general_sports_query("How do I book a tennis court?"))
+        self.assertTrue(parser.is_general_sports_query("What shoes should I wear for pickleball?"))
+        self.assertTrue(parser.is_general_sports_query("How can I improve my badminton serve?"))
         self.assertFalse(parser.is_in_scope("Tell me about pickleball venues near me"))
         self.assertFalse(parser.is_general_sports_query("Find a tennis game near Whitefield"))
+        self.assertFalse(parser.is_general_sports_query("Find a tennis court near Whitefield"))
         self.assertFalse(parser.is_general_sports_query("What is the weather near me?"))
+
+    def test_general_sports_fallback_answers_the_topic_without_model(self):
+        parser = GeminiIntentParser()
+        self.assertIn("book a tennis court", parser.general_sports_answer("How do I book a tennis court?").lower())
+        self.assertIn("non-marking court shoes", parser.general_sports_answer("What shoes should I wear for pickleball?").lower())
+        self.assertIn("rally scoring", parser.general_sports_answer("What are the rules of badminton?").lower())
 
     def test_performance_guard_does_not_steal_game_discovery_questions(self):
         parser = GeminiIntentParser()
