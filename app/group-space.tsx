@@ -49,6 +49,7 @@ type GroupSpaceProps = {
   onClose: () => void;
   onRefresh: () => void;
   onMarkDone: () => Promise<void>;
+  onOpenPersonalRally: () => void;
   onChatPosted: (post: GroupSpacePost) => void;
   onToast: (message: string) => void;
   onViewProfile: (playerId: string) => void;
@@ -80,7 +81,7 @@ function MicrophoneIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="12" rx="4" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" /></svg>;
 }
 
-export function GroupSpace({ group, members, waitlist, posts, currentUserId, apiUrl, authorizedFetch, onClose, onRefresh, onMarkDone, onChatPosted, onToast, onViewProfile }: GroupSpaceProps) {
+export function GroupSpace({ group, members, waitlist, posts, currentUserId, apiUrl, authorizedFetch, onClose, onRefresh, onMarkDone, onOpenPersonalRally, onChatPosted, onToast, onViewProfile }: GroupSpaceProps) {
   const [draft, setDraft] = useState("");
   const [listening, setListening] = useState(false);
   const [posting, setPosting] = useState(false);
@@ -167,6 +168,12 @@ export function GroupSpace({ group, members, waitlist, posts, currentUserId, api
         </section>
         <section className="workspace-panel group-waitlist-panel group-lineup-panel"><div className="workspace-panel-heading"><div><span className="kicker">THE LINE-UP</span><h3>Players</h3></div>{group.status === "completed" ? <button className="group-lineup-rate-button" type="button" onClick={() => setFeedbackOpen(true)}>Rate players</button> : <span>{members.length} confirmed</span>}</div><p className="group-lineup-hint">Current CMR for this sport. Ratings open when the game is complete.</p><div className="group-roster-list">{members.map((member) => { const cmr = member.cmr_ratings?.[group.sport]; return <button type="button" className="group-roster-row group-profile-row" key={member.id} onClick={() => onViewProfile(member.id)} aria-label={`View ${member.display_name}'s profile`}><span className="chat-avatar">{member.profile_image_url ? <img src={member.profile_image_url} alt="" /> : initials(member.display_name)}</span><span><strong>{member.display_name}{member.id === currentUserId ? " (You)" : ""}</strong><small>{cmr != null ? "Current CMR" : "CMR building"}</small></span><b>{cmr != null ? `${cmr.toFixed(1)} CMR` : "-"}</b></button>; })}</div><div className="group-waitlist-heading"><span className="kicker">NEXT UP</span><strong>Waitlist · {waitlist.length}</strong></div>{waitlist.length ? <div className="group-waitlist-list">{waitlist.map((member, index) => <button type="button" className="group-waitlist-row group-profile-row" key={member.id} onClick={() => onViewProfile(member.id)} aria-label={`View ${member.display_name}'s profile`}><span>#{index + 1}</span><div><strong>{member.display_name}</strong><small>{member.area} · {member.style}</small></div><b>{member.cmr_ratings?.[group.sport]?.toFixed(1) ?? "-"}</b></button>)}</div> : <p className="activity-empty">No one is waiting. A player who backs out will release the next spot here.</p>}</section>
       </div>
+      {group.status === "completed" && <section className="group-space-activity-card" aria-label="Post-game activity">
+        <div className="group-space-activity-mark" aria-hidden="true">↗</div>
+        <div><span className="kicker">POST-GAME ACTIVITY</span><h2>Rally saved to your circle.</h2><p>{group.group_name} is now a completed-game update with the final line-up and each player&apos;s CMR movement.</p><div className="group-space-activity-meta"><span>{group.sport.replaceAll("_", " ")}</span><span>{members.length} players</span><span>CMR movement</span></div>
+        </div>
+        <button type="button" className="group-space-activity-open" onClick={onOpenPersonalRally}>Open Personal Rally <span>→</span></button>
+      </section>}
       {group.status === "completed" && feedbackOpen && <div id="post-game-feedback"><PostGameFeedbackPanel sessionId={group.id} sport={group.sport} members={members} currentUserId={currentUserId} apiUrl={apiUrl} authorizedFetch={authorizedFetch} onSaved={() => { setFeedbackOpen(false); onRefresh(); }} onToast={onToast} /></div>}
     </section>;
 }

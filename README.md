@@ -214,24 +214,6 @@ gcloud run deploy courtmate-api \
 
 The pasted Google Cloud free-tier limits are usage limits, not a spend cap. Set a billing budget alert in Cloud Billing and monitor Firestore reads/writes and Cloud Run requests.
 
-Profile photos use signed Google Cloud Storage uploads. The API creates a short-lived PUT URL for `gs://profile-pictures/profiles/{firebase_uid}/...`, the browser uploads directly to the bucket, and the resulting object URL is saved on the Firestore player document through `POST /v1/me/profile-image`. No service-account key is needed in the frontend. Cloud Run needs permission to create objects and sign URLs; set `COURTMATE_PROFILE_BUCKET=profile-pictures` and `COURTMATE_SIGNING_SERVICE_ACCOUNT` to the Cloud Run service account email. The MVP accepts JPG, PNG, and WebP images up to 5 MB.
-
-Configure the profile bucket once (the bucket name must be globally available):
-
-```bash
-gcloud storage buckets create gs://profile-pictures --project=mttn-portal --location=us-central1
-gcloud storage buckets update gs://profile-pictures --cors-file=gcs-profile-pictures-cors.json
-gcloud storage buckets add-iam-policy-binding gs://profile-pictures \
-  --member=allUsers \
-  --role=roles/storage.objectViewer
-gcloud storage buckets add-iam-policy-binding gs://profile-pictures \
-  --member=serviceAccount:YOUR_CLOUD_RUN_SERVICE_ACCOUNT \
-  --role=roles/storage.objectCreator
-gcloud iam service-accounts add-iam-policy-binding YOUR_CLOUD_RUN_SERVICE_ACCOUNT \
-  --member=serviceAccount:YOUR_CLOUD_RUN_SERVICE_ACCOUNT \
-  --role=roles/iam.serviceAccountTokenCreator
-```
-
-The profile object URL is intentionally stable and is meant to be readable by the app. If the bucket is not publicly readable, add an authenticated image proxy before production; the signed URL in this MVP protects the upload operation, not long-term object reads.
+Profile photos and session photos upload directly from an authenticated browser to Firebase Storage, then the app saves the generated download URL through the API. Profile files use `profile-images/{firebase_uid}/...` and are limited to JPG, PNG, or WebP files under 5 MB; game-post photos use `social-posts/{firebase_uid}/...` and are limited to 8 MB. Deploy the included `storage.rules` before enabling uploads in a deployed environment.
 
 If the traceback shows `/opt/homebrew/anaconda3/site-packages`, Uvicorn was started outside the project environment. Activate `.venv` first or run it explicitly with `.venv/bin/python -m uvicorn`.

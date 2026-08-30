@@ -37,7 +37,9 @@ const SOCIAL_RECOMMENDATIONS_CACHE_TTL_MS = 300_000;
 const socialFeedRequests = new Map<string, Promise<SocialPost[]>>();
 const socialRecommendationRequests = new Map<string, Promise<RecommendedPlayer[]>>();
 
-function socialFeedCacheKey(playerId: string, feed: "all" | "following") {
+type FeedFilter = "all" | "following" | "personal";
+
+function socialFeedCacheKey(playerId: string, feed: FeedFilter) {
   return `courtmate:social-feed:${playerId}:${feed}`;
 }
 
@@ -181,11 +183,12 @@ function SessionActivityCard({ post, currentUserId, currentUserName, currentProf
   const leaderboard = post.session_leaderboard ?? [];
   const canAddPhoto = players.some((player) => player.id === currentUserId);
   return <article className="social-post-card social-session-activity-card" id={`social-session-${post.session_id}`}>
-    <header className="social-post-header"><button type="button" className="social-profile-trigger" onClick={() => onViewProfile(post.player_id)} aria-label={`View ${post.player_display_name}'s profile`}><Avatar name={post.player_display_name} imageUrl={post.profile_image_url} large /><span><strong>{post.player_display_name}</strong><small>{status} · {sportLabel(post.sport)}</small></span></button><span className="social-post-sport">{sportLabel(post.sport)}</span></header>
+    <header className="social-post-header"><button type="button" className="social-profile-trigger" onClick={() => onViewProfile(post.player_id)} aria-label={`View ${post.player_display_name}'s profile`}><Avatar name={post.player_display_name} imageUrl={post.profile_image_url} large /><span><strong>{post.player_display_name}</strong><small>{post.session_status === "completed" ? "Completed rally" : status} · {sportLabel(post.sport)}</small></span></button><span className="social-post-sport">{sportLabel(post.sport)}</span></header>
     <div className="social-session-activity-intro"><strong>{post.caption}</strong><span>{post.session_name} · {post.session_date} · {post.session_area}</span></div>
     <div className="social-session-leaderboard"><div className="social-session-leaderboard-heading"><strong>Session leaderboard</strong><span>{post.session_status === "completed" ? "Based on this game" : "Current CMR order"}</span></div>{leaderboard.length ? leaderboard.map((entry) => { const delta = entry.cmr_delta ?? 0; return <button type="button" className={`social-session-rank-row rank-${entry.rank <= 3 ? entry.rank : "other"}`} key={entry.player_id} onClick={() => onViewProfile(entry.player_id)} aria-label={`View ${entry.display_name}'s profile to follow`} title={`View ${entry.display_name}'s profile`}><b className="social-session-rank-badge">{entry.rank}</b><Avatar name={entry.display_name} imageUrl={entry.profile_image_url} /><span><strong>{entry.display_name}</strong><small>{entry.cmr_rating != null ? `${entry.cmr_rating.toFixed(1)} CMR` : "CMR building"}</small></span><em>{entry.cmr_rating != null ? entry.cmr_rating.toFixed(1) : "--"}<small className={`social-session-trend ${delta > 0 ? "up" : delta < 0 ? "down" : "steady"}`}>{entry.cmr_delta == null ? "·" : `${delta > 0 ? "↑" : delta < 0 ? "↓" : "→"} ${Math.abs(delta).toFixed(1)}`}</small></em></button>; }) : <span className="social-session-empty">CMR rankings appear after players complete feedback.</span>}</div>
+    {post.media_url && <div className="social-post-media social-session-media"><img src={post.media_url} alt={`Court moment from ${post.session_name ?? "this game"}`} /></div>}
     <SocialPostEngagement post={post} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments} commentDraft={commentDraft} fireBusy={fireBusy} commentsBusy={commentsBusy} commentBusy={commentBusy} shareBusy={shareBusy} shareLabel="Share leaderboard" onFire={onFire} onShare={onShare} onFocusComments={onFocusComments} onLoadComments={onLoadComments} onCommentDraftChange={onCommentDraftChange} onAddComment={onAddComment} onViewProfile={onViewProfile} />
-    <div className="social-session-actions">{canAddPhoto && <label className={`social-session-photo-button ${photoBusy ? "busy" : ""}`}><input type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; if (file) onAddPhoto(post, file); }} disabled={photoBusy} />{photoBusy ? "Adding photo..." : "+ Add photo"}</label>}</div>
+    <div className="social-session-actions">{canAddPhoto && <label className={`social-session-photo-button ${photoBusy ? "busy" : ""}`}><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; if (file) onAddPhoto(post, file); }} disabled={photoBusy} />{photoBusy ? "Adding photo..." : "+ Add photo"}</label>}</div>
   </article>;
 }
 
@@ -344,9 +347,9 @@ async function createShareCard(post: SocialPost): Promise<File | null> {
   return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob ? new File([blob], "courtmate-share.png", { type: "image/png" }) : null), "image/png"));
 }
 
-export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProfileImage, authorizedFetch, onToast, onViewProfile }: SocialFeedProps) {
+export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProfileImage, authorizedFetch, onToast, onViewProfile, initialFilter = "all" }: SocialFeedProps & { initialFilter?: FeedFilter }) {
   const [posts, setPosts] = useState<SocialPost[]>([]);
-  const [feedFilter, setFeedFilter] = useState<"all" | "following">("all");
+  const [feedFilter, setFeedFilter] = useState<FeedFilter>(initialFilter);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [comments, setComments] = useState<Record<string, SocialComment[]>>({});
@@ -359,6 +362,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
     try {
       window.sessionStorage.removeItem(socialFeedCacheKey(currentUserId, "all"));
       window.sessionStorage.removeItem(socialFeedCacheKey(currentUserId, "following"));
+      window.sessionStorage.removeItem(socialFeedCacheKey(currentUserId, "personal"));
     } catch {
       // A disabled session storage should not affect feed interactions.
     }
@@ -611,18 +615,18 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
   }
 
   async function addSessionPhoto(post: SocialPost, file: File) {
-    if (!file.type.startsWith("image/")) {
-      onToast("Choose an image for this game post");
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      onToast("Choose a JPG, PNG, or WebP image for this game post");
       return;
     }
-    if (file.size > 25 * 1024 * 1024) {
-      onToast("Photo must be smaller than 25 MB");
+    if (file.size > 8 * 1024 * 1024) {
+      onToast("Photo must be smaller than 8 MB");
       return;
     }
     try {
       setBusyAction(`photo-${post.id}`);
       if (!storage) throw new Error("Firebase Storage is not configured");
-      const extension = file.name.split(".").pop()?.toLowerCase() || "jpg";
+      const extension = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
       const mediaRef = ref(storage, `social-posts/${currentUserId}/${crypto.randomUUID()}.${extension}`);
       const upload = await uploadBytes(mediaRef, file, { contentType: file.type });
       const mediaUrl = await getDownloadURL(upload.ref);
@@ -636,9 +640,9 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
         throw new Error(payload.detail ?? "Photo could not be posted");
       }
       const createdPost = await response.json() as SocialPost;
-      setPosts((current) => [createdPost, ...current]);
+      setPosts((current) => current.map((item) => item.session_id === post.session_id ? { ...item, media_url: createdPost.media_url, media_type: createdPost.media_type } : item));
       clearFeedCache();
-      onToast("Photo added to the game post");
+      onToast("Photo added to this completed game");
     } catch (error) {
       onToast(error instanceof Error ? error.message : "Could not add the photo");
     } finally {
@@ -646,32 +650,27 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
     }
   }
 
-  function changeFilter(nextFilter: "all" | "following") {
+  function changeFilter(nextFilter: FeedFilter) {
     setFeedFilter(nextFilter);
     void loadFeed(nextFilter);
   }
 
-  return <section className="social-page" aria-label="CourtMate social feed">
+  return <section className="social-page" aria-label="Rally Circles">
     <div className="social-page-heading">
-      <div className="social-feed-tabs"><button className={feedFilter === "all" ? "active" : ""} type="button" onClick={() => changeFilter("all")}>Discover</button><button className={feedFilter === "following" ? "active" : ""} type="button" onClick={() => changeFilter("following")}>Following</button></div>
+      <div className="rally-circles-intro"><span className="eyebrow">RALLY CIRCLES</span><h1>Your people, your sport, your next game.</h1><p>Completed games become shared CMR stories, so every rally leaves your circle stronger.</p></div>
+      <div className="social-feed-tabs" role="tablist" aria-label="Rally feed"><button className={feedFilter === "all" ? "active" : ""} type="button" onClick={() => changeFilter("all")} role="tab" aria-selected={feedFilter === "all"}>Discover</button><button className={feedFilter === "following" ? "active" : ""} type="button" onClick={() => changeFilter("following")} role="tab" aria-selected={feedFilter === "following"}>Following</button><button className={feedFilter === "personal" ? "active" : ""} type="button" onClick={() => changeFilter("personal")} role="tab" aria-selected={feedFilter === "personal"}>Personal Rally</button></div>
     </div>
 
-    {!recommendationsLoading && recommendedPlayers.length > 0 && <section className="social-recommendations" aria-labelledby="social-recommendations-title">
-      <div className="social-recommendations-heading"><div><span className="eyebrow">YOUR NEXT RALLY</span><h2 id="social-recommendations-title">Players you may know</h2></div><span>Nearby and active</span></div>
+    {feedFilter === "all" && !recommendationsLoading && recommendedPlayers.length > 0 && <section className="social-recommendations" aria-labelledby="social-recommendations-title">
+      <div className="social-recommendations-heading"><div><span className="eyebrow">YOUR RALLY CIRCLE</span><h2 id="social-recommendations-title">People worth playing with</h2></div><span>Nearby and active</span></div>
       <div className="social-recommendations-list">{recommendedPlayers.map((player) => { const ratedSports = Object.keys(player.cmr_ratings); const ratingLabel = ratedSports.length ? `${sportLabel(ratedSports[0] as Sport)} ${Math.round(player.cmr_ratings[ratedSports[0]])}` : "New to CMR"; return <article className="social-recommendation-card" key={player.id}><button type="button" className="social-recommendation-profile" onClick={() => onViewProfile(player.id)}><Avatar name={player.display_name} imageUrl={player.profile_image_url} large /><span><strong>{player.display_name}</strong><small>{player.area} · {ratingLabel}</small></span></button><button type="button" className="social-follow-button" onClick={() => void followRecommendedPlayer(player)} disabled={busyAction === `follow-${player.id}`}>{busyAction === `follow-${player.id}` ? "..." : "+ Follow"}</button></article>; })}</div>
     </section>}
 
     <div className="social-feed-list" aria-busy={loading}>
       {loading && <div className="social-feed-loader"><TennisBallLoader label="Loading social feed" /></div>}
       {!loading && loadError && <div className="social-feed-error" role="alert"><strong>Social is taking a breather.</strong><p>We couldn&apos;t load the latest court activity.</p><button type="button" onClick={() => void loadFeed(feedFilter, true)}>Try again <span>↗</span></button></div>}
-      {!loading && !loadError && posts.length === 0 && <div className="social-empty"><strong>{feedFilter === "following" ? "Follow players to build your feed." : "Your court activity starts here."}</strong><p>Published game sessions, leaderboards, and court moments will appear here.</p></div>}
-      {!loading && posts.map((post) => post.activity_type === "session" ? <SessionActivityCard key={post.id} post={post} currentUserId={currentUserId} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments[post.id]} commentDraft={commentDrafts[post.id] ?? ""} fireBusy={busyAction === `fire-${post.id}`} commentsBusy={busyAction === `comments-${post.id}`} commentBusy={busyAction === `comment-${post.id}`} shareBusy={busyAction === `share-${post.id}`} onFire={(socialPost) => void toggleFire(socialPost)} onViewProfile={onViewProfile} onShare={(sessionPost) => void shareSessionLeaderboard(sessionPost)} onLoadComments={(postId) => void loadComments(postId)} onFocusComments={focusComments} onCommentDraftChange={(postId, value) => setCommentDrafts((current) => ({ ...current, [postId]: value }))} onAddComment={(event, postId) => void addComment(event, postId)} onAddPhoto={(sessionPost, file) => void addSessionPhoto(sessionPost, file)} photoBusy={busyAction === `photo-${post.id}`} /> : <article className="social-post-card" id={`social-post-${post.id}`} key={post.id}>
-        <header className="social-post-header"><button type="button" className="social-profile-trigger" onClick={() => onViewProfile(post.player_id)} aria-label={`View ${post.player_display_name}'s profile`}><Avatar name={post.player_display_name} imageUrl={post.profile_image_url} large /><span><strong>{post.player_display_name}</strong><small>{sportLabel(post.sport)} · {relativeTime(post.created_at)}</small></span></button><span className="social-post-sport">{sportLabel(post.sport)}</span></header>
-        <p className="social-post-caption">{post.caption}</p>
-        {post.session_name && <div className="social-session-chip"><span>●</span><div><strong>{post.session_name}</strong><small>{post.session_date} · {post.session_area}</small></div><span>Game</span></div>}
-        {post.media_url && <div className="social-post-media">{post.media_type === "video" ? <video src={post.media_url} controls playsInline /> : <img src={post.media_url} alt="Shared court moment" />}</div>}
-        <SocialPostEngagement post={post} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments[post.id]} commentDraft={commentDrafts[post.id] ?? ""} fireBusy={busyAction === `fire-${post.id}`} commentsBusy={busyAction === `comments-${post.id}`} commentBusy={busyAction === `comment-${post.id}`} shareBusy={busyAction === `share-${post.id}`} onFire={(socialPost) => void toggleFire(socialPost)} onShare={(socialPost) => void sharePost(socialPost)} onFocusComments={focusComments} onLoadComments={(postId) => void loadComments(postId)} onCommentDraftChange={(postId, value) => setCommentDrafts((current) => ({ ...current, [postId]: value }))} onAddComment={(event, postId) => void addComment(event, postId)} onViewProfile={onViewProfile} />
-      </article>)}
+      {!loading && !loadError && posts.length === 0 && <div className="social-empty"><strong>{feedFilter === "personal" ? "Your Personal Rally starts with a completed game." : feedFilter === "following" ? "Follow players to build your Rally Circle." : "Completed rallies from your circle will appear here."}</strong><p>Each update includes the people, the game, and the CMR movement it created.</p></div>}
+      {!loading && posts.map((post) => <SessionActivityCard key={post.id} post={post} currentUserId={currentUserId} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments[post.id]} commentDraft={commentDrafts[post.id] ?? ""} fireBusy={busyAction === `fire-${post.id}`} commentsBusy={busyAction === `comments-${post.id}`} commentBusy={busyAction === `comment-${post.id}`} shareBusy={busyAction === `share-${post.id}`} onFire={(socialPost) => void toggleFire(socialPost)} onViewProfile={onViewProfile} onShare={(sessionPost) => void shareSessionLeaderboard(sessionPost)} onLoadComments={(postId) => void loadComments(postId)} onFocusComments={focusComments} onCommentDraftChange={(postId, value) => setCommentDrafts((current) => ({ ...current, [postId]: value }))} onAddComment={(event, postId) => void addComment(event, postId)} onAddPhoto={(sessionPost, file) => void addSessionPhoto(sessionPost, file)} photoBusy={busyAction === `photo-${post.id}`} />)}
     </div>
   </section>;
 }

@@ -620,10 +620,11 @@ export default function Home() {
   const [profileReturnTab, setProfileReturnTab] = useState<AppTab>("home");
   const [profileLoadingId, setProfileLoadingId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>("home");
-  const [theme, setTheme] = useState<Theme>("light");
+  const [theme, setTheme] = useState<Theme>("dark");
   const [gamesViewTab, setGamesViewTab] = useState<GamesViewTab>("upcoming");
   const [profileSport, setProfileSport] = useState<Sport | null>(null);
   const [feedFilter, setFeedFilter] = useState("best");
+  const [socialFeedEntry, setSocialFeedEntry] = useState<"all" | "following" | "personal">("all");
   const [toast, setToast] = useState("");
   const activityRequestRef = useRef<Promise<ActivitySnapshot> | null>(null);
 
@@ -633,7 +634,6 @@ export default function Home() {
       setTheme(savedTheme);
       return;
     }
-    if (window.matchMedia("(prefers-color-scheme: dark)").matches) setTheme("dark");
   }, []);
 
   useEffect(() => {
@@ -758,28 +758,20 @@ export default function Home() {
       setToast("Profile photos must be smaller than 5 MB");
       return;
     }
+    if (!storage) {
+      setToast("Photo uploads need Firebase Storage to be configured");
+      return;
+    }
     try {
       setProfilePictureUploading(true);
-      const uploadTicketResponse = await authorizedFetch(`${apiUrl}/v1/me/profile-image/upload-url`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content_type: file.type }),
-      });
-      if (!uploadTicketResponse.ok) {
-        const payload = await uploadTicketResponse.json().catch(() => ({})) as { detail?: string };
-        throw new Error(payload.detail ?? "Profile picture upload URL could not be created");
-      }
-      const uploadTicket = await uploadTicketResponse.json() as { upload_url: string; image_url: string };
-      const upload = await fetch(uploadTicket.upload_url, {
-        method: "PUT",
-        headers: { "Content-Type": file.type },
-        body: file,
-      });
-      if (!upload.ok) throw new Error("Profile picture could not be uploaded to Cloud Storage");
+      const extension = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
+      const imageRef = ref(storage, `profile-images/${user.uid}/${crypto.randomUUID()}.${extension}`);
+      const upload = await uploadBytes(imageRef, file, { contentType: file.type });
+      const imageUrl = await getDownloadURL(upload.ref);
       const response = await authorizedFetch(`${apiUrl}/v1/me/profile-image`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ profile_image_url: uploadTicket.image_url }),
+        body: JSON.stringify({ profile_image_url: imageUrl }),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({})) as { detail?: string };
@@ -787,7 +779,7 @@ export default function Home() {
       }
       const savedProfile = await response.json() as PlayerProfile;
       setProfile(savedProfile);
-      setSocialProfile((current) => current ? { ...current, profile_image_url: uploadTicket.image_url } : current);
+      setSocialProfile((current) => current ? { ...current, profile_image_url: savedProfile.profile_image_url ?? imageUrl } : current);
       setToast("Profile photo updated");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not upload profile photo");
@@ -1007,9 +999,13 @@ export default function Home() {
 
   async function decideNotificationRequest(notification: AppNotification, status: "approved" | "declined") {
     if (!notification.request_id) return;
-    await markNotificationRead(notification.id);
-    await decideJoinRequest(notification.request_id, status, notification.session_id);
-    closeUtilityPage();
+    setNotifications((items) => items.filter((item) => item.id !== notification.id));
+    const saved = await decideJoinRequest(notification.request_id, status, notification.session_id);
+    if (!saved) {
+      setNotifications((items) => items.some((item) => item.id === notification.id) ? items : [notification, ...items]);
+      return;
+    }
+    void markNotificationRead(notification.id);
   }
 
   function openNotification(notification: AppNotification) {
@@ -2233,6 +2229,7 @@ export default function Home() {
     try {
       window.sessionStorage.removeItem(`courtmate:social-feed:${user.uid}:all`);
       window.sessionStorage.removeItem(`courtmate:social-feed:${user.uid}:following`);
+      window.sessionStorage.removeItem(`courtmate:social-feed:${user.uid}:personal`);
     } catch {
       // The next feed request will still refresh from the API when storage is unavailable.
     }
@@ -2273,9 +2270,8 @@ export default function Home() {
     window.setTimeout(() => setToast(""), 2600);
   }
 
-  async function decideJoinRequest(requestId: string, status: "approved" | "declined", groupId: string | null = managedGroupId) {
-    if (!groupId) return;
-    if (decidingRequestId) return;
+  async function decideJoinRequest(requestId: string, status: "approved" | "declined", groupId: string | null = managedGroupId): Promise<boolean> {
+    if (!groupId || decidingRequestId) return false;
     try {
       setDecidingRequestId(requestId);
       const response = await authorizedFetch(`${apiUrl}/v1/sessions/${groupId}/join-requests/${requestId}/decision`, {
@@ -2300,8 +2296,10 @@ export default function Home() {
       if (groupId === managedGroupId) await loadJoinRequests(groupId, false);
       await loadGamesActivity(user, false);
       setToast(payload.status === "approved" ? "Player approved for the group" : payload.status === "waitlisted" ? "Group is full. Player added to the waitlist" : "Request declined");
+      return true;
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not update this join request");
+      return false;
     } finally {
       setDecidingRequestId(null);
       window.setTimeout(() => setToast(""), 2600);
@@ -2418,7 +2416,7 @@ export default function Home() {
         </div><span className="user-name">{user.displayName ?? user.email}</span><button className="avatar" onClick={() => selectTab("profile")} title="Open profile">{profile?.profile_image_url ? <img src={profile.profile_image_url} alt="" /> : initials(user.displayName ?? user.email ?? "CourtMate")}</button></> : <button className="sign-in-button" onClick={() => void signIn()}>{authReady ? "Sign in with Google" : "Loading auth"}</button>}</div>
       </nav>
       {user && <nav className="app-tabs" aria-label="CourtMate sections">
-        <button className={activeTab === "social" ? "active" : ""} onClick={() => selectTab("social")} title="Home"><span className="app-tab-icon"><HomeIcon /></span><span>Home</span></button>
+        <button className={activeTab === "social" ? "active" : ""} onClick={() => { setSocialFeedEntry("all"); selectTab("social"); }} title="Home"><span className="app-tab-icon"><HomeIcon /></span><span>Home</span></button>
         <button className={activeTab === "games" ? "active" : ""} onClick={() => selectTab("games")} title="Your games"><span className="app-tab-icon"><PickleballPaddleIcon /></span><span>Games</span></button>
         <button className={activeTab === "tournaments" ? "active" : ""} onClick={() => selectTab("tournaments")} title="Tournaments"><span className="app-tab-icon"><TournamentIcon /></span><span>Tournaments</span></button>
         <button className={activeTab === "home" ? "active" : ""} onClick={() => selectTab("home")} title="Assistant"><span className="app-tab-icon"><ChatIcon /></span><span>Assistant</span></button>
@@ -2447,7 +2445,7 @@ export default function Home() {
       {feedbackPickerOpen && <div className="home-score-picker" aria-label="Choose a completed game for feedback"><div className="home-score-picker-heading"><span className="eyebrow">REVIEW A GAME</span><button type="button" onClick={() => setFeedbackPickerOpen(false)} aria-label="Close feedback picker">×</button></div>{pastGames.map((pastGame) => <button className="home-score-session" type="button" key={pastGame.session.id} onClick={() => void chooseFeedbackSession(pastGame)}><span className="date-badge"><strong>{new Date(pastGame.session.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><small>{new Date(pastGame.session.session_date).getDate()}</small></span><span><strong>{pastGame.session.group_name}</strong><small>{sportLabel(pastGame.session.sport)} · {pastGame.session.start_time}–{pastGame.session.end_time} · {pastGame.session.area}</small></span><b>→</b></button>)}</div>}
       </>}
 
-      {activeTab === "social" && user && <SocialFeed apiUrl={apiUrl} currentUserId={user.uid} currentUserName={user.displayName ?? user.email ?? "CourtMate player"} currentProfileImage={profile?.profile_image_url} authorizedFetch={authorizedFetch} onToast={setToast} onViewProfile={(playerId) => void viewPlayerProfile(playerId)} />}
+      {activeTab === "social" && user && <SocialFeed apiUrl={apiUrl} currentUserId={user.uid} currentUserName={user.displayName ?? user.email ?? "CourtMate player"} currentProfileImage={profile?.profile_image_url} initialFilter={socialFeedEntry} authorizedFetch={authorizedFetch} onToast={setToast} onViewProfile={(playerId) => void viewPlayerProfile(playerId)} />}
 
       {activeTab === "games" && <section className="page-view games-page">
         <button type="button" className="section-fab games-fab" onClick={toggleGamesForm} aria-label={showCreateGame ? "Close game form" : "Create a game"} title={showCreateGame ? "Close" : "Create a game"}>{showCreateGame ? "×" : "+"}</button>
@@ -2474,7 +2472,14 @@ export default function Home() {
       </section>}
 
       {activeTab === "profile" && !viewedProfile && <section className="page-view profile-page">
-        {user && profile && <section className="profile-photo-card"><div className="profile-photo-avatar profile-avatar-editor">{profile.profile_image_url ? <img src={profile.profile_image_url} alt={`${profile.display_name} profile`} /> : initials(profile.display_name)}<label className="profile-avatar-edit" title="Change profile photo"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadProfilePicture(file); event.currentTarget.value = ""; }} disabled={profilePictureUploading} /><span aria-hidden="true">{profilePictureUploading ? "..." : "✎"}</span></label></div><div className="profile-photo-copy"><strong>{profile.display_name}</strong><small className="profile-bio-line">{profile.bio?.trim() || "Add a short bio"}</small>{socialProfile && <div className="profile-photo-social-stats"><span><strong>{totalGames}</strong><span>Games</span></span><button type="button" onClick={() => openConnections("followers")}><strong>{socialProfile.followers_count}</strong><span>Followers</span></button><button type="button" onClick={() => openConnections("following")}><strong>{socialProfile.following_count}</strong><span>Following</span></button></div>}<div className="profile-photo-actions"><button type="button" className="profile-edit-bio-button" onClick={() => setBioEditing((editing) => !editing)}>{bioEditing ? "Cancel" : "Edit bio"}</button>{profile.profile_image_url && <button type="button" className="profile-remove-photo" onClick={() => void removeProfilePicture()} disabled={profilePictureUploading}>Use initials</button>}<button type="button" className="profile-calendar-inline-button" onClick={openProfileCalendar}><span className="profile-calendar-inline-icon">▦</span><span>Activity calendar</span></button></div>{bioEditing && <form className="profile-bio-inline-editor" onSubmit={saveBio}><textarea value={profileDraft.bio} maxLength={240} placeholder="A line about how you like to play..." onChange={(event) => setProfileDraft({ ...profileDraft, bio: event.target.value })} aria-label="Profile bio" autoFocus /><button className="dark-button" type="submit" disabled={bioSaving}>{bioSaving ? "Saving..." : "Save bio"}<span>→</span></button></form>}</div></section>}
+        {user && profile && <section className="player-profile-hero">
+          <div className="player-profile-identity">
+            <div className="profile-photo-avatar profile-avatar-editor player-profile-avatar">{profile.profile_image_url ? <img src={profile.profile_image_url} alt={`${profile.display_name} profile`} /> : initials(profile.display_name)}<label className="profile-avatar-edit" title="Change profile photo"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadProfilePicture(file); event.currentTarget.value = ""; }} disabled={profilePictureUploading} /><span aria-hidden="true">{profilePictureUploading ? "..." : "✎"}</span></label></div>
+            <div className="player-profile-copy"><span className="kicker">PLAYER CARD</span><h1>{profile.display_name}</h1><p><span className="player-profile-presence" />{profile.area || "Set your locality"} · {profile.style} player</p><small className="profile-bio-line">{profile.bio?.trim() || "Add a short bio to let your next group know your game."}</small><div className="profile-photo-actions"><button type="button" className="profile-edit-bio-button" onClick={() => setBioEditing((editing) => !editing)}>{bioEditing ? "Cancel" : "Edit bio"}</button>{profile.profile_image_url && <button type="button" className="profile-remove-photo" onClick={() => void removeProfilePicture()} disabled={profilePictureUploading}>Use initials</button>}<button type="button" className="profile-calendar-inline-button" onClick={openProfileCalendar}><span className="profile-calendar-inline-icon">▦</span><span>Activity calendar</span></button></div>{bioEditing && <form className="profile-bio-inline-editor" onSubmit={saveBio}><textarea value={profileDraft.bio} maxLength={240} placeholder="A line about how you like to play..." onChange={(event) => setProfileDraft({ ...profileDraft, bio: event.target.value })} aria-label="Profile bio" autoFocus /><button className="dark-button" type="submit" disabled={bioSaving}>{bioSaving ? "Saving..." : "Save bio"}<span>→</span></button></form>}</div>
+          </div>
+          <div className="player-profile-score"><span>Current {sportLabel(profileSelectedSport)} CMR</span><strong>{currentCmr?.toFixed(1) ?? "--"}</strong><small>{currentCmr ? cmrLevelForRating(currentCmr) : "Complete a game to start"}</small></div>
+          <div className="player-profile-metrics"><span><b>{totalGames}</b><small>Games</small></span><span><b>{Math.round(profile.reliability * 100)}%</b><small>Reliable</small></span>{socialProfile && <button type="button" onClick={() => openConnections("followers")}><b>{socialProfile.followers_count}</b><small>Followers</small></button>}{socialProfile && <button type="button" onClick={() => openConnections("following")}><b>{socialProfile.following_count}</b><small>Following</small></button>}</div>
+        </section>}
         {user && profile && <ProfileSportOverview profile={profile} sports={activeSports} selectedSport={profileSelectedSport} onSelect={setProfileSport} />}
         {user && profile && <section className="profile-insights">{!ratedSports.length && <div className="cmr-no-ratings"><strong>No sport ratings yet.</strong><span>Complete a game and submit feedback to build your first CMR.</span></div>}{socialProfile && <div className="social-stats"><button type="button" onClick={() => openConnections("followers")}><strong>{socialProfile.followers_count}</strong><span>Followers</span></button><button type="button" onClick={() => openConnections("following")}><strong>{socialProfile.following_count}</strong><span>Following</span></button><span><strong>{Math.round(profile.reliability * 100)}%</strong><span>Reliability</span></span></div>}{socialProfile && <div className="profile-activity-grid"><section className="profile-activity-card"><div className="profile-activity-heading"><div><span className="kicker">ACTIVITY</span><h2>Show up streak</h2></div><span>Last 12 weeks</span></div><ActivityHeatmap activity={socialProfile.activity_by_date} /></section><section className="profile-activity-card"><div className="profile-activity-heading"><div><span className="kicker">RECENT GAMES</span><h2>{sportLabel(profileSelectedSport)} sessions</h2></div><span>{profileRecentGames.length} shown</span></div><RecentGames games={socialProfile.recent_games} sport={profileSelectedSport} /></section></div>}{ratedSports.length > 0 && <><p className="cmr-summary">Current {sportLabel(profileSelectedSport)} CMR: <strong>{currentCmr?.toFixed(1) ?? "not built"} / 100</strong><span>{currentCmr ? ` · ${cmrLevelForRating(currentCmr)}` : " · Search by level to get started"}</span></p>{profileHistory.length ? <><div className="cmr-chart-heading"><div><span className="kicker">CMR JOURNEY · {sportLabel(profileSelectedSport).toUpperCase()}</span><h2>Rating trajectory</h2></div><span>{profileHistory.length} game{profileHistory.length === 1 ? "" : "s"}</span></div><div className="cmr-chart"><svg viewBox="0 0 560 190" role="img" aria-label={`CMR trend for ${sportLabel(profileSelectedSport)}`}><line x1="28" y1="28" x2="28" y2="162" /><line x1="28" y1="162" x2="532" y2="162" /><polyline points={cmrGraphPoints(profileHistory)} fill="none" /><g>{profileHistory.filter((point) => point.rating != null).map((point, index, ratedHistory) => { const x = ratedHistory.length === 1 ? 280 : 28 + (index * 504) / (ratedHistory.length - 1); const y = 162 - ((Math.max(0, Math.min(100, point.rating ?? 0)) * 134) / 100); return <circle key={point.session_id} cx={x} cy={y} r="5"><title>{`${point.group_name}: ${(point.rating ?? 0).toFixed(1)} CMR (${(point.delta ?? 0) >= 0 ? "+" : ""}${(point.delta ?? 0).toFixed(1)})`}</title></circle>; })}</g></svg><div className="cmr-chart-scale"><span>100</span><span>0</span></div></div><div className="cmr-history-list">{profileHistory.slice().reverse().map((point) => <article className="cmr-history-row" key={point.session_id}><div><strong>{point.group_name}</strong><small>{point.session_date} · {point.game_rating != null ? `game rating ${point.game_rating.toFixed(1)} / 100` : "awaiting player feedback"}</small></div><div>{point.rating != null ? <b>{point.rating.toFixed(1)}</b> : <b>--</b>}{point.delta != null ? <span className={`cmr-history-change ${point.delta >= 0 ? "positive" : "negative"}`}><span aria-hidden="true">{point.delta > 0 ? "↑" : point.delta < 0 ? "↓" : "•"}</span>{point.delta >= 0 ? "+" : ""}{point.delta.toFixed(1)}</span> : <span className="cmr-history-change pending"><span aria-hidden="true">•</span>Pending</span>}</div></article>)}</div></> : <div className="profile-empty-insight"><strong>Your {sportLabel(profileSelectedSport)} CMR starts after your first completed game.</strong><p>CMR changes will appear here after scores and player feedback are confirmed.</p></div>}</>}</section>}
         {!user && <div className="page-empty"><strong>Sign in to manage your profile.</strong><p>Your rating and preferences are saved securely to your CourtMate profile.</p><button className="dark-button" onClick={() => void signIn()}>Sign in with Google <span>→</span></button></div>}
@@ -2489,7 +2494,7 @@ export default function Home() {
       {viewedGroup && <div className="group-modal-backdrop" onClick={() => setViewedGroup(null)}><section className="group-modal" onClick={(event) => event.stopPropagation()}><div className="group-modal-header"><div><span className="kicker">{sportLabel(viewedGroup.session.sport).toUpperCase()} GROUP PREVIEW</span><h2>{viewedGroup.session.group_name}</h2><p>{viewedGroup.session.start_time} – {viewedGroup.session.end_time} · {viewedGroup.session.area}</p></div><button className="close-button" onClick={() => setViewedGroup(null)}>×</button></div><div className="group-summary"><span><strong>{viewedGroup.members.length}/{viewedGroup.session.capacity}</strong><small>PLAYERS</small></span><span><strong>{viewedGroup.session.skill_min.toFixed(1)}–{viewedGroup.session.skill_max.toFixed(1)}</strong><small>SKILL BAND</small></span><span><strong>{viewedGroup.session.style}</strong><small>INTENSITY</small></span></div><div className="member-grid">{viewedGroup.members.map((member) => { const memberCmr = member.cmr_ratings?.[viewedGroup.session.sport]; const memberRating = memberCmr ?? member.sport_ratings?.[viewedGroup.session.sport] ?? (viewedGroup.session.sport === "pickleball" ? member.dupr_rating : undefined); return <button type="button" className="member-profile profile-link" key={member.id} onClick={() => void viewPlayerProfile(member.id)} disabled={profileLoadingId === member.id} aria-label={`View ${member.display_name}'s profile`}><div className="member-profile-avatar">{member.profile_image_url ? <img src={member.profile_image_url} alt="" /> : initials(member.display_name)}</div><div className="member-profile-copy"><h3>{member.display_name}</h3><p>{member.area} · {member.style}</p><div className="member-profile-meta"><strong>{memberCmr != null ? `CMR ${memberCmr.toFixed(1)} / 100` : memberRating ? `${sportLabel(viewedGroup.session.sport)} ${memberRating.toFixed(1)}` : "Rating not set"}</strong><span>{member.is_following ? "Following" : "View profile"}</span></div></div></button>; })}</div><div className="modal-game-actions"><button className="copy-link-button" onClick={() => void copyGroupSpaceLink(viewedGroup.session)} aria-label={`Copy ${viewedGroup.session.group_name} link`} title="Copy share link"><CopyIcon /><span>Copy link</span></button><button className="game-share-button" onClick={() => void shareGame(viewedGroup.session)}>Share game <span>↗</span></button>{viewedGroup.session.organizer_id === user?.uid ? <span className="status-badge approved modal-join">You created this group</span> : <button className="dark-button modal-join" onClick={() => void joinSession(viewedGroup.session.id, viewedGroup.session.group_name, viewedGroup.session.organizer_id)} disabled={joiningSessionId !== null}>{joiningSessionId === viewedGroup.session.id ? "Requesting..." : "Request to join"} <span>→</span></button>}</div></section></div>}
       {activeTab === "profile" && viewedProfile && <section className="page-view profile-page public-profile-page" aria-labelledby="public-profile-title"><header className="public-profile-header"><button type="button" className="profile-back-button" onClick={closePlayerProfile} aria-label="Back to previous page">←</button><div><span className="kicker">PLAYER PROFILE</span><h1 id="public-profile-title">{viewedProfile.display_name}</h1><p>{viewedProfile.area} · {viewedProfile.style}</p></div></header><section className="public-profile-identity"><div className="profile-photo-avatar">{viewedProfile.profile_image_url ? <img src={viewedProfile.profile_image_url} alt={`${viewedProfile.display_name} profile`} /> : initials(viewedProfile.display_name)}</div><div><strong>{viewedProfile.display_name}</strong><span>{viewedProfile.area}</span><div className="social-profile-stats"><span><strong>{totalGamesFor(viewedProfile)}</strong><small>GAMES</small></span><span><strong>{viewedProfile.followers_count}</strong><small>FOLLOWERS</small></span><span><strong>{viewedProfile.following_count}</strong><small>FOLLOWING</small></span></div></div></section><section className="public-profile-activity"><section className="profile-activity-card"><div className="profile-activity-heading"><div><span className="kicker">ACTIVITY</span><h2>Activity calendar</h2></div><span>Last 12 weeks</span></div><ActivityHeatmap activity={viewedProfile.activity_by_date} /></section><section className="profile-activity-card"><div className="profile-activity-heading"><div><span className="kicker">RECENT GAMES</span><h2>Where they played</h2></div><span>{viewedProfile.recent_games.length} shown</span></div><RecentGames games={viewedProfile.recent_games} /></section></section><section className="profile-sport-ratings public-profile-ratings"><span className="kicker">CMR BY SPORT</span>{Object.entries(viewedProfile.cmr_ratings ?? {}).length ? <div className="profile-rating-list">{Object.entries(viewedProfile.cmr_ratings ?? {}).map(([sport, rating]) => <span key={sport}><strong>{sportLabel(sport)}</strong><b>{rating.toFixed(1)} / 100</b></span>)}</div> : <p>No CMR ratings yet. Completed games will build them here.</p>}</section><div className="public-profile-follow"><button className={`dark-button ${viewedProfile.is_following ? "following-button" : ""}`} onClick={() => void toggleFollowProfile()}>{viewedProfile.is_following ? "Following" : "Follow"}<span>{viewedProfile.is_following ? "✓" : "+"}</span></button>{viewedProfile.follows_you && <span className="follows-you">Follows you</span>}</div></section>}
       {workspaceGroup && workspaceLoading && <section className="group-space-page group-space-loading"><TennisBallLoader label="Opening group space" detail="Loading chat, players, and the waitlist..." /></section>}
-      {workspaceGroup && !workspaceLoading && <GroupSpace group={workspaceGroup} members={groupMembers} waitlist={groupWaitlist} posts={chatPosts} currentUserId={user?.uid} apiUrl={apiUrl} authorizedFetch={authorizedFetch} onClose={() => setWorkspaceGroup(null)} onRefresh={() => void openGroupSpace(workspaceGroup)} onMarkDone={() => markGroupDone(workspaceGroup.id)} onChatPosted={(post) => setChatPosts((current) => current.some((item) => item.id === post.id) ? current : [...current, post])} onToast={setToast} onViewProfile={(playerId) => void viewPlayerProfile(playerId)} />}
+      {workspaceGroup && !workspaceLoading && <GroupSpace group={workspaceGroup} members={groupMembers} waitlist={groupWaitlist} posts={chatPosts} currentUserId={user?.uid} apiUrl={apiUrl} authorizedFetch={authorizedFetch} onClose={() => setWorkspaceGroup(null)} onRefresh={() => void openGroupSpace(workspaceGroup)} onMarkDone={() => markGroupDone(workspaceGroup.id)} onOpenPersonalRally={() => { setSocialFeedEntry("personal"); setWorkspaceGroup(null); selectTab("social"); }} onChatPosted={(post) => setChatPosts((current) => current.some((item) => item.id === post.id) ? current : [...current, post])} onToast={setToast} onViewProfile={(playerId) => void viewPlayerProfile(playerId)} />}
       {rankingGame && <section className="ranking-page" aria-labelledby="ranking-page-title"><header className="ranking-page-header"><button type="button" className="ranking-back-button" onClick={() => { if (window.location.hash) window.history.back(); else setRankingGame(null); }} aria-label="Back to games">←</button><div><span className="kicker">FINAL RANKINGS</span><h1 id="ranking-page-title">{rankingGame.group_name}</h1><p>{sportLabel(rankingGame.sport)} · {rankingGame.session_date} · {rankingGame.area}</p></div></header>{rankingLoading ? <div className="ranking-loading"><TennisBallLoader label="Loading rankings" detail="Fetching the final table..." /></div> : <div className="ranking-page-content"><section className="ranking-only-panel"><div className="ranking-only-heading"><div><span className="kicker">THIS GAME</span><h2>Group rankings</h2></div><span>{rankingEntries.length} players</span></div>{rankingEntries.length ? <div className="ranking-only-list">{rankingEntries.map((entry) => <div className={`ranking-only-row ${entry.player.id === user?.uid ? "current" : ""}`} key={entry.player.id}><span className="ranking-only-rank">{entry.rank}</span><div><strong>{entry.player.display_name}</strong><small>{entry.ratings_count} rated game{entry.ratings_count === 1 ? "" : "s"}</small></div><b>{entry.score.toFixed(1)}</b></div>)}</div> : <p className="ranking-only-empty">No confirmed rankings for this game yet.</p>}</section>{localRankingEntries.length > 0 && <section className="ranking-only-panel local-ranking-only-panel"><div className="ranking-only-heading"><div><span className="kicker">{rankingGame.area.toUpperCase()} · LOCAL</span><h2>Local leaderboard</h2></div><span>Top {Math.min(localRankingEntries.length, 5)}</span></div><div className="ranking-only-list">{localRankingEntries.slice(0, 5).map((entry) => <div className="ranking-only-row" key={entry.player.id}><span className="ranking-only-rank">{entry.rank}</span><div><strong>{entry.player.display_name}</strong><small>{entry.ratings_count} rated game{entry.ratings_count === 1 ? "" : "s"}</small></div><b>{entry.score.toFixed(1)}</b></div>)}</div></section>}</div>}</section>}
       {toast && !(activeTab === "home" && user) && <div className="toast">{toast}</div>}
     </main>

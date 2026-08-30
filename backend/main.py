@@ -378,56 +378,51 @@ def my_followers(player: Player = Depends(get_current_player)) -> PublicPlayerPr
 
 @app.get("/v1/social/feed", response_model=SocialFeedResponse)
 def social_feed(feed: str = "all", sport: Sport | None = None, player: Player = Depends(get_current_player)) -> SocialFeedResponse:
-    if feed not in {"all", "following"}:
-        raise HTTPException(status_code=422, detail="Feed must be all or following")
+    if feed not in {"all", "following", "personal"}:
+        raise HTTPException(status_code=422, detail="Feed must be all, following, or personal")
     cache_key = _social_feed_cache_key(player.id, feed, sport)
     cached = _get_cached_social_feed(cache_key)
     if cached is not None:
         return cached
     sessions = _refresh_all_session_statuses()
-    sessions_by_id = {session.id: session for session in sessions}
     players_by_id = {candidate.id: candidate for candidate in repository.list_players()}
     following_ids = {record.following_id for record in repository.list_following(player.id)}
-    # Engagement for virtual session activity is persisted under the same ID;
-    # keep that bookkeeping record out of the authored-post feed.
-    posts = [post for post in repository.list_social_posts() if _session_id_from_activity_post_id(post.id) is None]
-    posts = [
-        post for post in posts
-        if not (players_by_id.get(post.player_id) or player).is_profile_private
-        or post.player_id == player.id
-        or post.player_id in following_ids
-    ]
-    posts = [
-        post for post in posts
-        if not post.session_id
-        or (session := sessions_by_id.get(post.session_id)) is None
-        or _session_visible_to_player(session, player, following_ids)
-    ]
-    if feed == "following":
-        following_ids.add(player.id)
-        posts = [post for post in posts if post.player_id in following_ids]
-    if sport:
-        posts = [post for post in posts if post.sport == sport]
+    session_media: dict[str, SocialPost] = {}
+    for post in repository.list_social_posts():
+        if not post.session_id or not post.media_url:
+            continue
+        existing = session_media.get(post.session_id)
+        if existing is None or post.created_at > existing.created_at:
+            session_media[post.session_id] = post
+
     session_activities = []
     for session in sessions:
-        if not session.social_activity_published or session.status == "cancelled" or not session.confirmed_player_ids or not _session_visible_to_player(session, player, following_ids):
+        if (
+            not session.social_activity_published
+            or session.status != "completed"
+            or not session.confirmed_player_ids
+            or not _session_visible_to_player(session, player, following_ids)
+        ):
+            continue
+        if feed == "personal" and player.id not in session.confirmed_player_ids:
             continue
         if feed == "following" and not ({*following_ids, player.id} & set(session.confirmed_player_ids)):
             continue
         if sport and session.sport != sport:
             continue
-        session_activities.append(_session_social_view(session, players_by_id, player.id))
-    feed_items = [_social_post_view(post, player.id, sessions_by_id.get(post.session_id), players_by_id) for post in posts] + session_activities
-    feed_items.sort(key=lambda item: item.created_at, reverse=True)
-    return _cache_social_feed(cache_key, SocialFeedResponse(posts=feed_items[:50]))
+        session_activities.append(_session_social_view(session, players_by_id, player.id, session_media.get(session.id)))
+    session_activities.sort(key=lambda item: item.created_at, reverse=True)
+    return _cache_social_feed(cache_key, SocialFeedResponse(posts=session_activities[:50]))
 
 
 @app.post("/v1/sessions/{session_id}/social-activity", response_model=SocialPostView)
 def publish_session_social_activity(session_id: str, player: Player = Depends(get_current_player)) -> SocialPostView:
-    """Publish the stable live session card that later becomes the final leaderboard."""
+    """Return the completed session's stable Rally Circles activity card."""
     session = _member_session(session_id, player)
     if session.status == "cancelled":
         raise HTTPException(status_code=409, detail="Cancelled games cannot be posted")
+    if session.status != "completed":
+        raise HTTPException(status_code=409, detail="Complete the game before publishing its Rally Circles activity")
     if not session.social_activity_published:
         session = repository.save_session(session.model_copy(update={"social_activity_published": True}))
     activity_post, _ = _ensure_social_target(_session_activity_post_id(session.id), player)
@@ -612,7 +607,7 @@ def update_profile_image(request: ProfileImageUpdateRequest, player: Player = De
         and parsed_url.hostname == "storage.googleapis.com"
         and parsed_url.path.startswith(expected_prefix)
     )
-    # Keep existing Firebase Storage profile photos valid while new uploads use GCS.
+    # Firebase Storage is the browser upload path; retain the legacy signed-bucket URL for older clients.
     is_legacy_firebase_url = (
         parsed_url.scheme == "https"
         and parsed_url.hostname == "firebasestorage.googleapis.com"
@@ -790,7 +785,7 @@ def _ensure_social_target(post_id: str, player: Player) -> tuple[SocialPost, Ses
     return post, session
 
 
-def _session_social_view(session: Session, players_by_id: dict[str, Player] | None = None, viewer_id: str | None = None) -> SocialPostView:
+def _session_social_view(session: Session, players_by_id: dict[str, Player] | None = None, viewer_id: str | None = None, media_post: SocialPost | None = None) -> SocialPostView:
     players_by_id = players_by_id or {candidate.id: candidate for candidate in repository.list_players()}
     participants = [players_by_id.get(player_id) for player_id in session.confirmed_player_ids]
     players = [candidate for candidate in participants if candidate]
@@ -809,7 +804,9 @@ def _session_social_view(session: Session, players_by_id: dict[str, Player] | No
         session_name=session.group_name,
         session_date=session.session_date,
         session_area=session.area,
-        caption=f"{organizer_name} is playing in {session.group_name}.",
+        caption=f"{session.group_name} is in the books. See how the line-up moved.",
+        media_url=media_post.media_url if media_post else None,
+        media_type=media_post.media_type if media_post else None,
         # Sessions do not store a creation timestamp; use the scheduled start so
         # activity cards sort naturally alongside authored social posts.
         created_at=datetime.combine(session.session_date, session.start_time, tzinfo=local_timezone),

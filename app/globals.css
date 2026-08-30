@@ -6306,6 +6306,115 @@ body::before { border-color: rgba(117, 140, 31, .18); }
 
 .social-follow-button:hover { background: #c6e62f; }
 
+/* Rally Circles keeps the feed focused on people and completed games, not generic posting. */
+.rally-circles-intro {
+  max-width: 510px;
+}
+
+.rally-circles-intro h1 {
+  margin: 7px 0 8px;
+  color: var(--ink);
+  font-size: clamp(28px, 4vw, 43px);
+  line-height: .98;
+  letter-spacing: -.075em;
+}
+
+.rally-circles-intro p {
+  max-width: 470px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.social-feed-tabs {
+  flex: none;
+  align-self: flex-end;
+}
+
+.social-feed-tabs button {
+  white-space: nowrap;
+}
+
+.social-session-media {
+  margin: 16px 0 0;
+}
+
+.group-space-activity-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  margin-top: 16px;
+  padding: 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--lime) 55%, var(--line));
+  border-radius: 18px;
+  background: linear-gradient(115deg, color-mix(in srgb, var(--surface) 86%, var(--lime)), var(--surface));
+}
+
+.group-space-activity-mark {
+  display: grid;
+  width: 39px;
+  height: 39px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--lime);
+  color: var(--ink);
+  font-size: 21px;
+  font-weight: 900;
+}
+
+.group-space-activity-card h2 {
+  margin: 4px 0;
+  color: var(--ink);
+  font-size: 19px;
+  letter-spacing: -.05em;
+}
+
+.group-space-activity-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.group-space-activity-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.group-space-activity-meta span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 7px;
+  color: var(--muted);
+  font: 9px "DM Mono", monospace;
+  text-transform: capitalize;
+}
+
+.group-space-activity-open {
+  border: 0;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--lime);
+  padding: 11px 14px;
+  font-size: 10px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.group-space-activity-open span { margin-left: 5px; }
+
+@media (max-width: 720px) {
+  .social-page-heading { align-items: flex-start; flex-direction: column; }
+  .social-feed-tabs { align-self: stretch; width: 100%; }
+  .social-feed-tabs button { flex: 1; padding-inline: 9px; }
+  .group-space-activity-card { grid-template-columns: auto minmax(0, 1fr); }
+  .group-space-activity-open { grid-column: 1 / -1; width: 100%; }
+}
+
 @media (max-width: 600px) {
   .social-recommendations {
     margin-top: 18px;
@@ -7434,6 +7543,80 @@ html[data-theme="dark"] .copy-link-button:hover {
   background: #30452d;
 }
 
+/* Player profile: keep the identity, CMR, and activity signal together at a glance. */
+.player-profile-hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px 28px;
+  overflow: hidden;
+  margin-top: 18px;
+  padding: 28px;
+  border: 1px solid #375445;
+  border-radius: 24px;
+  background: linear-gradient(125deg, #101c18 0%, #172d24 56%, #314923 120%);
+  color: #f5f9ed;
+  box-shadow: 0 24px 52px rgba(17, 35, 27, .2);
+}
+
+.player-profile-hero::before,
+.player-profile-hero::after {
+  position: absolute;
+  width: 250px;
+  height: 250px;
+  border: 1px solid rgba(215, 242, 63, .17);
+  border-radius: 50%;
+  content: "";
+  pointer-events: none;
+}
+
+.player-profile-hero::before { right: -118px; top: -154px; }
+.player-profile-hero::after { right: 140px; bottom: -207px; width: 320px; height: 320px; border-color: rgba(215, 242, 63, .1); }
+.player-profile-identity,
+.player-profile-score,
+.player-profile-metrics { position: relative; z-index: 1; }
+.player-profile-identity { display: flex; min-width: 0; align-items: center; gap: 17px; }
+.player-profile-avatar { width: 92px; height: 92px; border: 2px solid rgba(215, 242, 63, .82); border-radius: 28px; background: #d7f23f; color: #152019; box-shadow: 0 12px 28px rgba(0, 0, 0, .24); }
+.player-profile-copy { min-width: 0; }
+.player-profile-copy .kicker { color: #cce658; }
+.player-profile-copy h1 { max-width: 100%; margin: 6px 0 5px; overflow: hidden; color: #f5f9ed; font-size: clamp(28px, 4vw, 40px); letter-spacing: -.07em; line-height: .98; text-overflow: ellipsis; white-space: nowrap; }
+.player-profile-copy > p { display: flex; align-items: center; gap: 6px; margin: 0; color: #b8c9bd; font-size: 11px; }
+.player-profile-presence { width: 7px; height: 7px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 4px rgba(215, 242, 63, .12); }
+.player-profile-copy .profile-bio-line { max-width: 480px; color: #dce8db !important; }
+.player-profile-hero .profile-edit-bio-button,
+.player-profile-hero .profile-calendar-inline-button { border-color: rgba(215, 242, 63, .46); background: rgba(215, 242, 63, .1); color: #e4f47f; }
+.player-profile-hero .profile-edit-bio-button:hover,
+.player-profile-hero .profile-calendar-inline-button:hover { background: var(--lime); color: #152019; }
+.player-profile-hero .profile-remove-photo { color: #b8c9bd; }
+.player-profile-hero .profile-avatar-edit { border-color: #172d24; background: var(--lime); color: #152019; }
+.player-profile-hero .profile-bio-inline-editor textarea { border-color: #4a654f; background: #14231d; color: #f5f9ed; }
+.player-profile-hero .profile-bio-inline-editor .dark-button { background: var(--lime); color: #152019; }
+.player-profile-score { display: flex; flex-direction: column; align-items: flex-end; min-width: 142px; padding: 14px 16px; border: 1px solid rgba(215, 242, 63, .38); border-radius: 18px; background: rgba(8, 17, 13, .34); }
+.player-profile-score > span { color: #c8d7c8; font: 8px "DM Mono", monospace; letter-spacing: .1em; text-align: right; text-transform: uppercase; }
+.player-profile-score strong { margin: 4px 0 2px; color: var(--lime); font-size: 39px; letter-spacing: -.08em; line-height: 1; }
+.player-profile-score small { color: #dce8db; font-size: 9px; }
+.player-profile-metrics { display: flex; grid-column: 1 / -1; gap: 0; padding-top: 17px; border-top: 1px solid rgba(223, 241, 226, .16); }
+.player-profile-metrics > * { display: flex; min-width: 88px; flex-direction: column; gap: 4px; padding: 0 18px; border: 0; border-right: 1px solid rgba(223, 241, 226, .16); background: transparent; color: #f5f9ed; text-align: left; }
+.player-profile-metrics > *:first-child { padding-left: 0; }
+.player-profile-metrics > *:last-child { border-right: 0; }
+.player-profile-metrics b { color: #f5f9ed; font-size: 18px; letter-spacing: -.05em; }
+.player-profile-metrics small { color: #b8c9bd; font: 8px "DM Mono", monospace; letter-spacing: .1em; text-transform: uppercase; }
+.player-profile-metrics button:hover b,
+.player-profile-metrics button:hover small { color: var(--lime); }
+
+@media (max-width: 600px) {
+  .player-profile-hero { grid-template-columns: 1fr; gap: 16px; padding: 20px; border-radius: 20px; }
+  .player-profile-identity { align-items: flex-start; gap: 13px; }
+  .player-profile-avatar { width: 72px; height: 72px; border-radius: 23px; }
+  .player-profile-copy h1 { font-size: 28px; }
+  .player-profile-score { align-items: flex-start; width: 100%; min-width: 0; }
+  .player-profile-score > span { text-align: left; }
+  .player-profile-metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; padding-top: 14px; }
+  .player-profile-metrics > * { min-width: 0; padding: 0 12px; }
+  .player-profile-metrics > *:nth-child(odd) { padding-left: 0; }
+  .player-profile-metrics > *:nth-child(2) { border-right: 0; }
+}
+
 @media (max-width: 600px) {
   .modal-game-actions {
     align-items: stretch;
@@ -7443,5 +7626,142 @@ html[data-theme="dark"] .copy-link-button:hover {
   .modal-game-actions .game-share-button,
   .modal-game-actions .modal-join {
     width: 100%;
+  }
+}
+
+/* Group Space stays a compact, one-column workspace above the mobile tab bar. */
+@media (max-width: 600px) {
+  .group-space-page.group-space-v2 {
+    width: 100%;
+    min-height: 0;
+    margin: 0;
+    padding: 12px 0 calc(116px + env(safe-area-inset-bottom));
+  }
+
+  .group-space-v2-header {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 10px;
+    padding-bottom: 14px;
+  }
+
+  .group-space-back-button {
+    padding-top: 2px;
+  }
+
+  .group-space-back-button span {
+    display: none;
+  }
+
+  .group-space-title h1 {
+    margin-top: 5px;
+    overflow-wrap: anywhere;
+    font-size: 24px;
+    line-height: 1.02;
+  }
+
+  .group-space-title p {
+    font-size: 10px;
+    line-height: 1.45;
+  }
+
+  .group-space-header-actions {
+    grid-column: 1 / -1;
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .group-space-mark-done-button {
+    flex: 1;
+    min-height: 38px;
+  }
+
+  .group-space-v2-grid {
+    gap: 12px;
+    margin-top: 12px;
+  }
+
+  .group-space-v2-chat,
+  .group-waitlist-panel {
+    padding: 14px;
+    border-radius: 16px;
+  }
+
+  .group-space-v2-chat {
+    min-height: 0;
+  }
+
+  .group-space-v2-heading {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .group-space-v2-heading-actions {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .group-space-v2-feed {
+    flex: none;
+    max-height: min(42dvh, 340px);
+    padding-right: 2px;
+  }
+
+  .group-space-v2-composer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 38px auto;
+    gap: 6px;
+  }
+
+  .group-space-v2-composer .dark-button {
+    min-width: 48px;
+    margin: 0;
+    padding: 10px 8px;
+  }
+
+  .group-space-v2-composer .chat-voice-button {
+    width: 38px;
+    height: 38px;
+  }
+
+  .group-space-v2-hint {
+    margin-top: 8px;
+  }
+
+  .group-lineup-hint {
+    margin-bottom: 8px;
+  }
+
+  .group-roster-row,
+  .group-waitlist-row {
+    min-width: 0;
+  }
+
+  .group-roster-row b,
+  .group-waitlist-row b {
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .group-space-page .feedback-panel-new {
+    margin-top: 12px;
+    padding: 15px;
+  }
+}
+
+/* Keep the mobile app chrome available while any screen scrolls. */
+@media (max-width: 600px) {
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: 60;
+  }
+
+  .app-tabs {
+    position: fixed;
+    right: 16px;
+    bottom: max(13px, env(safe-area-inset-bottom));
+    left: 16px;
+    z-index: 55;
   }
 }

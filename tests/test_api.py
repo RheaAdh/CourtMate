@@ -273,7 +273,7 @@ class ApiFlowTests(unittest.TestCase):
 
         feed = self.client.get("/v1/social/feed", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(feed.status_code, 200)
-        self.assertEqual(feed.json()["posts"][0]["like_count"], 0)
+        self.assertFalse(any(post["id"] == post_id for post in feed.json()["posts"]))
 
         liked = self.client.post(f"/v1/social/posts/{post_id}/like", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertTrue(liked.json()["liked_by_me"])
@@ -292,12 +292,23 @@ class ApiFlowTests(unittest.TestCase):
         comments = self.client.get(f"/v1/social/posts/{post_id}/comments", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(len(comments.json()["comments"]), 1)
 
+    def test_personal_rally_contains_only_the_players_completed_session_cards(self):
+        completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(completed.status_code, 200)
+
+        feed = self.client.get("/v1/social/feed?feed=personal", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(feed.status_code, 200)
+        posts = feed.json()["posts"]
+        self.assertTrue(any(post["id"] == "session-activity-s1" for post in posts))
+        self.assertTrue(all(post["activity_type"] == "session" and post["session_status"] == "completed" for post in posts))
+        self.assertTrue(all(any(member["id"] == "p2" for member in post["session_players"]) for post in posts))
+
     def test_session_activity_supports_likes_comments_and_shares(self):
-        published = self.client.post(
-            "/v1/sessions/s1/social-activity",
-            headers={"X-CourtMate-Player-ID": "p2"},
-        )
-        self.assertEqual(published.status_code, 200)
+        incomplete = self.client.post("/v1/sessions/s1/social-activity", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(incomplete.status_code, 409)
+
+        completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(completed.status_code, 200)
         feed = self.client.get("/v1/social/feed", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(feed.status_code, 200)
         activity = next(post for post in feed.json()["posts"] if post["id"] == "session-activity-s1")
