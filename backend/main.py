@@ -14,9 +14,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialPost, SocialPostCreateRequest, SocialPostView, Sport, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialPost, SocialPostCreateRequest, SocialPostView, Sport, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListItem, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentRegistrationDecisionRequest, TournamentScoreRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
 from .tournaments import calculate_standings, generate_round_robin_matches, rules_for_sport, validate_score
+from .vector_search import VectorIndexer, VectorRetriever
 
 
 load_dotenv()
@@ -32,6 +33,8 @@ app.add_middleware(
 )
 repository = create_repository()
 intent_parser = GeminiIntentParser()
+vector_retriever = VectorRetriever(repository)
+vector_indexer = VectorIndexer(repository)
 local_timezone = ZoneInfo(os.getenv("COURTMATE_TIMEZONE", "Asia/Kolkata"))
 _geocode_cache: dict[str, tuple[float, float] | None] = {}
 _fallback_area_coordinates = {
@@ -43,6 +46,29 @@ _fallback_area_coordinates = {
     "koramangala": (12.9352, 77.6245),
 }
 _known_localities = tuple(_fallback_area_coordinates)
+
+
+def _index_session_best_effort(session: Session) -> None:
+    """Keep search enrichment optional so a model/index outage never blocks writes."""
+    try:
+        if session.status in {"completed", "cancelled"}:
+            repository.delete_search_document(f"session__{session.id}")
+        else:
+            vector_indexer.upsert_session(session)
+    except Exception:
+        # The operational Firestore record remains valid; rebuild_vector_index
+        # can repair an unavailable or newly-created vector index later.
+        return
+
+
+def _index_tournament_best_effort(tournament: Tournament) -> None:
+    try:
+        if tournament.status in {"completed", "cancelled"}:
+            repository.delete_search_document(f"tournament__{tournament.id}")
+        else:
+            vector_indexer.upsert_tournament(tournament)
+    except Exception:
+        return
 
 
 def get_current_player(identity: AuthIdentity = Depends(get_current_identity)) -> Player:
@@ -70,6 +96,7 @@ def _refresh_session_status(session: Session) -> Session:
     if next_status != session.status:
         session.status = next_status
         repository.save_session(session)
+        _index_session_best_effort(session)
         if next_status == "completed":
             _refresh_cmr_ratings()
     return session
@@ -398,7 +425,7 @@ def _profile_activity(player_id: str) -> tuple[list[ProfileGameSummary], dict[st
     today = date.today()
     window_start = today - timedelta(days=83)
     sessions = [session for session in repository.list_sessions() if player_id in session.confirmed_player_ids and session.status != "cancelled"]
-    played_sessions = [session for session in sessions if session.session_date <= today]
+    played_sessions = [session for session in sessions if session.session_date < today or session.status == "completed"]
     recent_games = [
         ProfileGameSummary(
             id=session.id,
@@ -706,6 +733,51 @@ def _group_proposal(intent: SearchIntent, player_id: str, proposed_name: str | N
     )
 
 
+def _is_tournament_query(query: str) -> bool:
+    return bool(re.search(r"\b(tournament|tournaments|competition|competitions|ladder|draw sheet|fixtures?)\b", query.lower()))
+
+
+def _search_tournaments(query: str, intent: SearchIntent, player: Player, exact: bool, tournaments: list[Tournament] | None = None) -> list[TournamentListItem]:
+    lowered = query.lower()
+    wants_history = bool(re.search(r"\b(past|history|completed|finished)\b", lowered))
+    explicit_sport = any(term in lowered for term in ("pickleball", "badminton", "tennis", "padel", "squash", "table tennis", "table-tennis", "ping pong"))
+    explicit_area = bool(re.search(r"\b(near|around|in|at)\s+", lowered))
+    tournaments = tournaments if tournaments is not None else repository.list_tournaments()
+    scored: list[tuple[float, Tournament]] = []
+    for tournament in tournaments:
+        if not wants_history and tournament.status in {"completed", "cancelled"}:
+            continue
+        if explicit_sport and tournament.sport != intent.sport:
+            continue
+        area_matches = tournament.area.strip().lower() == intent.area.strip().lower()
+        if explicit_area and not area_matches:
+            continue
+        if exact and intent.date and tournament.tournament_date != intent.date:
+            continue
+        score = 0.0
+        if area_matches:
+            score += 4
+        if explicit_sport:
+            score += 3
+        if intent.date:
+            days_away = abs((tournament.tournament_date - intent.date).days)
+            score += max(0.0, 4 - min(days_away, 4))
+        else:
+            days_away = max(0, (tournament.tournament_date - date.today()).days)
+            score += max(0.0, 2 - min(days_away / 30, 2))
+        registered_count = sum(item.status == "registered" for item in repository.list_tournament_registrations(tournament.id))
+        if registered_count < tournament.capacity:
+            score += 1
+        scored.append((score, tournament))
+
+    scored.sort(key=lambda item: (-item[0], item[1].tournament_date, item[1].name.lower()))
+    results = []
+    for _, tournament in scored[:8]:
+        registration = next((item for item in repository.list_tournament_registrations(tournament.id) if item.player_id == player.id), None)
+        results.append(TournamentListItem(**tournament.model_dump(), my_registration_status=registration.status if registration else None))
+    return results
+
+
 @app.post("/v1/sessions/search", response_model=SearchResponse)
 def search(request: ParseRequest, player: Player = Depends(get_current_player)) -> SearchResponse:
     _refresh_all_session_statuses()
@@ -724,13 +796,63 @@ def search(request: ParseRequest, player: Player = Depends(get_current_player)) 
             action="join_existing",
             message="I can help you find racket-sport courts, games, groups, and players. Try: \"find an intermediate tennis game near Whitefield this Saturday\".",
             scope="out_of_scope",
+            retrieval=RetrievalTrace(mode="deterministic_fallback", fallback_reason="out_of_scope"),
         )
     intent = _parse_intent(request.query, request.sport, player, request.context)
-    sessions = repository.list_sessions()
+    if _is_tournament_query(query):
+        retrieval_mode = "deterministic_fallback"
+        fallback_reason = None
+        candidate_tournaments = None
+        candidate_count = 0
+        if vector_retriever.available:
+            try:
+                explicit_tournament_sport = bool(re.search(r"\b(pickleball|badminton|tennis|padel|squash|table tennis|table-tennis|ping pong)\b", query.lower()))
+                vector_results = vector_retriever.search(query, intent, "tournament", filter_sport=explicit_tournament_sport)
+                candidate_count = len(vector_results)
+                candidate_tournaments = [repository.get_tournament(result.document.source_id) for result in vector_results]
+                candidate_tournaments = [item for item in candidate_tournaments if item]
+                if candidate_tournaments:
+                    retrieval_mode = "vector"
+                else:
+                    candidate_tournaments = None
+                    fallback_reason = "vector_no_candidates"
+            except Exception as error:
+                fallback_reason = str(error)[:160]
+        tournaments = _search_tournaments(query, intent, player, request.mode == "exact", candidate_tournaments)
+        if not tournaments and retrieval_mode == "vector":
+            fallback_reason = "vector_candidates_failed_validation"
+            retrieval_mode = "deterministic_fallback"
+            tournaments = _search_tournaments(query, intent, player, request.mode == "exact")
+        message = intent_parser.grounded_search_answer(query, intent, [], tournaments)
+        return SearchResponse(intent=intent, recommendations=[], tournaments=tournaments, action="join_existing", message=message, scope="court_discovery", retrieval=RetrievalTrace(mode=retrieval_mode, candidate_count=candidate_count, grounded_result_count=len(tournaments), embedding_version=vector_retriever.provider.version if retrieval_mode == "vector" else None, fallback_reason=fallback_reason))
+    retrieval_mode = "deterministic_fallback"
+    fallback_reason = None
+    candidate_sessions = None
+    candidate_count = 0
+    if vector_retriever.available:
+        try:
+            vector_results = vector_retriever.search(query, intent, "session")
+            candidate_count = len(vector_results)
+            candidate_sessions = [repository.get_session(result.document.source_id) for result in vector_results]
+            candidate_sessions = [item for item in candidate_sessions if item]
+            if candidate_sessions:
+                retrieval_mode = "vector"
+            else:
+                candidate_sessions = None
+                fallback_reason = "vector_no_candidates"
+        except Exception as error:
+            fallback_reason = str(error)[:160]
+    sessions = candidate_sessions if candidate_sessions is not None else repository.list_sessions()
     recommendations = search_sessions(sessions, intent, repository.list_players(), player, exact=request.mode == "exact")
+    if not recommendations and retrieval_mode == "vector":
+        fallback_reason = "vector_candidates_failed_validation"
+        retrieval_mode = "deterministic_fallback"
+        sessions = repository.list_sessions()
+        recommendations = search_sessions(sessions, intent, repository.list_players(), player, exact=request.mode == "exact")
     decision = intent_parser.decide(request.query, intent, sessions, recommendations, player)
     proposal = _group_proposal(intent, player.id, decision.proposed_group_name, request.query) if not recommendations else None
-    return SearchResponse(intent=intent, recommendations=recommendations, action=decision.action, message=decision.summary, group_proposal=proposal, scope="court_discovery")
+    message = intent_parser.grounded_search_answer(query, intent, recommendations, [])
+    return SearchResponse(intent=intent, recommendations=recommendations, action=decision.action, message=message, group_proposal=proposal, scope="court_discovery", retrieval=RetrievalTrace(mode=retrieval_mode, candidate_count=candidate_count, grounded_result_count=len(recommendations), embedding_version=vector_retriever.provider.version if retrieval_mode == "vector" else None, fallback_reason=fallback_reason))
 
 
 @app.post("/v1/sessions/{session_id}/join", response_model=JoinRequest)
@@ -749,6 +871,7 @@ def join_session(session_id: str, request: JoinRequestRequest | None = None, pla
     if session.open_slots < 1:
         session.waitlist_player_ids.append(player.id)
         repository.save_session(session)
+        _index_session_best_effort(session)
         status = "waitlisted"
     saved_request = repository.save_join_request(JoinRequest(id=request_id, session_id=session_id, player_id=player.id, player_display_name=player.display_name, status=status, created_at=datetime.now(timezone.utc)))
     if status == "pending":
@@ -822,7 +945,9 @@ def leave_session(session_id: str, player: Player = Depends(get_current_player))
         raise HTTPException(status_code=409, detail="You are not confirmed or waitlisted for this session")
     if session.open_slots > 0 and session.status == "full":
         session.status = "open"
-    return repository.save_session(session)
+    saved = repository.save_session(session)
+    _index_session_best_effort(saved)
+    return saved
 
 
 @app.get("/v1/sessions/{session_id}/join-requests", response_model=JoinRequestsResponse)
@@ -853,6 +978,7 @@ def decide_join_request(session_id: str, request_id: str, request: JoinRequestDe
             if join_request.player_id not in session.waitlist_player_ids:
                 session.waitlist_player_ids.append(join_request.player_id)
                 repository.save_session(session)
+                _index_session_best_effort(session)
             join_request.status = "waitlisted"
             saved_request = repository.save_join_request(join_request)
             _notify_request_update(saved_request, session)
@@ -860,6 +986,7 @@ def decide_join_request(session_id: str, request_id: str, request: JoinRequestDe
         if join_request.player_id not in session.confirmed_player_ids:
             session.confirmed_player_ids.append(join_request.player_id)
             repository.save_session(session)
+            _index_session_best_effort(session)
     join_request.status = request.status
     saved_request = repository.save_join_request(join_request)
     _notify_request_update(saved_request, session)
@@ -938,7 +1065,8 @@ def group_view(session_id: str, player: Player = Depends(get_current_player)) ->
     players_by_id = {candidate.id: candidate for candidate in repository.list_players()}
     members = [_public_profile(players_by_id[player_id], player.id) for player_id in session.confirmed_player_ids if player_id in players_by_id]
     waitlist = [_public_profile(players_by_id[player_id], player.id) for player_id in session.waitlist_player_ids if player_id in players_by_id]
-    return GroupViewResponse(session=session, members=members, waitlist=waitlist, activity_proofs=repository.list_activity_proofs(session_id=session.id))
+    activity_proofs = repository.list_activity_proofs(session_id=session.id) if session.status == "completed" else []
+    return GroupViewResponse(session=session, members=members, waitlist=waitlist, activity_proofs=activity_proofs)
 
 
 def _tournament_details(tournament: Tournament) -> TournamentDetailsResponse:
@@ -954,9 +1082,13 @@ def _tournament_details(tournament: Tournament) -> TournamentDetailsResponse:
 
 @app.get("/v1/tournaments", response_model=TournamentListResponse)
 def list_tournaments(player: Player = Depends(get_current_player)) -> TournamentListResponse:
-    tournaments = [item for item in repository.list_tournaments() if item.status != "cancelled"]
+    tournaments = repository.list_tournaments()
     tournaments.sort(key=lambda item: (item.tournament_date, item.created_at))
-    return TournamentListResponse(tournaments=tournaments)
+    list_items = []
+    for tournament in tournaments:
+        registration = next((item for item in repository.list_tournament_registrations(tournament.id) if item.player_id == player.id), None)
+        list_items.append(TournamentListItem(**tournament.model_dump(), my_registration_status=registration.status if registration else None))
+    return TournamentListResponse(tournaments=list_items)
 
 
 @app.post("/v1/tournaments", response_model=TournamentDetailsResponse)
@@ -984,12 +1116,14 @@ def create_tournament(request: CreateTournamentRequest, player: Player = Depends
         tournament_id=tournament.id,
         player_id=player.id,
         display_name=player.display_name,
+        status="registered",
         cmr_rating=player.cmr_ratings.get(request.sport),
         created_at=datetime.now(timezone.utc),
     )
     tournament.registration_ids.append(registration.id)
     repository.save_tournament(tournament)
     repository.save_tournament_registration(registration)
+    _index_tournament_best_effort(tournament)
     return _tournament_details(tournament)
 
 
@@ -1009,23 +1143,85 @@ def register_for_tournament(tournament_id: str, player: Player = Depends(get_cur
     if tournament.status != "registration":
         raise HTTPException(status_code=409, detail="Registration is closed for this tournament")
     registration_id = f"{tournament.id}_{player.id}"
-    existing = next((item for item in repository.list_tournament_registrations(tournament.id) if item.player_id == player.id and item.status != "withdrawn"), None)
+    existing = next((item for item in repository.list_tournament_registrations(tournament.id) if item.player_id == player.id and item.status not in {"withdrawn", "declined"}), None)
     if existing:
         return existing
-    registered_count = sum(item.status == "registered" for item in repository.list_tournament_registrations(tournament.id))
-    status = "registered" if registered_count < tournament.capacity else "waitlisted"
     registration = TournamentRegistration(
         id=registration_id,
         tournament_id=tournament.id,
         player_id=player.id,
         display_name=player.display_name,
-        status=status,
+        status="pending",
         cmr_rating=player.cmr_ratings.get(tournament.sport),
         created_at=datetime.now(timezone.utc),
     )
-    tournament.registration_ids.append(registration.id)
-    repository.save_tournament(tournament)
-    return repository.save_tournament_registration(registration)
+    saved_registration = repository.save_tournament_registration(registration)
+    try:
+        repository.save_notification(AppNotification(
+            id=f"tournament-request-{registration.id}",
+            player_id=tournament.organizer_id,
+            kind="tournament_request",
+            title="New tournament request",
+            message=f"{player.display_name} wants to join {tournament.name}.",
+            session_id="",
+            request_id=saved_registration.id,
+            actor_id=player.id,
+            tournament_id=tournament.id,
+            created_at=datetime.now(timezone.utc),
+        ))
+    except Exception:
+        # A notification failure must not block a registration request.
+        pass
+    return saved_registration
+
+
+@app.post("/v1/tournaments/{tournament_id}/registrations/{registration_id}/decision", response_model=TournamentRegistration)
+def decide_tournament_registration(
+    tournament_id: str,
+    registration_id: str,
+    request: TournamentRegistrationDecisionRequest,
+    player: Player = Depends(get_current_player),
+) -> TournamentRegistration:
+    tournament = repository.get_tournament(tournament_id)
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    if tournament.organizer_id != player.id:
+        raise HTTPException(status_code=403, detail="Only the organizer can review tournament requests")
+    if tournament.status != "registration":
+        raise HTTPException(status_code=409, detail="Registration is closed for this tournament")
+    registration = next((item for item in repository.list_tournament_registrations(tournament.id) if item.id == registration_id), None)
+    if not registration:
+        raise HTTPException(status_code=404, detail="Tournament registration not found")
+    if registration.status != "pending":
+        raise HTTPException(status_code=409, detail="This tournament request has already been reviewed")
+
+    if request.status == "declined":
+        saved_registration = repository.save_tournament_registration(registration.model_copy(update={"status": "declined"}))
+    else:
+        registered_count = sum(item.status == "registered" for item in repository.list_tournament_registrations(tournament.id))
+        next_status = "registered" if registered_count < tournament.capacity else "waitlisted"
+        if registration.id not in tournament.registration_ids:
+            tournament.registration_ids.append(registration.id)
+        repository.save_tournament(tournament)
+        _index_tournament_best_effort(tournament)
+        saved_registration = repository.save_tournament_registration(registration.model_copy(update={"status": next_status}))
+
+    try:
+        status_label = "approved" if saved_registration.status == "registered" else saved_registration.status
+        repository.save_notification(AppNotification(
+            id=f"tournament-update-{saved_registration.id}-{saved_registration.status}",
+            player_id=registration.player_id,
+            kind="tournament_update",
+            title=f"Tournament request {status_label}",
+            message=f"Your request for {tournament.name} is {status_label}.",
+            session_id="",
+            request_id=saved_registration.id,
+            tournament_id=tournament.id,
+            created_at=datetime.now(timezone.utc),
+        ))
+    except Exception:
+        pass
+    return saved_registration
 
 
 @app.post("/v1/tournaments/{tournament_id}/fixtures", response_model=TournamentDetailsResponse)
@@ -1046,6 +1242,7 @@ def generate_tournament_fixtures(tournament_id: str, player: Player = Depends(ge
         repository.save_tournament_match(match)
     tournament.status = "in_progress"
     repository.save_tournament(tournament)
+    _index_tournament_best_effort(tournament)
     return _tournament_details(tournament)
 
 
@@ -1091,6 +1288,7 @@ def enter_tournament_score(tournament_id: str, match_id: str, request: Tournamen
     if all(item.status == "completed" for item in repository.list_tournament_matches(tournament.id)):
         tournament.status = "completed"
         repository.save_tournament(tournament)
+        _index_tournament_best_effort(tournament)
     return saved_match
 
 
@@ -1128,7 +1326,9 @@ def update_tournament_fixture(tournament_id: str, match_id: str, request: Tourna
     })
     saved_match = repository.save_tournament_match(updated)
     if pairing_or_round_changed and tournament.status == "completed":
-        repository.save_tournament(tournament.model_copy(update={"status": "in_progress"}))
+        tournament = tournament.model_copy(update={"status": "in_progress"})
+        repository.save_tournament(tournament)
+        _index_tournament_best_effort(tournament)
     return saved_match
 
 
@@ -1288,6 +1488,7 @@ def complete_session(session_id: str, player: Player = Depends(get_current_playe
         raise HTTPException(status_code=409, detail="Cancelled games cannot be completed")
     session.status = "completed"
     saved = repository.save_session(session)
+    _index_session_best_effort(saved)
     _refresh_cmr_ratings()
     return saved
 
@@ -1330,6 +1531,7 @@ def create_group(request: CreateGroupRequest, player: Player = Depends(get_curre
         confirmed_player_ids=[player.id],
     )
     saved_session = repository.save_session(session)
+    _index_session_best_effort(saved_session)
     _notify_players_about_game(saved_session)
     return CreatedGroupResponse(session=saved_session, message="Group created. Compatible nearby players have been notified.")
 

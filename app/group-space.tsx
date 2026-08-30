@@ -71,6 +71,7 @@ type GroupSpaceProps = {
   authorizedFetch: (url: string, options?: RequestInit) => Promise<Response>;
   onClose: () => void;
   onRefresh: () => void;
+  onChatPosted: (post: GroupSpacePost) => void;
   onToast: (message: string) => void;
   activityProofs?: ActivityProof[];
   onAnalyzeActivityProof: (file: File) => Promise<ActivityProof | null>;
@@ -102,7 +103,7 @@ function MicrophoneIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="12" rx="4" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" /></svg>;
 }
 
-export function GroupSpace({ group, members, waitlist, posts, leaderboard, localLeaderboard, currentUserId, apiUrl, authorizedFetch, onClose, onRefresh, onToast, activityProofs = [], onAnalyzeActivityProof }: GroupSpaceProps) {
+export function GroupSpace({ group, members, waitlist, posts, leaderboard, localLeaderboard, currentUserId, apiUrl, authorizedFetch, onClose, onRefresh, onChatPosted, onToast, activityProofs = [], onAnalyzeActivityProof }: GroupSpaceProps) {
   const [draft, setDraft] = useState("");
   const [listening, setListening] = useState(false);
   const [posting, setPosting] = useState(false);
@@ -139,10 +140,10 @@ export function GroupSpace({ group, members, waitlist, posts, leaderboard, local
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ message }),
       });
-      const payload = await response.json().catch(() => ({})) as { detail?: string };
+      const payload = await response.json().catch(() => ({})) as GroupSpacePost & { detail?: string };
       if (!response.ok) throw new Error(payload.detail ?? "Could not post to group chat");
       setDraft("");
-      onRefresh();
+      onChatPosted(payload);
     } catch (error) {
       onToast(error instanceof Error ? error.message : "Could not post to group chat");
     } finally {

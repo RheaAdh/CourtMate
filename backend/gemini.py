@@ -39,12 +39,21 @@ class GeminiIntentParser:
         self.api_key = os.getenv("GEMINI_API_KEY")
         self.model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
         self._client = None
-        if self.api_key:
-            try:
-                from google import genai
+        use_vertex = os.getenv("COURTMATE_USE_VERTEX_AI", "false").lower() in {"1", "true", "yes"} or os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() in {"1", "true", "yes"}
+        try:
+            from google import genai
+
+            if use_vertex:
+                self._client = genai.Client(
+                    vertexai=True,
+                    project=os.getenv("GOOGLE_CLOUD_PROJECT"),
+                    location=os.getenv("GOOGLE_CLOUD_LOCATION", "global"),
+                )
+            elif self.api_key:
                 self._client = genai.Client(api_key=self.api_key)
-            except ImportError:
-                self._client = None
+        except (ImportError, ValueError, TypeError) as error:
+            logger.warning("Gemini is unavailable: %s", error)
+            self._client = None
 
     @property
     def image_analysis_available(self) -> bool:
@@ -130,6 +139,57 @@ Current request: """ + query + "\nPrevious request context: " + (context or "non
                 "summary": f"I found {len(recommendations)} {sport_name} game{'s' if len(recommendations) != 1 else ''} that fit. Best fit: {lead.group_name} on {date_label}, {time_label} in {lead.area}, with {lead.open_slots} spot{'s' if lead.open_slots != 1 else ''} open.",
             })
         return fallback
+
+    def grounded_search_answer(self, query: str, intent: SearchIntent, recommendations: list[SessionRecommendation], tournaments: list[object]) -> str:
+        """Explain only records that survived retrieval and Python validation."""
+        if recommendations:
+            lead = recommendations[0].session
+            fallback = f"I found {len(recommendations)} {intent.sport.replace('_', ' ')} game{'s' if len(recommendations) != 1 else ''}. Best fit: {lead.group_name} in {lead.area} with {lead.open_slots} spot{'s' if lead.open_slots != 1 else ''} open."
+        elif tournaments:
+            lead = tournaments[0]
+            fallback = f"I found {len(tournaments)} tournament{'s' if len(tournaments) != 1 else ''}. Best match: {lead.name} on {lead.tournament_date.strftime('%a %d %b')} in {lead.area}."
+        else:
+            fallback = f"I could not find a {intent.sport.replace('_', ' ')} game or tournament matching those details."
+        if not self._client:
+            return fallback
+        records = [
+            {
+                "id": item.session.id,
+                "type": "game",
+                "name": item.session.group_name,
+                "sport": item.session.sport,
+                "area": item.session.area,
+                "date": item.session.session_date.isoformat(),
+                "start": item.session.start_time.isoformat(),
+                "end": item.session.end_time.isoformat(),
+                "open_slots": item.session.open_slots,
+                "skill_min": item.session.skill_min,
+                "skill_max": item.session.skill_max,
+            }
+            for item in recommendations
+        ] + [
+            {
+                "id": item.id,
+                "type": "tournament",
+                "name": item.name,
+                "sport": item.sport,
+                "area": item.area,
+                "date": item.tournament_date.isoformat(),
+            }
+            for item in tournaments
+        ]
+        prompt = f"""You are CourtMate's grounded search concierge. Answer in one concise sentence using only the verified records below. Never invent a venue, date, time, player, rating, availability, or result. If records is empty, say no matching record was found. Do not answer unrelated questions and do not mention embeddings or internal IDs.
+User request: {query}
+Parsed intent: {intent.model_dump(mode='json')}
+Verified records: {records}
+"""
+        try:
+            response = self._client.models.generate_content(model=self.model, contents=prompt)
+            answer = response.text.strip()
+            return answer or fallback
+        except Exception as error:
+            logger.warning("Grounded Gemini response failed (%s); using deterministic summary", error)
+            return fallback
 
     def analyze_activity_image(self, image_bytes: bytes, mime_type: str) -> ActivityProofAnalysis:
         """Extract only visible tracker metrics; never invent values that are not shown."""

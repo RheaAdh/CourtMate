@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 
 type Sport = "pickleball" | "badminton" | "tennis" | "padel" | "squash" | "table_tennis";
 type TournamentStatus = "registration" | "in_progress" | "completed" | "cancelled";
+type TournamentView = "upcoming" | "pending" | "history";
 
 type Tournament = {
   id: string;
@@ -17,6 +18,7 @@ type Tournament = {
   capacity: number;
   status: TournamentStatus;
   registration_ids: string[];
+  my_registration_status?: TournamentRegistration["status"] | null;
   rules: { score_label: string; point_target: number; win_by: number; best_of: number };
   created_at: string;
 };
@@ -26,7 +28,7 @@ type TournamentRegistration = {
   tournament_id: string;
   player_id: string;
   display_name: string;
-  status: "registered" | "waitlisted" | "withdrawn";
+  status: "pending" | "registered" | "waitlisted" | "declined" | "withdrawn";
   cmr_rating?: number | null;
   created_at: string;
 };
@@ -98,6 +100,7 @@ export function TournamentHub({ apiUrl, currentUserId, authorizedFetch, onToast,
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
   const [selected, setSelected] = useState<TournamentDetails | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [activeView, setActiveView] = useState<TournamentView>("upcoming");
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState("");
   const [name, setName] = useState("");
@@ -177,10 +180,34 @@ export function TournamentHub({ apiUrl, currentUserId, authorizedFetch, onToast,
       setBusyId("register");
       const response = await authorizedFetch(`${apiUrl}/v1/tournaments/${selected.tournament.id}/register`, { method: "POST" });
       if (!response.ok) throw new Error("Registration failed");
+      const registration = await response.json() as TournamentRegistration;
       await openTournament(selected.tournament.id);
-      onToast("You are registered for the tournament");
+      onToast(registration.status === "pending" ? "Request sent to the tournament organizer" : registration.status === "waitlisted" ? "You are on the tournament waitlist" : "You are registered for the tournament");
     } catch {
       onToast("Could not register for this tournament");
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  async function decideRegistration(registrationId: string, status: "approved" | "declined") {
+    if (!selected) return;
+    try {
+      setBusyId(`registration-${registrationId}`);
+      const response = await authorizedFetch(`${apiUrl}/v1/tournaments/${selected.tournament.id}/registrations/${registrationId}/decision`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { detail?: string };
+        throw new Error(payload.detail ?? "Could not review this request");
+      }
+      await openTournament(selected.tournament.id);
+      await loadTournaments();
+      onToast(status === "approved" ? "Player approved" : "Request declined");
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : "Could not review this request");
     } finally {
       setBusyId("");
     }
@@ -324,6 +351,17 @@ export function TournamentHub({ apiUrl, currentUserId, authorizedFetch, onToast,
     if (status === "completed") return "Final result";
     return "Score not entered";
   };
+  const tournamentView = (tournament: Tournament): TournamentView => {
+    if (tournament.status === "completed" || tournament.status === "cancelled" || (tournament.status === "registration" && tournament.tournament_date < today())) return "history";
+    if (tournament.my_registration_status === "pending" || tournament.my_registration_status === "waitlisted") return "pending";
+    return "upcoming";
+  };
+  const visibleTournaments = tournaments.filter((tournament) => tournamentView(tournament) === activeView);
+  const tournamentTabs: { value: TournamentView; label: string }[] = [
+    { value: "upcoming", label: "Upcoming" },
+    { value: "pending", label: "Pending" },
+    { value: "history", label: "History" },
+  ];
 
   return (
     <section className="page-view tournament-page">
@@ -373,9 +411,24 @@ export function TournamentHub({ apiUrl, currentUserId, authorizedFetch, onToast,
 
           {selected.tournament.status === "registration" && (
             <div className="tournament-action-row">
-              {registration ? <span className={`status-badge ${registration.status}`}>{registration.status}</span> : <button className="dark-button" onClick={() => void register()} disabled={busyId === "register"}>{busyId === "register" ? "Joining..." : "Register to play"} <span>-&gt;</span></button>}
+              {registration && registration.status !== "declined" && registration.status !== "withdrawn" ? <span className={`status-badge ${registration.status}`}>{registration.status === "pending" ? "Request pending" : registration.status}</span> : <button className="dark-button" onClick={() => void register()} disabled={busyId === "register"}>{busyId === "register" ? "Requesting..." : "Request to play"} <span>-&gt;</span></button>}
               {isOrganizer && <button className="manage-group-button" onClick={() => void generateFixtures()} disabled={busyId === "fixtures"}>{busyId === "fixtures" ? "Generating..." : "Generate fixtures"}</button>}
             </div>
+          )}
+
+          {isOrganizer && selected.tournament.status === "registration" && selected.registrations.some((item) => item.status === "pending") && (
+            <section className="tournament-panel tournament-request-panel">
+              <div className="tournament-panel-heading"><div><span className="kicker">ORGANIZER QUEUE</span><h3>Join requests</h3></div><span>{selected.registrations.filter((item) => item.status === "pending").length} waiting</span></div>
+              <div className="tournament-request-list">
+                {selected.registrations.filter((item) => item.status === "pending").map((item) => (
+                  <div className="tournament-request-row" key={item.id}>
+                    <div><strong>{item.display_name}</strong><small>{item.cmr_rating ? `${item.cmr_rating.toFixed(1)} CMR` : "CMR building"} · requested to join</small></div>
+                    <div className="tournament-request-actions"><button type="button" className="approve-request-button" onClick={() => void decideRegistration(item.id, "approved")} disabled={busyId === `registration-${item.id}`}>{busyId === `registration-${item.id}` ? "..." : "Approve"}</button><button type="button" className="decline-request-button" onClick={() => void decideRegistration(item.id, "declined")} disabled={busyId === `registration-${item.id}`}>Decline</button></div>
+                  </div>
+                ))}
+              </div>
+              <p className="tournament-request-help">Approve players into the draw or decline requests before fixtures are generated.</p>
+            </section>
           )}
 
           {selected.matches.length > 0 ? (
@@ -429,16 +482,19 @@ export function TournamentHub({ apiUrl, currentUserId, authorizedFetch, onToast,
         </div>
       ) : (
         <div className="tournament-list">
-          <div className="tournament-list-heading"><div><h2>Open tournaments</h2></div><span>{loading ? "Loading..." : `${tournaments.length} tournament${tournaments.length === 1 ? "" : "s"}`}</span></div>
-          {tournaments.length ? tournaments.map((tournament) => (
+          <div className="tournament-tabs" role="tablist" aria-label="Tournament views">
+            {tournamentTabs.map((tab) => <button type="button" role="tab" aria-selected={activeView === tab.value} className={activeView === tab.value ? "active" : ""} onClick={() => setActiveView(tab.value)} key={tab.value}>{tab.label}<span>{tournaments.filter((tournament) => tournamentView(tournament) === tab.value).length}</span></button>)}
+          </div>
+          <div className="tournament-list-heading"><div><h2>{activeView === "upcoming" ? "Upcoming tournaments" : activeView === "pending" ? "Pending registrations" : "Tournament history"}</h2></div><span>{loading ? "Loading..." : `${visibleTournaments.length} event${visibleTournaments.length === 1 ? "" : "s"}`}</span></div>
+          {visibleTournaments.length ? visibleTournaments.map((tournament) => (
             <button className="tournament-card" key={tournament.id} onClick={() => void openTournament(tournament.id)} disabled={busyId === tournament.id}>
               <span className="tournament-card-date"><strong>{new Date(`${tournament.tournament_date}T00:00:00`).toLocaleDateString("en-IN", { day: "2-digit" })}</strong><small>{new Date(`${tournament.tournament_date}T00:00:00`).toLocaleDateString("en-IN", { month: "short" })}</small></span>
-              <span className="tournament-card-copy"><strong>{tournament.name}</strong><small>{sportLabel(tournament.sport)} · {tournament.area} · {tournament.status.replace("_", " ")}</small></span>
+              <span className="tournament-card-copy"><strong>{tournament.name}</strong><small>{sportLabel(tournament.sport)} · {tournament.area} · {tournament.my_registration_status === "pending" ? "request pending" : tournament.my_registration_status === "waitlisted" ? "waitlisted" : tournament.status.replace("_", " ")}</small></span>
               <span className="tournament-card-meta"><strong>{tournament.registration_ids.length}/{tournament.capacity}</strong><small>players</small></span>
               <span className="tournament-card-arrow">-&gt;</span>
             </button>
           )) : (
-            <div className="tournament-waiting"><span className="tournament-waiting-icon">+</span><div><strong>No tournaments yet.</strong></div></div>
+            <div className="tournament-waiting"><span className="tournament-waiting-icon">+</span><div><strong>{activeView === "pending" ? "No pending registrations." : activeView === "history" ? "No tournament history yet." : "No upcoming tournaments."}</strong><p>{activeView === "pending" ? "Requests awaiting organizer approval and waitlisted events will appear here." : activeView === "history" ? "Completed events and results will stay here." : "Create a local tournament or check back for open events."}</p></div></div>
           )}
         </div>
       )}

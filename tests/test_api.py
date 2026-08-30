@@ -25,6 +25,7 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(payload["action"], "join_existing")
         self.assertEqual(payload["recommendations"][0]["session"]["id"], "s1")
+        self.assertEqual(payload["retrieval"]["mode"], "deterministic_fallback")
 
     def test_chat_followup_keeps_previous_game_context(self):
         original = "Find a pickleball game near Whitefield this Sunday morning"
@@ -157,6 +158,33 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(payload["recommendations"], [])
         self.assertIsNone(payload["group_proposal"])
         self.assertIn("find racket-sport", payload["message"])
+
+    def test_chat_search_returns_tournaments_without_creating_a_game(self):
+        created = self.client.post(
+            "/v1/tournaments",
+            json={
+                "name": "Whitefield Tennis Ladder",
+                "sport": "tennis",
+                "area": "Whitefield",
+                "tournament_date": str(date.today() + timedelta(days=7)),
+                "capacity": 8,
+                "format": "round_robin",
+            },
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(created.status_code, 200)
+
+        response = self.client.post(
+            "/v1/sessions/search",
+            json={"query": "Find tennis tournaments near Whitefield"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["scope"], "court_discovery")
+        self.assertEqual(payload["recommendations"], [])
+        self.assertEqual(payload["group_proposal"], None)
+        self.assertEqual(payload["tournaments"][0]["name"], "Whitefield Tennis Ladder")
 
     def test_general_question_is_redirected_without_random_session_results(self):
         response = self.client.post("/v1/sessions/search", json={"query": "What is the capital of France?", "player_id": "p1"})
@@ -577,12 +605,25 @@ class ApiFlowTests(unittest.TestCase):
         tournament_id = created.json()["tournament"]["id"]
 
         for player_id in ("p2", "p3"):
-            registered = self.client.post(
+            requested = self.client.post(
                 f"/v1/tournaments/{tournament_id}/register",
                 headers={"X-CourtMate-Player-ID": player_id},
             )
-            self.assertEqual(registered.status_code, 200)
-            self.assertEqual(registered.json()["status"], "registered")
+            self.assertEqual(requested.status_code, 200)
+            self.assertEqual(requested.json()["status"], "pending")
+            organizer_notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": "p1"})
+            self.assertEqual(organizer_notifications.status_code, 200)
+            self.assertTrue(any(item["kind"] == "tournament_request" and item["tournament_id"] == tournament_id for item in organizer_notifications.json()["notifications"]))
+            approved = self.client.post(
+                f"/v1/tournaments/{tournament_id}/registrations/{requested.json()['id']}/decision",
+                json={"status": "approved"},
+                headers={"X-CourtMate-Player-ID": "p1"},
+            )
+            self.assertEqual(approved.status_code, 200)
+            self.assertEqual(approved.json()["status"], "registered")
+            player_notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": player_id})
+            self.assertEqual(player_notifications.status_code, 200)
+            self.assertTrue(any(item["kind"] == "tournament_update" and item["tournament_id"] == tournament_id for item in player_notifications.json()["notifications"]))
 
         fixtures = self.client.post(
             f"/v1/tournaments/{tournament_id}/fixtures",
@@ -647,7 +688,15 @@ class ApiFlowTests(unittest.TestCase):
         )
         tournament_id = created.json()["tournament"]["id"]
         for player_id in ("p2", "p3"):
-            self.client.post(f"/v1/tournaments/{tournament_id}/register", headers={"X-CourtMate-Player-ID": player_id})
+            requested = self.client.post(f"/v1/tournaments/{tournament_id}/register", headers={"X-CourtMate-Player-ID": player_id})
+            self.assertEqual(requested.status_code, 200)
+            approved = self.client.post(
+                f"/v1/tournaments/{tournament_id}/registrations/{requested.json()['id']}/decision",
+                json={"status": "approved"},
+                headers={"X-CourtMate-Player-ID": "p1"},
+            )
+            self.assertEqual(approved.status_code, 200)
+            self.assertEqual(approved.json()["status"], "registered")
         fixtures = self.client.post(f"/v1/tournaments/{tournament_id}/fixtures", headers={"X-CourtMate-Player-ID": "p1"})
         match = fixtures.json()["matches"][0]
 

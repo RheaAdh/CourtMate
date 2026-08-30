@@ -2,7 +2,8 @@ import os
 from datetime import datetime
 from typing import Protocol
 
-from .models import ActivityProof, AppNotification, ChatPost, Feedback, FollowRecord, JoinRequest, Player, Session, SocialComment, SocialPost, Tournament, TournamentMatch, TournamentRegistration, normalize_cmr_player
+from .models import ActivityProof, AppNotification, ChatPost, Feedback, FollowRecord, JoinRequest, Player, SearchDocument, Session, SocialComment, SocialPost, Tournament, TournamentMatch, TournamentRegistration, VectorSearchResult, normalize_cmr_player
+from .vector_search import cosine_similarity
 
 
 class Repository(Protocol):
@@ -46,6 +47,10 @@ class Repository(Protocol):
     def save_tournament_match(self, match: TournamentMatch) -> TournamentMatch: ...
     def get_tournament_match(self, match_id: str) -> TournamentMatch | None: ...
     def list_tournament_matches(self, tournament_id: str) -> list[TournamentMatch]: ...
+    def save_search_document(self, document: SearchDocument) -> SearchDocument: ...
+    def delete_search_document(self, document_id: str) -> None: ...
+    def list_search_documents(self) -> list[SearchDocument]: ...
+    def search_search_documents(self, query_vector: list[float], filters: dict[str, str | int | float | bool | None], limit: int) -> list[VectorSearchResult]: ...
 
 
 class InMemoryRepository:
@@ -65,6 +70,7 @@ class InMemoryRepository:
         self.tournaments: dict[str, Tournament] = {}
         self.tournament_registrations: dict[str, TournamentRegistration] = {}
         self.tournament_matches: dict[str, TournamentMatch] = {}
+        self.search_documents: dict[str, SearchDocument] = {}
 
     def list_sessions(self) -> list[Session]:
         return list(self.sessions.values())
@@ -222,6 +228,28 @@ class InMemoryRepository:
 
     def list_tournament_matches(self, tournament_id: str) -> list[TournamentMatch]:
         return sorted((item for item in self.tournament_matches.values() if item.tournament_id == tournament_id), key=lambda item: (item.round_number, item.match_number))
+
+    def save_search_document(self, document: SearchDocument) -> SearchDocument:
+        self.search_documents[document.id] = document
+        return document
+
+    def delete_search_document(self, document_id: str) -> None:
+        self.search_documents.pop(document_id, None)
+
+    def list_search_documents(self) -> list[SearchDocument]:
+        return list(self.search_documents.values())
+
+    def search_search_documents(self, query_vector: list[float], filters: dict[str, str | int | float | bool | None], limit: int) -> list[VectorSearchResult]:
+        candidates = []
+        for document in self.search_documents.values():
+            values = {**document.metadata, "source_type": document.source_type, "source_id": document.source_id}
+            if any(values.get(key) != value for key, value in filters.items() if value is not None):
+                continue
+            similarity = cosine_similarity(query_vector, document.embedding)
+            if similarity < 0:
+                continue
+            candidates.append(VectorSearchResult(document=document, distance=1 - similarity))
+        return sorted(candidates, key=lambda item: item.distance if item.distance is not None else 2)[:limit]
 
 
 class FirestoreRepository:
@@ -470,6 +498,52 @@ class FirestoreRepository:
         documents = self.client.collection("tournament_matches").where("tournament_id", "==", tournament_id).limit(500).stream()
         matches = [TournamentMatch.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
         return sorted(matches, key=lambda item: (item.round_number, item.match_number))
+
+    @staticmethod
+    def _as_search_document(document) -> SearchDocument:
+        data = document.to_dict() or {}
+        embedding = data.get("embedding", [])
+        values = getattr(embedding, "__iter__", None)
+        data["embedding"] = list(embedding) if values else []
+        data["id"] = document.id
+        return SearchDocument.model_validate(data)
+
+    def save_search_document(self, document: SearchDocument) -> SearchDocument:
+        from google.cloud.firestore_v1.vector import Vector
+
+        payload = document.model_dump(mode="json")
+        payload["embedding"] = Vector(document.embedding)
+        # Keep filter fields top-level so Firestore can pre-filter vector queries.
+        payload.update(document.metadata)
+        self.client.collection("search_documents").document(document.id).set(payload)
+        return document
+
+    def delete_search_document(self, document_id: str) -> None:
+        self.client.collection("search_documents").document(document_id).delete()
+
+    def list_search_documents(self) -> list[SearchDocument]:
+        documents = self.client.collection("search_documents").limit(5000).stream()
+        return [self._as_search_document(document) for document in documents]
+
+    def search_search_documents(self, query_vector: list[float], filters: dict[str, str | int | float | bool | None], limit: int) -> list[VectorSearchResult]:
+        from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
+        from google.cloud.firestore_v1.vector import Vector
+
+        query = self.client.collection("search_documents")
+        for field, value in filters.items():
+            if value is not None:
+                query = query.where(field, "==", value)
+        vector_query = query.find_nearest(
+            vector_field="embedding",
+            query_vector=Vector(query_vector),
+            distance_measure=DistanceMeasure.COSINE,
+            limit=limit,
+        )
+        results = []
+        for document in vector_query.stream():
+            distance = getattr(document, "distance", None)
+            results.append(VectorSearchResult(document=self._as_search_document(document), distance=float(distance) if distance is not None else None))
+        return results
 
 
 def create_repository() -> Repository:

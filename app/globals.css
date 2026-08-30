@@ -2227,6 +2227,72 @@ body::before { border-color: rgba(117, 140, 31, .18); }
   font-size: 10px;
 }
 
+.chat-request-sending,
+.chat-request-confirmation {
+  width: min(100%, 520px);
+  margin: 12px auto 0;
+  border-radius: 13px;
+  font-size: 10px;
+}
+
+.chat-request-sending {
+  padding: 9px 12px;
+  background: #f4f8df;
+  color: #687d16;
+  font: 9px "DM Mono", monospace;
+  text-align: center;
+}
+
+.chat-request-confirmation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid #cbdc73;
+  background: linear-gradient(135deg, #f4f8df, #fffef8);
+  box-shadow: 0 8px 18px rgba(109, 145, 66, .1);
+}
+
+.chat-request-confirmation > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.chat-request-confirmation strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.chat-request-confirmation span {
+  overflow: hidden;
+  color: #71816d;
+  font: 9px "DM Mono", monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-request-confirmation button,
+.chat-status-link {
+  flex: none;
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 10px;
+  background: var(--ink);
+  color: var(--lime);
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.chat-request-confirmation button span {
+  display: inline;
+  margin-left: 5px;
+  color: inherit;
+  font: inherit;
+}
+
 .chat-join-action {
   border-color: var(--ink);
   background: var(--ink);
@@ -2519,6 +2585,18 @@ body::before { border-color: rgba(117, 140, 31, .18); }
 .result-message .chat-message-mark { margin-top: 1px; }
 .result-message-body > p { margin: 4px 0 12px; color: #52605a; font-size: 11px; }
 .chat-choice-list { margin-top: 9px; }
+.chat-tournament-list { display: grid; gap: 8px; margin-top: 10px; }
+.chat-tournament-card { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px; border: 1px solid #d8e0ca; border-radius: 10px; background: #fffef8; }
+.chat-tournament-date { display: grid; place-items: center; min-height: 44px; border-radius: 8px; background: #eef6d7; color: #6b841a; }
+.chat-tournament-date strong { font: 8px 'DM Mono'; text-transform: uppercase; }
+.chat-tournament-date span { font-size: 17px; font-weight: 800; }
+.chat-tournament-copy { min-width: 0; }
+.chat-tournament-copy strong,.chat-tournament-copy small,.chat-tournament-copy > span { display: block; }
+.chat-tournament-copy strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.chat-tournament-copy small,.chat-tournament-copy > span { margin-top: 3px; color: #7c897e; font: 9px 'DM Mono'; line-height: 1.35; }
+.chat-tournament-copy > span { color: #687d16; }
+.chat-tournament-open { border: 1px solid #cbdc73; border-radius: 999px; padding: 8px 10px; background: var(--lime); color: var(--ink); font-size: 9px; font-weight: 800; white-space: nowrap; }
+.chat-tournament-open span { margin-left: 4px; }
 .chat-choice-card,
 .chat-choice-card.featured { border-color: #d8e0ca; box-shadow: 0 6px 16px rgba(45, 61, 25, .045); }
 .chat-choice-card .date-badge { background: #eef6d7; color: #6b841a; }
@@ -2876,6 +2954,17 @@ body::before { border-color: rgba(117, 140, 31, .18); }
   .chat-choice-card .session-title-row h3 { font-size: 13px; }
   .chat-choice-card .session-meta p { font-size: 10px; }
   .chat-choice-card .tag { font-size: 9px; }
+  .chat-tournament-card { grid-template-columns: 40px minmax(0, 1fr); }
+  .chat-tournament-open { grid-column: 2; justify-self: start; }
+
+  .chat-request-confirmation {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .chat-request-confirmation button {
+    width: 100%;
+  }
 }
 
 /* Keep the concierge composer docked like a chat app, without covering the app nav. */
@@ -3255,7 +3344,7 @@ body::before { border-color: rgba(117, 140, 31, .18); }
 }
 
 /* Detail pages replace the previous screen and are exited only with the back arrow. */
-.detail-page-open > *:not(.nav):not(.group-modal-backdrop) {
+.detail-page-open > *:not(.nav):not(.group-modal-backdrop):not(.group-space-v2-backdrop) {
   display: none;
 }
 
@@ -3550,6 +3639,48 @@ body::before { border-color: rgba(117, 140, 31, .18); }
   border-radius: 21px;
   background: linear-gradient(145deg, #fbfff3, #f5f6ec);
   box-shadow: 0 30px 90px rgba(15, 27, 20, .3);
+}
+
+.group-space-loading {
+  display: grid;
+  min-height: 260px;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.group-space-loading strong {
+  color: var(--ink);
+  font-size: 18px;
+}
+
+.group-space-loading > span:last-child {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.group-space-loading-orbit {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  border: 1px solid #cbdc73;
+  border-radius: 50%;
+  animation: group-space-spin 1.5s linear infinite;
+}
+
+.group-space-loading-orbit span {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--lime);
+  box-shadow: 0 0 0 4px rgba(216, 245, 107, .24);
+}
+
+@keyframes group-space-spin {
+  to { transform: rotate(360deg); }
 }
 
 .group-space-v2-header {
@@ -4164,6 +4295,75 @@ body::before { border-color: rgba(117, 140, 31, .18); }
   margin-top: 8px;
 }
 
+.tournament-request-panel {
+  margin: 14px 0 18px;
+  border-color: #cbdc73;
+  background: #f5f9df;
+}
+
+.tournament-request-list {
+  display: grid;
+  gap: 8px;
+}
+
+.tournament-request-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid #dfe8c1;
+}
+
+.tournament-request-row > div:first-child {
+  min-width: 0;
+}
+
+.tournament-request-row strong,
+.tournament-request-row small {
+  display: block;
+}
+
+.tournament-request-row strong {
+  font-size: 12px;
+}
+
+.tournament-request-row small,
+.tournament-request-help {
+  margin-top: 4px;
+  color: #7c897e;
+  font: 9px "DM Mono", monospace;
+  line-height: 1.4;
+}
+
+.tournament-request-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.tournament-request-actions button {
+  border: 1px solid #cbdc73;
+  border-radius: 999px;
+  padding: 7px 10px;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.approve-request-button {
+  background: var(--lime);
+  color: var(--ink);
+}
+
+.decline-request-button {
+  background: #fffef8;
+  color: #a65e4b;
+}
+
+.tournament-request-help {
+  margin-bottom: 0;
+}
+
 .fixture-card-actions {
   display: inline-flex;
   align-items: center;
@@ -4240,6 +4440,19 @@ body::before { border-color: rgba(117, 140, 31, .18); }
 }
 
 @media (max-width: 720px) {
+  .tournament-request-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .tournament-request-actions {
+    width: 100%;
+  }
+
+  .tournament-request-actions button {
+    flex: 1;
+  }
+
   .fixture-edit-fields {
     grid-template-columns: 58px 58px minmax(0, 1fr) minmax(0, 1fr);
   }
@@ -4262,5 +4475,244 @@ body::before { border-color: rgba(117, 140, 31, .18); }
 
   .fixture-score-label {
     grid-column: 1 / -1;
+  }
+}
+
+.tournament-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  margin: 15px 0 18px;
+  padding: 4px;
+  border: 1px solid #e2e8d8;
+  border-radius: 999px;
+  background: #f5f8ed;
+}
+
+.tournament-tabs button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  border: 0;
+  border-radius: 999px;
+  padding: 9px 7px;
+  background: transparent;
+  color: #7c897e;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.tournament-tabs button.active {
+  background: var(--ink);
+  color: var(--lime);
+  box-shadow: 0 4px 10px rgba(11, 19, 48, .12);
+}
+
+.tournament-tabs button span {
+  display: grid;
+  place-items: center;
+  min-width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .72);
+  color: #687d16;
+  font: 8px "DM Mono", monospace;
+}
+
+.tournament-tabs button.active span {
+  background: rgba(205, 236, 53, .18);
+  color: var(--lime);
+}
+
+/* The compact sport cards are the single source of truth for profile CMR. */
+.profile-insights {
+  display: none !important;
+}
+
+.ranking-page-open > *:not(.nav):not(.ranking-page) {
+  display: none !important;
+}
+
+.ranking-page {
+  position: fixed;
+  z-index: 140;
+  inset: 0;
+  overflow-y: auto;
+  padding: 34px max(22px, calc((100vw - 920px) / 2)) 80px;
+  background: linear-gradient(145deg, #fbfff3, #f4f6ea);
+}
+
+.ranking-page-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  width: min(720px, 100%);
+  margin: 0 auto;
+  padding-bottom: 22px;
+  border-bottom: 1px solid #dce5d3;
+}
+
+.ranking-back-button {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: none;
+  place-items: center;
+  border: 1px solid #cbdc73;
+  border-radius: 50%;
+  background: #f4f8df;
+  color: #687d16;
+  font-size: 22px;
+}
+
+.ranking-page-header h1 {
+  margin: 7px 0 0;
+  color: var(--ink);
+  font-size: clamp(24px, 4vw, 38px);
+  letter-spacing: -.07em;
+}
+
+.ranking-page-header p {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ranking-loading {
+  display: grid;
+  min-height: 330px;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.ranking-loading strong {
+  color: var(--ink);
+  font-size: 18px;
+}
+
+.ranking-loading > span:last-child {
+  font-size: 11px;
+}
+
+.ranking-page-content {
+  display: grid;
+  gap: 14px;
+  width: min(720px, 100%);
+  margin: 22px auto 0;
+}
+
+.ranking-only-panel {
+  padding: 20px;
+  border: 1px solid #dce5d3;
+  border-radius: 17px;
+  background: rgba(255, 255, 255, .78);
+  box-shadow: 0 12px 30px rgba(35, 55, 30, .06);
+}
+
+.ranking-only-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.ranking-only-heading h2 {
+  margin: 7px 0 0;
+  color: var(--ink);
+  font-size: 22px;
+  letter-spacing: -.06em;
+}
+
+.ranking-only-heading > span {
+  color: #7c897e;
+  font: 9px "DM Mono", monospace;
+}
+
+.ranking-only-list {
+  display: grid;
+}
+
+.ranking-only-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 8px;
+  border-top: 1px solid #e3eadc;
+}
+
+.ranking-only-row.current {
+  margin-inline: -8px;
+  border-radius: 9px;
+  background: #f0f7cf;
+}
+
+.ranking-only-rank {
+  color: #718f12;
+  font: 12px "DM Mono", monospace;
+  font-weight: 700;
+}
+
+.ranking-only-row strong,
+.ranking-only-row small {
+  display: block;
+}
+
+.ranking-only-row strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.ranking-only-row small {
+  margin-top: 3px;
+  color: #7c897e;
+  font: 9px "DM Mono", monospace;
+}
+
+.ranking-only-row b {
+  color: #718f12;
+  font-size: 19px;
+}
+
+.ranking-only-empty {
+  margin: 0;
+  padding: 16px 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+@media (max-width: 600px) {
+  .ranking-page {
+    padding: 20px 14px 90px;
+  }
+
+  .ranking-page-header {
+    gap: 11px;
+  }
+
+  .ranking-only-panel {
+    padding: 15px;
+  }
+
+  .ranking-only-row {
+    padding-inline: 4px;
+  }
+
+  .ranking-only-row.current {
+    margin-inline: -4px;
+  }
+}
+
+@media (max-width: 420px) {
+  .tournament-tabs button {
+    gap: 4px;
+    padding-inline: 4px;
+    font-size: 9px;
   }
 }

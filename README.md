@@ -40,7 +40,39 @@ Set `GOOGLE_CLOUD_PROJECT` and authenticate with Application Default Credentials
 gcloud auth application-default login
 ```
 
-The API uses Firestore when `COURTMATE_DATASTORE=firestore`. Set `COURTMATE_DATASTORE=memory` for an offline local run. With `GEMINI_API_KEY`, intent extraction and search explanation use the model in `GEMINI_MODEL` (default `gemini-3.6-flash`) through the server-side adapter. Gemini receives only a bounded session snapshot; Python remains the authority for sport, skill, date, area, time, and open-slot eligibility. If Gemini is unavailable, the API falls back to deterministic parsing and decisions.
+The API uses Firestore when `COURTMATE_DATASTORE=firestore`. Set `COURTMATE_DATASTORE=memory` for an offline local run. With `GEMINI_API_KEY`, intent extraction and grounded search explanation use the model in `GEMINI_MODEL` (default `gemini-3.6-flash`) through the server-side adapter. Gemini receives only parsed intent and verified records; Python remains the authority for sport, skill, date, area, time, and open-slot eligibility. If Gemini or Vertex AI embeddings are unavailable, the API falls back to deterministic parsing, retrieval, and decisions.
+
+### Grounded semantic search
+
+Semantic search uses Firestore native vector search and Vertex AI `gemini-embedding-001`. Firestore remains authoritative: embeddings are only sanitized projections used to find candidate IDs, and the API re-reads and deterministically validates every result before returning it. The current frontend contract is unchanged. To enable it locally or on Cloud Run, set `COURTMATE_USE_VERTEX_AI=true`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION=global`, and `GOOGLE_GENAI_USE_VERTEXAI=true`. The Cloud Run service account needs Vertex AI User and Cloud Datastore User access.
+
+Build or refresh the corpus after seeding data:
+
+```bash
+COURTMATE_DATASTORE=firestore \
+GOOGLE_CLOUD_PROJECT=mttn-portal \
+GOOGLE_CLOUD_LOCATION=global \
+COURTMATE_USE_VERTEX_AI=true \
+GOOGLE_GENAI_USE_VERTEXAI=true \
+python -m backend.rebuild_vector_index
+```
+
+The command writes sanitized session, tournament, public-player, and CourtMate FAQ projections to `search_documents`. Create the vector index once (and include the project if it is not the active gcloud project):
+
+```bash
+gcloud firestore indexes composite create \
+  --project=mttn-portal \
+  --database='(default)' \
+  --collection-group=search_documents \
+  --query-scope=COLLECTION \
+  --field-config=order=ASCENDING,field-path=source_type \
+  --field-config=order=ASCENDING,field-path=visibility \
+  --field-config=order=ASCENDING,field-path=sport \
+  --field-config=order=ASCENDING,field-path=status \
+  --field-config=field-path=embedding,vector-config='{"dimension":"768","flat":"{}"}'
+```
+
+Search falls back to the existing deterministic matcher if Vertex AI, the vector index, or embeddings are unavailable. The index can take a few minutes to become ready.
 
 The Tournament Desk is a racket-sport competition MVP. Open `Tournaments`, create a pickleball, badminton, tennis, padel, squash, or table-tennis event, register players, and generate a round-robin draw. A match player can submit a result and the opponent or organizer can confirm it; only confirmed results contribute to the live leaderboard. Tournament data is stored in `tournaments`, `tournament_registrations`, and `tournament_matches` in Firestore.
 
@@ -166,7 +198,7 @@ gcloud run deploy courtmate-api \
   --max 1 \
   --memory 512Mi \
   --cpu 1 \
-  --set-env-vars COURTMATE_DATASTORE=firestore,GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID,COURTMATE_PROFILE_BUCKET=profile-pictures,COURTMATE_SIGNING_SERVICE_ACCOUNT=YOUR_CLOUD_RUN_SERVICE_ACCOUNT,GOOGLE_MAPS_API_KEY=YOUR_MAPS_KEY,COURTMATE_MAX_SESSION_READS=100,COURTMATE_MAX_PLAYER_READS=500
+  --set-env-vars COURTMATE_DATASTORE=firestore,GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID,GOOGLE_CLOUD_LOCATION=global,COURTMATE_USE_VERTEX_AI=true,GOOGLE_GENAI_USE_VERTEXAI=true,COURTMATE_VECTOR_SEARCH_ENABLED=true,COURTMATE_VECTOR_DIMENSIONS=768,COURTMATE_PROFILE_BUCKET=profile-pictures,COURTMATE_SIGNING_SERVICE_ACCOUNT=YOUR_CLOUD_RUN_SERVICE_ACCOUNT,GOOGLE_MAPS_API_KEY=YOUR_MAPS_KEY,COURTMATE_MAX_SESSION_READS=100,COURTMATE_MAX_PLAYER_READS=500,COURTMATE_MAX_VECTOR_RESULTS=20
 ```
 
 The pasted Google Cloud free-tier limits are usage limits, not a spend cap. Set a billing budget alert in Cloud Billing and monitor Firestore reads/writes and Cloud Run requests.

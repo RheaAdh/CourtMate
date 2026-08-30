@@ -242,12 +242,16 @@ class Tournament(BaseModel):
     rules: TournamentRules = Field(default_factory=TournamentRules)
 
 
+class TournamentListItem(Tournament):
+    my_registration_status: Literal["pending", "registered", "waitlisted", "declined", "withdrawn"] | None = None
+
+
 class TournamentRegistration(BaseModel):
     id: str
     tournament_id: str
     player_id: str
     display_name: str
-    status: Literal["registered", "waitlisted", "withdrawn"] = "registered"
+    status: Literal["pending", "registered", "waitlisted", "declined", "withdrawn"] = "pending"
     cmr_rating: float | None = Field(default=None, ge=0, le=100)
     created_at: datetime
 
@@ -289,7 +293,7 @@ class TournamentDetailsResponse(BaseModel):
 
 
 class TournamentListResponse(BaseModel):
-    tournaments: list[Tournament]
+    tournaments: list[TournamentListItem]
 
 
 class CreateTournamentRequest(BaseModel):
@@ -306,6 +310,10 @@ class TournamentScoreRequest(BaseModel):
     score_a: int = Field(ge=0, le=999)
     score_b: int = Field(ge=0, le=999)
     confirm: bool = False
+
+
+class TournamentRegistrationDecisionRequest(BaseModel):
+    status: Literal["approved", "declined"]
 
 
 class TournamentFixtureUpdateRequest(BaseModel):
@@ -365,10 +373,41 @@ class PlayerRecommendation(BaseModel):
 class SearchResponse(BaseModel):
     intent: SearchIntent
     recommendations: list[SessionRecommendation]
+    tournaments: list[TournamentListItem] = Field(default_factory=list)
     action: Literal["join_existing", "create_group"] = "join_existing"
     message: str = ""
     group_proposal: GroupProposal | None = None
     scope: Literal["court_discovery", "out_of_scope"] = "court_discovery"
+    retrieval: "RetrievalTrace | None" = None
+
+
+class SearchDocument(BaseModel):
+    """A sanitized, searchable projection of an operational record."""
+
+    id: str
+    source_type: Literal["session", "tournament", "player", "venue", "faq"]
+    source_id: str
+    content: str
+    embedding: list[float] = Field(default_factory=list)
+    metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    embedding_model: str
+    embedding_version: str = "v1"
+
+
+class VectorSearchResult(BaseModel):
+    document: SearchDocument
+    distance: float | None = None
+
+
+class RetrievalTrace(BaseModel):
+    mode: Literal["vector", "deterministic_fallback"]
+    candidate_count: int = 0
+    grounded_result_count: int = 0
+    embedding_version: str | None = None
+    fallback_reason: str | None = None
+
+
+SearchResponse.model_rebuild()
 
 
 class ReplacementResponse(BaseModel):
@@ -404,11 +443,12 @@ class JoinRequest(BaseModel):
 class AppNotification(BaseModel):
     id: str
     player_id: str
-    kind: Literal["game_match", "join_request", "request_update", "follow"] = "game_match"
+    kind: Literal["game_match", "join_request", "request_update", "tournament_request", "tournament_update", "follow"] = "game_match"
     title: str
     message: str
     session_id: str
     request_id: str | None = None
+    tournament_id: str | None = None
     actor_id: str | None = None
     read: bool = False
     created_at: datetime

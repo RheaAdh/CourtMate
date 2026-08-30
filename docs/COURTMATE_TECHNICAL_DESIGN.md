@@ -3,7 +3,7 @@
 **Status:** Hackathon MVP
 **Frontend:** Next.js 15, React, TypeScript, PWA
 **Backend:** Python FastAPI on Cloud Run
-**Cloud:** Firebase Auth, Firestore, Cloud Storage, Gemini API, optional Google Maps Geocoding
+**Cloud:** Firebase Auth, Firestore native vector search, Vertex AI Gemini Embeddings, Cloud Storage, Gemini API, optional Google Maps Geocoding
 
 ## 1. Design Principles
 
@@ -21,11 +21,12 @@ Next.js PWA
   v
 FastAPI on Cloud Run
   |-- Gemini adapter (google-genai)
+  |-- embedding provider and sanitized vector indexer
   |-- deterministic matcher and CMR engine
   |-- authorization and state transitions
   |-- repository protocol
-          |-- FirestoreRepository
-          |-- InMemoryRepository
+       |-- FirestoreRepository
+       |-- InMemoryRepository
 
 Firebase Auth: Google identity
 Cloud Storage: profile photos and wearable screenshots
@@ -38,13 +39,14 @@ The browser never receives the Gemini secret. Cloud Run uses environment configu
 
 `POST /v1/sessions/search` receives a natural-language query and optional sport/mode.
 
-1. `GeminiIntentParser` attempts structured `SearchIntent` extraction.
-2. If Gemini is unavailable or invalid, the deterministic parser extracts supported sport, locality, date, time, skill range, and style. It handles phrases such as "around me," "this Saturday," "tomorrow," numeric ranges, and clock times without confusing time with skill.
-3. Localities are geocoded through Google Maps when configured, with Bangalore fallback coordinates.
-4. `search_sessions` filters by sport, open capacity, date, time overlap, coordinate distance/travel radius, skill overlap, and exact style when requested.
-5. Python ranks eligible sessions and produces evidence such as skill fit, distance, availability, reliability, and familiarity.
-6. Gemini may summarize or order only the already-approved result IDs. Invalid or invented IDs are discarded.
-7. No match returns a `GroupProposal`, not a fabricated group. The frontend keeps creation conversational and asks follow-up questions before explicit posting.
+1. The deterministic scope guard rejects unrelated questions before any retrieval.
+2. `GeminiIntentParser` attempts structured `SearchIntent` extraction.
+3. If Gemini is unavailable or invalid, the deterministic parser extracts supported sport, locality, date, time, skill range, and style. It handles phrases such as "around me," "this Saturday," "tomorrow," numeric ranges, and clock times without confusing time with skill.
+4. The query is embedded with Vertex AI `gemini-embedding-001` at 768 dimensions and searched against sanitized `search_documents` using Firestore KNN cosine search. Filters include source type, sport when explicit, visibility, and active status.
+5. Returned source IDs are re-read from Firestore. Localities are geocoded through Google Maps when configured, with Bangalore fallback coordinates.
+6. `search_sessions` filters by sport, open capacity, date, time overlap, coordinate distance/travel radius, skill overlap, and exact style when requested.
+7. Python ranks eligible sessions and produces evidence such as skill fit, distance, availability, reliability, and familiarity. Gemini receives only those verified records for a concise grounded explanation.
+8. If embeddings or the vector index are unavailable, the bounded deterministic matcher remains the fallback. No match returns a `GroupProposal`, not a fabricated group.
 
 `POST /v1/me/performance-chat` handles CMR, completed games, activity, and uploaded wearable questions. Out-of-scope questions receive a safe redirect.
 
@@ -60,6 +62,7 @@ Firestore collections:
 - `notifications`: game matches, requests, approvals, follows, and event alerts.
 - `follows`, `activity_proofs`, `social_posts`, `social_comments`.
 - `tournaments`, `tournament_registrations`, `tournament_matches`.
+- `search_documents`: sanitized projections for public sessions, tournaments, players, venues, and CourtMate FAQ content, including a 768-dimensional embedding and filter metadata. It never stores contact details, exact home coordinates, private preferences, or private group chat.
 
 Coordinates support matching but are not public profile data. Profile photos and activity images use authenticated cloud-storage upload flows; initials are rendered when no photo exists.
 
@@ -82,6 +85,7 @@ Session states are `open`, `full`, `in_progress`, `completed`, and `cancelled`. 
 - Firebase ID tokens are verified server-side.
 - Organizer-only, member-only, player-only, and tournament permissions are enforced in FastAPI.
 - Gemini cannot override authorization, capacity, privacy, dates, score rules, or stored evidence.
+- Vector similarity is not an authorization boundary. Source records are fetched again and checked against the authenticated player before they are returned.
 - Screenshot analysis accepts only approved HTTPS cloud-storage URLs and extracts only visible metrics.
 - Exact home coordinates and private group content are not exposed.
 - Firestore read limits and Cloud Run scale-to-zero keep the hackathon deployment affordable.
@@ -106,8 +110,11 @@ GET  /v1/sessions/{id}/leaderboard
 GET/POST /v1/tournaments...
 ```
 
+`POST /v1/sessions/search` keeps its existing recommendation and group-proposal contract and adds a non-sensitive `retrieval` trace containing the retrieval mode, candidate count, grounded result count, and embedding version. Embeddings are never returned to the browser.
+
 ## 10. Verification and Deployment
 
 Run `python -m unittest discover -s tests` for API, matching, lifecycle, CMR, waitlist, and tournament coverage. Run `npm run build` for the PWA production build. Use `COURTMATE_DATASTORE=memory` for isolated local development and `COURTMATE_DATASTORE=firestore` on Cloud Run. Required configuration includes Firebase project identity, allowed CORS origins, Gemini credentials, Google Maps key if geocoding is enabled, and Firestore service access.
+Run `python -m backend.rebuild_vector_index` after seeding Firestore and create the `search_documents.embedding` vector index with 768 dimensions and cosine distance. Vector tests use a fake embedding provider and do not require cloud credentials.
 
 Deferred infrastructure includes Pub/Sub reminders, BigQuery/Looker analytics, native push notifications, first-class Venue/Event entities, bracket tournaments, and a general-purpose agent tool loop. These should follow evidence from the chat-to-game and organizer workflows.

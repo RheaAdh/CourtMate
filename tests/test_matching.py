@@ -1,14 +1,58 @@
 import unittest
-from datetime import date
+from datetime import date, time
 
 from backend.gemini import GeminiIntentParser
 from backend.matching import search_sessions, suggest_replacements
-from backend.models import Player, cmr_from_legacy_rating, normalize_cmr_player, rating_for_sport
+from backend.models import Player, SearchIntent, Session, cmr_from_legacy_rating, normalize_cmr_player, rating_for_sport
 from backend.repository import InMemoryRepository
 from tests.fixtures import load_repository_fixture
+from backend.vector_search import VectorIndexer, VectorRetriever, session_to_document
+
+
+class FakeEmbeddingProvider:
+    model = "fake-embedding"
+    version = "test"
+    dimensions = 2
+    available = True
+
+    def embed_document(self, text):
+        return [1.0, 0.0] if "pickleball" in text.lower() else [0.0, 1.0]
+
+    def embed_query(self, text):
+        return [1.0, 0.0] if "pickleball" in text.lower() else [0.0, 1.0]
 
 
 class MatchingTests(unittest.TestCase):
+    def test_vector_index_retrieves_sanitized_records_with_metadata_filters(self):
+        repo = InMemoryRepository()
+        load_repository_fixture(repo)
+        provider = FakeEmbeddingProvider()
+        indexer = VectorIndexer(repo, provider)
+        count = indexer.rebuild()
+        self.assertGreaterEqual(count, 7)
+        document = next(item for item in repo.list_search_documents() if item.source_id == "s1")
+        self.assertNotIn("12.9698", document.content)
+        results = VectorRetriever(repo, provider).search(
+            "Find a relaxed pickleball game nearby",
+            SearchIntent(sport="pickleball", area="Whitefield"),
+            "session",
+        )
+        self.assertTrue(results)
+        self.assertEqual(results[0].document.source_id, "s1")
+        self.assertTrue(all(item.document.source_type == "session" for item in results))
+
+    def test_vector_rebuild_removes_stale_documents(self):
+        repo = InMemoryRepository()
+        provider = FakeEmbeddingProvider()
+        repo.save_search_document(session_to_document(Session(
+            id="stale", group_name="Old game", organizer_id="p1", area="Whitefield",
+            session_date=date(2026, 9, 1), start_time=time(8), end_time=time(9),
+            skill_min=2, skill_max=3, style="casual", capacity=4,
+        )))
+        load_repository_fixture(repo)
+        VectorIndexer(repo, provider).rebuild()
+        self.assertNotIn("session__stale", {item.id for item in repo.list_search_documents()})
+
     def test_scope_guard_accepts_court_discovery_language(self):
         parser = GeminiIntentParser()
         self.assertTrue(parser.is_in_scope("What courts are nearby?"))
