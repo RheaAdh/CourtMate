@@ -672,6 +672,9 @@ def update_profile_image(request: ProfileImageUpdateRequest, player: Player = De
     if request.profile_image_url is None:
         return repository.save_player(player.model_copy(update={"profile_image_url": None}))
 
+    if request.profile_image_url.startswith("/avatars/") and request.profile_image_url.endswith(".svg"):
+        return repository.save_player(player.model_copy(update={"profile_image_url": request.profile_image_url}))
+
     bucket_name = _profile_bucket_name()
     parsed_url = urlparse(request.profile_image_url)
     expected_prefix = f"/{bucket_name}/profiles/{player.id}/"

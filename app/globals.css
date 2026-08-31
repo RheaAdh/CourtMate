@@ -710,6 +710,8 @@ body::before {
 .profile-activity-heading > span { color:#879487; font:8px 'DM Mono'; white-space:nowrap; }
 .activity-heatmap { margin-top:15px; }
 .activity-heatmap-labels,.activity-heatmap-legend { display:flex; align-items:center; justify-content:space-between; gap:6px; color:#8b978d; font:8px 'DM Mono'; }
+.activity-share-button { margin-left:auto; padding:3px 7px; border:1px solid var(--line); border-radius:999px; background:transparent; color:var(--muted); font:8px 'DM Mono'; cursor:pointer; }
+.activity-share-button:hover,.activity-share-button:focus-visible { border-color:var(--lime); color:var(--ink); }
 .activity-heatmap-grid { display:grid; grid-template-rows:repeat(7,11px); grid-auto-flow:column; grid-auto-columns:11px; gap:4px; margin:10px 0; overflow-x:auto; scrollbar-width:none; }
 .activity-heatmap-grid::-webkit-scrollbar { display:none; }
 .activity-cell { display:block; width:11px; height:11px; border-radius:3px; background:#e5ebe0; }
@@ -3204,6 +3206,75 @@ body::before { border-color: rgba(117, 140, 31, .18); }
   position: relative;
 }
 
+.fixed-avatar-picker {
+  position: relative;
+}
+
+/* Built-in avatars replace the paid/generated avatar entry point for now. */
+.sporty-avatar-studio > .profile-edit-bio-button {
+  display: none;
+}
+
+.fixed-avatar-panel {
+  position: absolute;
+  z-index: 9;
+  top: calc(100% + 10px);
+  left: 0;
+  width: min(360px, calc(100vw - 40px));
+  padding: 14px;
+  border: 1px solid #c9d7ae;
+  border-radius: 14px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 18px 40px rgba(25, 35, 33, .18);
+}
+
+.fixed-avatar-panel strong,
+.fixed-avatar-panel small {
+  display: block;
+}
+
+.fixed-avatar-panel small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.fixed-avatar-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 13px;
+}
+
+.fixed-avatar-grid button {
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 9px;
+}
+
+.fixed-avatar-grid button.selected {
+  border-color: var(--lime);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--lime) 30%, transparent);
+}
+
+.fixed-avatar-grid img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+}
+
+.fixed-avatar-grid span {
+  display: block;
+  padding: 6px 3px;
+}
+
 .sporty-avatar-panel {
   position: absolute;
   z-index: 8;
@@ -3219,6 +3290,15 @@ body::before { border-color: rgba(117, 140, 31, .18); }
 }
 
 @media (max-width: 600px) {
+  .fixed-avatar-panel {
+    position: fixed;
+    top: auto;
+    right: 14px;
+    bottom: calc(90px + env(safe-area-inset-bottom));
+    left: 14px;
+    width: auto;
+  }
+
   .tournament-tabs {
     width: 100%;
     gap: 2px;
@@ -8444,6 +8524,102 @@ html[data-theme="dark"] .toast {
   }
 }
 
+/* Keep pale light-theme accents from reducing contrast or fragmenting dark mode. */
+html[data-theme="dark"] .play-log-card {
+  background: #eaf2df;
+  color: #17231f;
+}
+
+html[data-theme="dark"] .play-log-card .kicker {
+  color: #5f7c16;
+}
+
+html[data-theme="dark"] .play-log-card small {
+  color: #526257;
+}
+
+html[data-theme="dark"] .game-date,
+html[data-theme="dark"] .game-date.confirmed,
+html[data-theme="dark"] .game-date.completed,
+html[data-theme="dark"] .date-badge,
+html[data-theme="dark"] .recent-game-date {
+  border: 1px solid #405a47;
+  background: #24362c;
+  color: var(--lime);
+}
+
+html[data-theme="dark"] .social-session-leaderboard {
+  border-color: #405a47;
+  background: #17231f;
+}
+
+html[data-theme="dark"] .social-session-rank-row {
+  border-top-color: #344a3e;
+  background: transparent;
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .social-session-rank-row:hover,
+html[data-theme="dark"] .social-session-rank-row:focus-visible {
+  background: #24362c;
+}
+
+html[data-theme="dark"] .social-session-rank-row > b,
+html[data-theme="dark"] .social-session-rank-row em {
+  color: var(--lime);
+}
+
+html[data-theme="dark"] .social-session-rank-row strong {
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .social-session-rank-row small,
+html[data-theme="dark"] .social-session-rank-row em .social-session-trend.steady {
+  color: var(--muted);
+}
+
+html[data-theme="dark"] .social-session-rank-row.rank-1 .social-session-rank-badge,
+html[data-theme="dark"] .social-session-rank-row.rank-2 .social-session-rank-badge,
+html[data-theme="dark"] .social-session-rank-row.rank-3 .social-session-rank-badge {
+  background: #34472d;
+  color: var(--lime);
+}
+
+html[data-theme="dark"] .social-session-rank-row .social-avatar {
+  border-color: #405a47;
+}
+
+html[data-theme="dark"] .tag.rating,
+html[data-theme="dark"] .tag.open,
+html[data-theme="dark"] .availability-option.selected {
+  border-color: #506842;
+  background: #263927;
+  color: #d5e6a0;
+}
+
+html[data-theme="dark"] .fixed-avatar-panel {
+  border-color: #405a47;
+  background: #17231f;
+  color: var(--ink);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, .4);
+}
+
+html[data-theme="dark"] .fixed-avatar-grid button {
+  border-color: #405a47;
+  background: #223128;
+  color: var(--ink);
+}
+
+/* Keep the streak heatmap on the profile dashboard; the full calendar remains available separately. */
+.profile-insights > .profile-activity-grid .profile-activity-card:first-child {
+  display: block;
+}
+
+.profile-insights > .profile-activity-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .game-share-button {
   border: 1px solid #cbdc73;
   border-radius: 999px;
@@ -8456,8 +8632,17 @@ html[data-theme="dark"] .toast {
 }
 
 .game-share-button span {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
   margin-left: 4px;
-  font-size: 12px;
+  overflow: hidden;
+  color: inherit;
+  text-indent: -9999px;
+  vertical-align: -3px;
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 16V3m0 0L7 8m5-5 5 5M5 13v7h14v-7' fill='none' stroke='black' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.7'/%3E%3C/svg%3E") center / contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 16V3m0 0L7 8m5-5 5 5M5 13v7h14v-7' fill='none' stroke='black' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.7'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 .game-share-button:hover {
@@ -8936,6 +9121,114 @@ html[data-theme="dark"] .copy-link-button:hover {
     justify-content: center;
     text-align: center;
   }
+}
+/* Ensure the shared double-ended control wins over earlier legacy rules. */
+.game-create-grid .cmr-range-sliders { position: relative; display: block; height: 42px; margin-top: 5px; }
+.game-create-grid .cmr-range-value { position: absolute; top: 0; z-index: 4; color: #596a31; font: 9px 'DM Mono'; letter-spacing: .06em; text-transform: uppercase; }
+.game-create-grid .cmr-range-value-min { left: 0; }
+.game-create-grid .cmr-range-value-max { right: 0; }
+.game-create-grid .cmr-range-value b { color: var(--ink); font-size: 11px; }
+.game-create-grid .cmr-range-sliders .cmr-range-input { position: absolute; top: 20px; left: 0; z-index: 1; width: 100%; height: 18px; margin: 0; padding: 0; border: 0; background: transparent; pointer-events: none; }
+.game-create-grid .cmr-range-sliders .cmr-range-input-min { z-index: 2; }
+.game-create-grid .cmr-range-sliders .cmr-range-input-max { z-index: 3; }
+.game-create-grid .cmr-range-sliders .cmr-range-input::-webkit-slider-runnable-track { height: 5px; border-radius: 999px; background: #d7e7ab; }
+.game-create-grid .cmr-range-sliders .cmr-range-input::-moz-range-track { height: 5px; border-radius: 999px; background: #d7e7ab; }
+.game-create-grid .cmr-range-sliders .cmr-range-input::-webkit-slider-thumb { pointer-events: auto; }
+.game-create-grid .cmr-range-sliders .cmr-range-input::-moz-range-thumb { pointer-events: auto; }
+@media (max-width: 600px) { .game-create-grid .cmr-range-sliders { height: 42px; } }
+
+/* Final shared-bar rules override the legacy two-track styles above. */
+.game-create-grid .cmr-range-sliders {
+  position: relative;
+  display: block;
+  height: 42px;
+  margin-top: 5px;
+}
+
+.game-create-grid .cmr-range-value {
+  position: absolute;
+  top: 0;
+  z-index: 4;
+  color: #596a31;
+  font: 9px 'DM Mono';
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.game-create-grid .cmr-range-value-min { left: 0; }
+.game-create-grid .cmr-range-value-max { right: 0; }
+.game-create-grid .cmr-range-value b { color: var(--ink); font-size: 11px; }
+
+.game-create-grid .cmr-range-sliders .cmr-range-input {
+  position: absolute;
+  top: 20px;
+  left: 0;
+  z-index: 1;
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+.game-create-grid .cmr-range-sliders .cmr-range-input-min { z-index: 2; }
+.game-create-grid .cmr-range-sliders .cmr-range-input-max { z-index: 3; }
+.game-create-grid .cmr-range-sliders .cmr-range-input::-webkit-slider-runnable-track { height: 5px; border-radius: 999px; background: #d7e7ab; }
+.game-create-grid .cmr-range-sliders .cmr-range-input::-moz-range-track { height: 5px; border-radius: 999px; background: #d7e7ab; }
+.game-create-grid .cmr-range-sliders .cmr-range-input::-webkit-slider-thumb { pointer-events: auto; }
+.game-create-grid .cmr-range-sliders .cmr-range-input::-moz-range-thumb { pointer-events: auto; }
+
+@media (max-width: 600px) {
+  .game-create-grid .cmr-range-sliders { height: 42px; }
+}
+
+/* Keep the two accessible inputs visually unified as one range control. */
+.cmr-range-sliders {
+  position: relative;
+  display: block;
+  height: 42px;
+  margin-top: 5px;
+}
+
+.cmr-range-value {
+  position: absolute;
+  top: 0;
+  z-index: 2;
+  color: #596a31;
+  font: 9px 'DM Mono';
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.cmr-range-value-min { left: 0; }
+.cmr-range-value-max { right: 0; }
+.cmr-range-value b { color: var(--ink); font-size: 11px; }
+
+.cmr-range-sliders .cmr-range-input {
+  position: absolute;
+  top: 20px;
+  left: 0;
+  z-index: 1;
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+.cmr-range-sliders .cmr-range-input-min { z-index: 2; }
+.cmr-range-sliders .cmr-range-input-max { z-index: 3; }
+.cmr-range-sliders .cmr-range-input::-webkit-slider-runnable-track { height: 5px; border-radius: 999px; background: #d7e7ab; }
+.cmr-range-sliders .cmr-range-input::-moz-range-track { height: 5px; border-radius: 999px; background: #d7e7ab; }
+.cmr-range-sliders .cmr-range-input::-webkit-slider-thumb { pointer-events: auto; }
+.cmr-range-sliders .cmr-range-input::-moz-range-thumb { pointer-events: auto; }
+
+@media (max-width: 600px) {
+  .cmr-range-sliders { height: 42px; }
 }
 
 /* Viewed profiles use the same compact player card as the signed-in profile. */

@@ -2,81 +2,83 @@
 
 **Version:** Hackathon MVP, August 2026
 **Market:** Bengaluru, beginning with Whitefield
-**Category:** Racket-sports discovery, community, CMR, local tournaments, and activity sharing
+**Category:** Racket-sports discovery, community, CMR, and activity sharing
 
 ## 1. Product Thesis
 
-CourtMate turns “I want to play” into a compatible real-world game. It closes the gap between a booking platform and a chat group by finding players at a similar level, coordinating attendance, recording what happened, and helping players return.
+CourtMate helps a player find the right nearby game, join it with low friction, show up, rate the experience, and improve their sport-specific CourtMate Rating (CMR). It adds a portable layer of skill, quality, attendance, and motivation across fragmented sports communities.
 
-CourtMate is not a court-booking replacement or an unrestricted general-purpose assistant. Its assistant supports racket-sport discovery, tournaments, courts and venue information, sports questions, groups, and the authenticated player’s own performance. It must not invent a venue, player, game, score, or rating.
+> **Find community → join game → play → rate → improve CMR → get better matches.**
+
+CourtMate is not a court-booking replacement. External booking providers and WhatsApp communities may remain useful distribution channels, while CourtMate owns the player fit, game record, feedback, and CMR loop.
 
 ## 2. Users And Problems
 
-- **Solo player:** wants a credible nearby game without joining many groups.
-- **Organizer:** wants approvals, waitlist replacement, coordination, and low-friction feedback in one place.
-- **Tournament organizer:** needs request-based registration, editable knockout draws, winner advancement, optional set scores, draw sheets, and live standings.
-- **Regular player:** wants sport-specific CMR, activity history, rematches, followers, and shareable results.
+- **Solo player:** wants a credible nearby game with people at a compatible level.
+- **Organizer:** wants to create a game, share it privately, approve players, coordinate attendance, and collect feedback.
+- **Community player:** wants to discover active local circles without joining many unrelated groups.
+- **Regular player:** wants sport-specific CMR, streak motivation, trajectory, reliability, and better recommendations.
 
-Today, attendance is scattered across chat groups, skill labels are inconsistent, dropouts are difficult to replace, and scores, feedback, progress, and tournament results disappear after play.
+Attendance is scattered across chat groups, skill labels are inconsistent, dropouts are difficult to replace, and games and feedback disappear after play. Existing sports communities do not provide a portable quality signal across groups.
 
 ## 3. Core Experience
 
-### Home activity feed
+### Home: Rally Circles
 
-For signed-in players, the first tab is **Home**, branded **Rally Circles**. It has **Discover**, **Following**, and **My rallies** views, recommended players to follow, and activity-only completed-game cards. My rallies contains only the signed-in player's completed sessions. The former chat-first screen is now the **Assistant** tab and remains available through the chat icon. Home has no generic post composer or generic-feed posts.
+Signed-in players land on **Rally Circles**, with **Discover**, **Following**, and **My rallies** views. Completed game activity appears as a shared rally with the lineup, session leaderboard, CMR movement, reactions, comments, and optional session photos. My rallies is limited to the signed-in player’s completed games.
 
-Session activity is published as leaderboard content so followers can see when someone is playing, view the current or final CMR order, and open any player profile from the author, avatar, or ranking row.
+The home feed is activity-first, not a generic post composer. A player can follow another player, receive follow-request notifications, and accept or decline requests. Notification counts remain visible on the bell.
 
-### Assistant, match, join, or create
+### Assistant and game creation
 
-The Assistant is a conversational interface. Players type or use voice to say what they want, for example: “Find a relaxed intermediate padel game near Whitefield Saturday morning.” It asks only useful follow-ups, offers suggestion chips, shows a tennis-ball “Finding your best match” loader, and returns verified game or tournament cards.
+The Assistant accepts typed or voice requests such as “find an intermediate padel game near Whitefield this Saturday evening.” It returns verified games, group previews, and explicit creation proposals. It must not invent a player, venue, game, score, or rating.
 
-Deterministic rules filter by sport, locality or travel radius, date, time, skill, style, capacity, privacy, and lifecycle. Cards support viewing the group, requesting to join, joining a waitlist, and skipping. A request immediately appears in Games and organizers receive an actionable notification.
+Games also provides a structured create-game modal. The form validates that the start is after now and the end is after the start. It supports:
 
-When no suitable game exists, the Assistant asks conversationally for missing sport, time, area, skill, and vibe. It shows a complete proposal and requires explicit confirmation before creating a game. Creation must not depend on a structured form, although Games includes a form-based create-game FAB for players who prefer direct entry.
+- sport, area, date, start time, and end time;
+- sport-specific preferred player CMR range, defaulting to the creator’s CMR minus and plus 20;
+- singles or doubles;
+- total player capacity, with open spots derived automatically from confirmed players;
+- casual, social, or competitive style;
+- visibility: discoverable on Explore, followers can discover, or private link only.
 
-Informational sports and venue questions are answered without returning unrelated game results. Follow-ups retain context only when the new message is clearly related; unrelated questions are redirected instead of inheriting old search criteria.
+### Games and Group Space
 
-### Games and groups
+Games uses compact tabs for **Explore**, **My games**, **Pending**, and **Feedback**. Explore shows all eligible public games, ranked by fit and location, and supports text search, sport, CMR skill band, date, and time-of-day availability filters. Filters are applied with an explicit **See results** action.
 
-Games uses the same single-line tab navigator as Tournaments: **Explore, Upcoming, Pending, History**. Explore places suggested nearby games first, followed by the remaining results. The sport control contains only pickleball, badminton, tennis, padel, squash, and table tennis.
+Every confirmed game has a Group Space for the lineup, CMR, chat, waitlist, and completion. A confirmed player can mark the game complete. The game then moves to Feedback, where players rate every other player, submit match quality and satisfaction feedback, and upload session photos. After the feedback round, CMR is updated and the completed rally is published to Home with the leaderboard and photo carousel.
 
-Every confirmed game has one lightweight, full-page Group Space for member profiles, logistics chat, waitlist, current-CMR lineup, feedback, completion, and the post-game activity card. It is the main coordination surface before and after play. Any confirmed player can mark the game done; this publishes the completed-session card to Home and offers a direct route to My rallies. After completion, each player privately rates every other player from 1 to 10, which updates sport-specific CMR without score entry. Fun, fairness, and return intent remain lightweight check-in signals.
+### Private games
 
-### Social activity and sharing
+Private games are designed for apartment groups, friends, and small communities. They do not appear in Explore and do not send nearby-player discovery notifications. The organizer can copy or share the Group Space link immediately. A friend opening the link can view the preview and request to join; the organizer approves the request in My games. Once confirmed, the friend participates in the same chat, completion, feedback, CMR, and Home-publishing flow as any other game.
 
-Social is a lightweight activity feed, not a doomscrolling network. Players can:
+The share link is the access path, but authorization, capacity, approval, lifecycle, and membership checks remain server-enforced.
 
-- share completed game activity from Group Space;
-- attach a photo or video only when tagging a game they played in;
-- add photos to a session leaderboard only as a confirmed participant;
-- react with a fire icon, with an immediate filled-yellow state and updated count;
-- view and add comments beneath every post;
-- mark a game done from its Group Space to publish one activity card with the venue, date, sport, players, final CMR order, and player upticks or downticks;
-- share a post or creative leaderboard card through the device share sheet, including each player's CMR uptick or downtick;
-- fall back to downloading a branded CourtMate PNG and copying a deep link;
-- follow recommended players and open public profiles from avatars, comments, authors, and leaderboard rows.
+### Communities
 
-Followers can see public or follower-visible session activity, subject to the organizer’s default visibility and the player’s private-profile setting.
+Communities is the player-first local matching layer. It shows:
 
-### Tournaments
+- “Players like you nearby” density for the selected sport;
+- a custom SVG/CSS radar map with the current approximate location, zoom, pan, distance rings, and aggregated neighbourhood hotspots;
+- a five-kilometre default radius, with larger radius choices;
+- a CMR compatibility toggle and sport selector;
+- a community leaderboard scoped by sport and area;
+- an optional collapsed directory of nearby courts and booking links.
 
-The Tournaments area has **Explore, Upcoming, Pending, and History** views with the same compact mobile tab treatment as Games. Organizers create single-elimination tournaments, receive registration requests, approve or decline players, maintain capacity and waitlists, generate seeded knockout draws, edit pairings, select the winner of each match from a player dropdown, and optionally enter match or per-set scores. Byes advance automatically, selected winners populate the next round, and standings and the draw sheet update from stored match results. Older round-robin tournaments remain readable for compatibility.
+The map never exposes individual player pins. Areas with fewer than three visible players are hidden, and displayed data is aggregated by neighbourhood. If location permission is denied, CourtMate uses saved profile coordinates, locality, or the Whitefield fallback.
 
-## 4. Profile, Settings, And Navigation
+The community leaderboard ranks quality rather than popularity. A community needs at least three completed games and five submitted ratings. Ranking signals include match quality, feedback completion, repeat play, reliability, CMR improvement, completed games, and active members. Private individual feedback is never exposed.
 
-The top-left brand uses responsive CourtMate logo assets, including light and dark variants. The profile avatar is top-right. A sun/moon control switches between light and dark themes and persists the choice locally. Mobile navigation remains compact and keeps tab labels on one line; desktop uses a left rail.
+## 4. CMR, Motivation, And Profile
 
-Profiles show a short bio below the player name, a pencil overlay for changing the profile photo, games played, follower/following counts, reliability, activity calendar, recent sessions, and sport-specific CMR history. Connections has Following and Followers tabs. Public player profiles expose only authorized public activity and provide follow/unfollow actions.
+CMR is a 0–100 rating calculated separately for each sport. It is built from completed games and private peer feedback, not from a single person’s opinion. The product shows current CMR by sport, a trajectory graph with session name and rating on point hover/touch, CMR movement on completed rallies, a weekly play streak, and an activity heatmap.
 
-Settings includes age, gender, locality, travel radius, play style, preferred age range, preferred genders, usual availability, private profile, and default game-session visibility: everyone nearby, followers of the organizer, or players in the game.
+Profiles are compact and combine the player card, sport-specific CMR, streak heatmap, trajectory, reliability, followers, and recent game activity without duplicate sections. Sign out is at the bottom of the profile page. Sporty avatars may be generated from a user-provided image and selected sport, but the original image remains optional.
 
-Settings, Notifications, Activity Calendar, Connections, group spaces, rankings, and public player profiles use history-aware pages with back arrows rather than fragile modal-only navigation. Sign out sits at the end of the profile screen.
+## 5. Privacy, Trust, And Performance
 
-## 5. Trust, Privacy, And Success
+Firebase authentication, authorized API calls, session visibility, private profiles, approximate location, capacity, and organizer approval protect players. Exact coordinates are not rendered in community views. PIN/ZIP or locality may be used as a lower-precision location alternative to GPS.
 
-Firebase sign-in, approximate locations, profile visibility, session visibility, and authorization rules protect players. AI cannot bypass authorization, capacity, privacy, approval, score confirmation, or tournament rules. Uploaded profile, session, and activity-proof media must use approved storage locations and size/type limits.
+The app keeps light mode as the default and maintains readable dark mode. Mobile pages use responsive spacing, centered bold tabs, sticky navigation where appropriate, scrollable modals, and no accidental desktop margins. Loading states are contextual and should not wait indefinitely for unrelated APIs.
 
-The demo success path is: open Home, discover or follow a player, use Assistant to find a fit, request to join, approve, coordinate in the full-page Group Space, inspect the waitlist, mark the game done, submit a drag-ordered post-game check-in, see CMR and leaderboard movement on the same activity post, and share the leaderboard image.
-
-Key signals are search-to-request conversion, confirmed attendance, repeat play, completed group feedback, follower engagement, tournament participation, and share-card usage. All loading states use the tennis-ball loader and should communicate the specific operation, such as finding a match, opening a group, loading rankings, or refreshing games.
+The primary success loop is: discover or create a game, share or request access, confirm the lineup, coordinate in Group Space, play, complete, collect feedback, update CMR, publish the rally, and return for a better match.

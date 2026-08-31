@@ -5,6 +5,7 @@ import { PointerEvent, useEffect, useRef, useState } from "react";
 type Sport = "pickleball" | "badminton" | "tennis" | "padel" | "squash" | "table_tennis";
 type CommunityHubProps = { apiUrl: string; authorizedFetch: (input: string, init?: RequestInit) => Promise<Response>; currentCmr?: number; gamesLogged: number; initialLatitude?: number | null; initialLongitude?: number | null; initialArea?: string };
 type DensityPoint = { area: string; player_count: number; intensity: "warm" | "hot" | "very_hot"; latitude?: number | null; longitude?: number | null; cmr_min?: number | null; cmr_max?: number | null; distance_km?: number | null };
+type NearbyGame = { id: string; group_name: string; sport: Sport; area: string; session_date: string; start_time: string; end_time: string; capacity: number; confirmed_player_ids: string[]; skill_min: number; skill_max: number };
 type Facility = { id: string; name: string; sport: Sport; area: string; phone?: string | null; booking_method: string; booking_url?: string | null };
 type LeaderboardEntry = { rank: number; community_id: string; name: string; sport: Sport; area: string; quality_score: number; completed_games: number; active_players: number; average_match_quality: number; feedback_completion_rate: number; repeat_play_rate: number; average_cmr_improvement: number; average_reliability: number; badge?: "best_quality" | "most_improved" | "most_reliable" | "fastest_growing" | null };
 
@@ -19,6 +20,7 @@ export function CommunityHub({ apiUrl, authorizedFetch, currentCmr, gamesLogged,
   const [densityPoints, setDensityPoints] = useState<DensityPoint[]>([]);
   const [densityLoading, setDensityLoading] = useState(false);
   const [densityError, setDensityError] = useState("");
+  const [nearbyGames, setNearbyGames] = useState<NearbyGame[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
   const [facilities, setFacilities] = useState<Facility[]>([]);
@@ -49,6 +51,12 @@ export function CommunityHub({ apiUrl, authorizedFetch, currentCmr, gamesLogged,
 
   useEffect(() => {
     let cancelled = false;
+    void authorizedFetch(`${apiUrl}/v1/me/explore`).then(async (response) => { if (!response.ok) throw new Error(); return response.json() as Promise<{ recommendations: { session: NearbyGame }[] }>; }).then((payload) => { if (!cancelled) setNearbyGames(payload.recommendations.map((item) => item.session)); }).catch(() => { if (!cancelled) setNearbyGames([]); });
+    return () => { cancelled = true; };
+  }, [apiUrl, authorizedFetch]);
+
+  useEffect(() => {
+    let cancelled = false;
     setLeaderboardLoading(true);
     const params = new URLSearchParams({ sport: sportFilter });
     if (initialArea) params.set("area", initialArea);
@@ -67,6 +75,7 @@ export function CommunityHub({ apiUrl, authorizedFetch, currentCmr, gamesLogged,
   }, [apiUrl, sportFilter, initialArea, facilitiesOpen]);
 
   const center = location ?? DEFAULT_CENTER;
+  const selectedGames = selectedPoint ? nearbyGames.filter((game) => game.sport === sportFilter && game.area.trim().toLowerCase() === selectedPoint.area.trim().toLowerCase()) : [];
   const project = (point: DensityPoint) => { if (point.latitude == null || point.longitude == null) return { x: 200, y: 130 }; const xKm = (point.longitude - center.longitude) * 111.32 * Math.cos(center.latitude * Math.PI / 180); const yKm = (center.latitude - point.latitude) * 111.32; return { x: 200 + (xKm / radiusKm) * 100, y: 130 + (yKm / radiusKm) * 100 }; };
   const startPan = (event: PointerEvent<SVGSVGElement>) => { gesture.current = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y }; event.currentTarget.setPointerCapture(event.pointerId); };
   const movePan = (event: PointerEvent<SVGSVGElement>) => { if (!gesture.current) return; setPan({ x: gesture.current.panX + (event.clientX - gesture.current.x) / 2, y: gesture.current.panY + (event.clientY - gesture.current.y) / 2 }); };
