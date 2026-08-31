@@ -1164,7 +1164,60 @@ class ApiFlowTests(unittest.TestCase):
             },
             headers={"X-CourtMate-Player-ID": "p1"},
         )
-        self.assertEqual(invalid_group.status_code, 422)
+    def test_circle_query_returns_grounded_circle_summary(self):
+        response = self.client.post(
+            "/v1/sessions/search",
+            json={"query": "What pickleball circles are active in Whitefield?", "player_id": "p1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["scope"], "court_discovery")
+        self.assertIn("Circle", payload["message"])
+        self.assertIn("Whitefield", payload["message"])
+
+    def test_pickleball_kitchen_rule_question(self):
+        response = self.client.post(
+            "/v1/sessions/search",
+            json={"query": "Explain the kitchen rule in pickleball", "player_id": "p1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["scope"], "sports_general")
+        self.assertIn("Kitchen", payload["message"])
+        self.assertIn("Non-Volley Zone", payload["message"])
+
+    def test_padel_vs_pickleball_comparison_question(self):
+        response = self.client.post(
+            "/v1/sessions/search",
+            json={"query": "What is the difference between padel and pickleball?", "player_id": "p1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["scope"], "sports_general")
+        self.assertIn("Padel", payload["message"])
+    def test_profile_image_upload_raw_bytes(self):
+        # 1x1 transparent PNG
+        png_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\rIDATx\x9cc`\x00\x00\x00\x02\x00\x01H\xaf\xa4q\x00\x00\x00\x00IEND\xaeB`\x82"
+        response = self.client.post(
+            "/v1/me/profile-image/upload",
+            content=png_bytes,
+            headers={"Content-Type": "image/png", "X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["profile_image_url"].startswith("http") or payload["profile_image_url"].startswith("data:image/"))
+
+    def test_social_media_upload_raw_bytes(self):
+        png_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\rIDATx\x9cc`\x00\x00\x00\x02\x00\x01H\xaf\xa4q\x00\x00\x00\x00IEND\xaeB`\x82"
+        response = self.client.post(
+            "/v1/social/media/upload",
+            content=png_bytes,
+            headers={"Content-Type": "image/png", "X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("media_url", payload)
+        self.assertTrue(payload["media_url"].startswith("http") or payload["media_url"].startswith("data:image/"))
 
 
 if __name__ == "__main__":

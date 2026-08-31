@@ -36,11 +36,7 @@ export function PostGameFeedbackPanel({ sessionId, sport, members, currentUserId
   }, [sessionId, members, currentUserId, sport]);
 
   async function addPhoto(file: File) {
-    if (!storage) {
-      onToast("Photo uploads need Firebase Storage to be configured");
-      return;
-    }
-    if (!file.type.startsWith("image/") || !["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
       onToast("Choose a JPG, PNG, or WebP photo");
       return;
     }
@@ -54,11 +50,18 @@ export function PostGameFeedbackPanel({ sessionId, sport, members, currentUserId
     }
     try {
       setPhotoUploading(true);
-      const extension = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
-      const imageRef = ref(storage, `session-photos/${currentUserId}/${sessionId}/${crypto.randomUUID()}.${extension}`);
-      const upload = await uploadBytes(imageRef, file, { contentType: file.type });
-      const photoUrl = await getDownloadURL(upload.ref);
-      setPhotoUrls((urls) => [...urls, photoUrl]);
+      const uploadRes = await authorizedFetch(`${apiUrl}/v1/social/media/upload`, {
+        method: "POST",
+        headers: { "content-type": file.type },
+        body: file,
+      });
+      if (!uploadRes.ok) {
+        throw new Error("Photo upload failed");
+      }
+      const uploadPayload = await uploadRes.json() as { media_url: string };
+      if (!uploadPayload.media_url) throw new Error("Could not retrieve photo URL");
+      setPhotoUrls((urls) => [...urls, uploadPayload.media_url]);
+      onToast("Photo attached");
     } catch {
       onToast("Could not upload that photo");
     } finally {

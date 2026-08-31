@@ -637,11 +637,22 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
     }
     try {
       setBusyAction(`photo-${post.id}`);
-      if (!storage) throw new Error("Firebase Storage is not configured");
-      const extension = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
-      const mediaRef = ref(storage, `social-posts/${currentUserId}/${crypto.randomUUID()}.${extension}`);
-      const upload = await uploadBytes(mediaRef, file, { contentType: file.type });
-      const mediaUrl = await getDownloadURL(upload.ref);
+      let mediaUrl = "";
+      try {
+        const uploadRes = await authorizedFetch(`${apiUrl}/v1/social/media/upload`, {
+          method: "POST",
+          headers: { "content-type": file.type },
+          body: file,
+        });
+        if (uploadRes.ok) {
+          const uploadPayload = await uploadRes.json() as { media_url: string };
+          mediaUrl = uploadPayload.media_url;
+        }
+      } catch (uploadErr) {
+        console.warn("Backend media upload error:", uploadErr);
+      }
+      if (!mediaUrl) throw new Error("Could not upload photo");
+
       const response = await authorizedFetch(`${apiUrl}/v1/social/posts`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -671,6 +682,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
     <div className="social-page-heading">
       <div className="rally-circles-intro"><h1>Rally Circles</h1><p>Your people, your sport, your next game. Completed games become shared CMR stories, so every rally leaves your circle stronger.</p></div>
     </div>
+
     <div className="social-feed-tabs" role="tablist" aria-label="Rally feed"><button className={feedFilter === "all" ? "active" : ""} type="button" onClick={() => changeFilter("all")} role="tab" aria-selected={feedFilter === "all"}>Discover</button><button className={feedFilter === "following" ? "active" : ""} type="button" onClick={() => changeFilter("following")} role="tab" aria-selected={feedFilter === "following"}>Following</button><button className={feedFilter === "personal" ? "active" : ""} type="button" onClick={() => changeFilter("personal")} role="tab" aria-selected={feedFilter === "personal"}>My rallies</button></div>
 
     {feedFilter === "all" && !recommendationsLoading && recommendedPlayers.length > 0 && <section className="social-recommendations" aria-labelledby="social-recommendations-title">

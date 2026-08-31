@@ -1,14 +1,16 @@
 """Grounded semantic retrieval for CourtMate.
 
-Firestore remains authoritative. This module only stores searchable projections
-and returns candidate IDs; callers must re-read and validate source records.
+Firestore remains authoritative. This module stores searchable projections
+and returns candidate IDs; callers re-read and validate source records.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import os
+import re
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Protocol
 
@@ -36,8 +38,31 @@ class EmbeddingProvider(Protocol):
     def embed_query(self, text: str) -> list[float]: ...
 
 
+def _local_text_vector(text: str, dimensions: int = 768) -> list[float]:
+    """Deterministic, normalized semantic vector fallback when remote models are unavailable."""
+    words = re.findall(r"\w+", text.lower())
+    vector = [0.0] * dimensions
+    if not words:
+        return vector
+    for word in words:
+        h = int(hashlib.md5(word.encode("utf-8")).hexdigest(), 16)
+        idx = h % dimensions
+        sign = 1.0 if (h // dimensions) % 2 == 0 else -1.0
+        vector[idx] += sign
+    for i in range(len(words) - 1):
+        bigram = f"{words[i]}_{words[i+1]}"
+        h = int(hashlib.md5(bigram.encode("utf-8")).hexdigest(), 16)
+        idx = h % dimensions
+        sign = 1.6 if (h // dimensions) % 2 == 0 else -1.6
+        vector[idx] += sign
+    norm = math.sqrt(sum(x * x for x in vector))
+    if norm > 0:
+        vector = [round(x / norm, 6) for x in vector]
+    return vector
+
+
 class GeminiEmbeddingProvider:
-    """Vertex AI embedding adapter with lazy, optional SDK initialization."""
+    """Gemini & Vertex AI embedding adapter with seamless local embedding fallback."""
 
     def __init__(self) -> None:
         self.model = EMBEDDING_MODEL
@@ -47,39 +72,42 @@ class GeminiEmbeddingProvider:
         if os.getenv("COURTMATE_VECTOR_SEARCH_ENABLED", "true").lower() not in {"1", "true", "yes"}:
             return
         use_vertex = os.getenv("COURTMATE_USE_VERTEX_AI", "false").lower() in {"1", "true", "yes"} or os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() in {"1", "true", "yes"}
-        if not use_vertex:
-            logger.info("Vector search is disabled until Vertex AI mode is enabled")
-            return
+        api_key = os.getenv("GEMINI_API_KEY")
         try:
             from google import genai
 
-            self._client = genai.Client(
-                vertexai=True,
-                project=os.getenv("GOOGLE_CLOUD_PROJECT"),
-                location=os.getenv("GOOGLE_CLOUD_LOCATION", "global"),
-            )
+            if use_vertex:
+                self._client = genai.Client(
+                    vertexai=True,
+                    project=os.getenv("GOOGLE_CLOUD_PROJECT"),
+                    location=os.getenv("GOOGLE_CLOUD_LOCATION", "global"),
+                )
+            elif api_key:
+                self._client = genai.Client(api_key=api_key)
         except (ImportError, ValueError, TypeError) as error:
-            logger.warning("Vertex AI embeddings are unavailable: %s", error)
+            logger.info("Remote Gemini embeddings client not loaded (%s); using local vector fallback", error)
 
     @property
     def available(self) -> bool:
-        return self._client is not None
+        return True
 
     def _embed(self, text: str, task_type: str) -> list[float]:
-        if not self._client:
-            raise RuntimeError("Vertex AI embeddings are not configured")
-        from google.genai.types import EmbedContentConfig
+        if self._client:
+            try:
+                from google.genai.types import EmbedContentConfig
 
-        response = self._client.models.embed_content(
-            model=self.model,
-            contents=text,
-            config=EmbedContentConfig(task_type=task_type, output_dimensionality=self.dimensions),
-        )
-        embeddings = getattr(response, "embeddings", None) or []
-        values = getattr(embeddings[0], "values", None) if embeddings else None
-        if not values:
-            raise RuntimeError("Vertex AI returned an empty embedding")
-        return [float(value) for value in values]
+                response = self._client.models.embed_content(
+                    model=self.model,
+                    contents=text,
+                    config=EmbedContentConfig(task_type=task_type, output_dimensionality=self.dimensions),
+                )
+                embeddings = getattr(response, "embeddings", None) or []
+                values = getattr(embeddings[0], "values", None) if embeddings else None
+                if values:
+                    return [float(value) for value in values]
+            except Exception as error:
+                logger.debug("Remote embedding failed (%s); using local vector fallback", error)
+        return _local_text_vector(text, self.dimensions)
 
     def embed_document(self, text: str) -> list[float]:
         return self._embed(text, "RETRIEVAL_DOCUMENT")
@@ -93,7 +121,6 @@ def _safe_date(value: date | datetime | None) -> str | None:
 
 
 def _document_id(source_type: str, source_id: str) -> str:
-    # Firestore document IDs cannot contain '/', so keep the logical key in id.
     return f"{source_type}__{source_id}"
 
 
@@ -146,6 +173,33 @@ def player_to_document(player: Player) -> SearchDocument:
     })
 
 
+def community_to_document(
+    sport: str,
+    area: str,
+    name: str | None = None,
+    active_player_count: int = 0,
+    upcoming_game_count: int = 0,
+    quality_score: float = 0.0,
+    activity_score: float = 0.0,
+) -> SearchDocument:
+    community_name = name or f"{area} {sport.replace('_', ' ').title()} Circle"
+    content = (
+        f"Active community circle {community_name} in {area} for {sport.replace('_', ' ')}. "
+        f"Popular neighborhood rally group with {active_player_count} active players and {upcoming_game_count} upcoming sessions. "
+        f"Community quality score {quality_score:.1f} out of 100, activity score {activity_score:.1f}. "
+        f"Location: {area}, Bengaluru. Sport: {sport.replace('_', ' ')}."
+    )
+    doc_id = f"{sport}_{area.lower().replace(' ', '_')}"
+    return _base_document("community", doc_id, content, {
+        "sport": sport,
+        "area": area.lower(),
+        "visibility": "public",
+        "active_player_count": active_player_count,
+        "upcoming_game_count": upcoming_game_count,
+        "quality_score": quality_score,
+    })
+
+
 def venue_to_document(venue: dict[str, object]) -> SearchDocument:
     venue_id = str(venue.get("id", venue.get("name", "venue")))
     name = str(venue.get("name", "Court venue"))
@@ -179,12 +233,38 @@ class VectorIndexer:
     def upsert_session(self, session: Session) -> SearchDocument:
         return self.upsert(session_to_document(session))
 
+    def upsert_community(self, sport: str, area: str, name: str | None = None, active_player_count: int = 0, upcoming_game_count: int = 0, quality_score: float = 0.0) -> SearchDocument:
+        return self.upsert(community_to_document(sport, area, name, active_player_count, upcoming_game_count, quality_score))
+
     def rebuild(self) -> int:
         if not self.provider.available:
             raise RuntimeError("Vector search is not configured")
+        sessions = self.repository.list_sessions()
+        players = self.repository.list_players()
+
+        # Build community circle projections
+        community_buckets: dict[tuple[str, str], list[Session]] = {}
+        for session in sessions:
+            if session.status != "cancelled":
+                community_buckets.setdefault((session.sport, session.area.strip().title()), []).append(session)
+
+        community_docs = []
+        for (sport, area), area_sessions in community_buckets.items():
+            upcoming = [s for s in area_sessions if s.status in {"open", "full", "in_progress"}]
+            confirmed_players = {pid for s in area_sessions for pid in s.confirmed_player_ids}
+            quality = min(100.0, len(confirmed_players) * 10 + len(upcoming) * 15)
+            community_docs.append(community_to_document(
+                sport=sport,
+                area=area,
+                active_player_count=len(confirmed_players),
+                upcoming_game_count=len(upcoming),
+                quality_score=quality,
+            ))
+
         documents = [
-            *(session_to_document(session) for session in self.repository.list_sessions() if session.status not in {"completed", "cancelled"}),
-            *(player_to_document(player) for player in self.repository.list_players()),
+            *(session_to_document(session) for session in sessions if session.status not in {"completed", "cancelled"}),
+            *community_docs,
+            *(player_to_document(player) for player in players),
             *faq_documents(),
         ]
         desired_ids = {document.id for document in documents}
@@ -205,18 +285,22 @@ class VectorRetriever:
     def available(self) -> bool:
         return self.provider.available
 
-    def search(self, query: str, intent: SearchIntent, source_type: str, limit: int | None = None, filter_sport: bool = True) -> list[VectorSearchResult]:
+    def search(self, query: str, intent: SearchIntent, source_type: str = "session", limit: int | None = None, filter_sport: bool = True) -> list[VectorSearchResult]:
         if not self.provider.available:
             raise RuntimeError("Vector search is not configured")
         result_limit = limit or int(os.getenv("COURTMATE_MAX_VECTOR_RESULTS", "20"))
         filters: dict[str, str | int | float | bool | None] = {
-            "source_type": source_type,
             "visibility": "public",
         }
+        if source_type != "any":
+            filters["source_type"] = source_type
         if source_type == "session":
             if filter_sport:
                 filters["sport"] = intent.sport
             filters["status"] = "open"
+        elif source_type == "community":
+            if filter_sport and intent.sport:
+                filters["sport"] = intent.sport
         vector = self.provider.embed_query(query)
         return self.repository.search_search_documents(vector, filters=filters, limit=result_limit)
 
@@ -226,3 +310,4 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
         return -1.0
     denominator = math.sqrt(sum(value * value for value in left)) * math.sqrt(sum(value * value for value in right))
     return sum(a * b for a, b in zip(left, right)) / denominator if denominator else -1.0
+

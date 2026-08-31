@@ -445,7 +445,7 @@ class SearchDocument(BaseModel):
     """A sanitized, searchable projection of an operational record."""
 
     id: str
-    source_type: Literal["session", "player", "venue", "faq"]
+    source_type: Literal["session", "player", "venue", "faq", "community"]
     source_id: str
     content: str
     embedding: list[float] = Field(default_factory=list)

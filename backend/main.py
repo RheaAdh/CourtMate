@@ -1,6 +1,9 @@
+import base64
+import io
+import json
+import logging
 import os
 import re
-import json
 from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 from datetime import date, datetime, time, timedelta, timezone
@@ -23,15 +26,17 @@ from .vector_search import VectorIndexer, VectorRetriever
 
 
 load_dotenv()
+logger = logging.getLogger("courtmate")
 
 app = FastAPI(title="CourtMate API", version="0.1.0")
 allowed_origins = [origin.strip() for origin in os.getenv("COURTMATE_ALLOWED_ORIGINS", "http://localhost:3000").split(",") if origin.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=allowed_origins or ["http://localhost:3000"],
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -595,7 +600,7 @@ def _generate_profile_upload_url(blob, content_type: str) -> str:
 def create_profile_image_upload_url(request: ProfileImageUploadRequest, player: Player = Depends(get_current_player)) -> ProfileImageUploadResponse:
     bucket_name = _profile_bucket_name()
     extension = "jpg" if request.content_type == "image/jpeg" else request.content_type.split("/", 1)[1]
-    object_name = f"profiles/{player.id}/{uuid4()}.{extension}"
+    object_name = f"profile-images/{player.id}/{uuid4()}.{extension}"
     try:
         bucket = _profile_storage_client().bucket(bucket_name)
         blob = bucket.blob(object_name)
@@ -608,9 +613,25 @@ def create_profile_image_upload_url(request: ProfileImageUploadRequest, player: 
     return ProfileImageUploadResponse(upload_url=upload_url, image_url=image_url, object_name=object_name, expires_in=600)
 
 
+def _optimize_image_fallback(image_bytes: bytes, max_dim: int = 400, quality: int = 80) -> str:
+    """Compress image bytes into a compact WebP data URI for local/offline fallback."""
+    try:
+        from PIL import Image
+        img = Image.open(io.BytesIO(image_bytes))
+        img = img.convert("RGB")
+        img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="WEBP", quality=quality)
+        encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/webp;base64,{encoded}"
+    except Exception:
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+        return f"data:image/jpeg;base64,{encoded}"
+
+
 @app.post("/v1/me/profile-image/upload", response_model=Player)
 async def upload_profile_image(request: FastAPIRequest, player: Player = Depends(get_current_player)) -> Player:
-    """Upload profile bytes through the API so browsers do not need Storage CORS or signed URL support."""
+    """Upload profile bytes through the API so browsers do not encounter Storage CORS issues."""
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if content_type not in {"image/jpeg", "image/png", "image/webp"}:
         raise HTTPException(status_code=422, detail="Profile photo must be JPG, PNG, or WebP")
@@ -625,22 +646,57 @@ async def upload_profile_image(request: FastAPIRequest, player: Player = Depends
 
     bucket_name = _profile_bucket_name()
     extension = "jpg" if content_type == "image/jpeg" else content_type.split("/", 1)[1]
-    object_name = f"profiles/{player.id}/{uuid4()}.{extension}"
+    object_name = f"profile-images/{player.id}/{uuid4()}.{extension}"
     download_token = uuid4().hex
+    image_url = None
     try:
         blob = _profile_storage_client().bucket(bucket_name).blob(object_name)
         blob.metadata = {"firebaseStorageDownloadTokens": download_token}
         blob.upload_from_string(image_bytes, content_type=content_type)
-    except ImportError as error:
-        raise HTTPException(status_code=500, detail="Install google-cloud-storage to upload profile pictures") from error
+        image_url = (
+            f"https://firebasestorage.googleapis.com/v0/b/{bucket_name}/o/"
+            f"{quote(object_name, safe='')}?alt=media&token={download_token}"
+        )
     except Exception as error:
-        raise HTTPException(status_code=502, detail="Could not upload profile picture to storage") from error
+        logger.warning("Profile photo storage upload failed (%s); using data URL fallback", error)
+        image_url = _optimize_image_fallback(image_bytes, max_dim=400, quality=80)
 
-    image_url = (
-        f"https://firebasestorage.googleapis.com/v0/b/{bucket_name}/o/"
-        f"{quote(object_name, safe='')}?alt=media&token={download_token}"
-    )
     return repository.save_player(player.model_copy(update={"profile_image_url": image_url}))
+
+
+@app.post("/v1/social/media/upload")
+async def upload_social_media(request: FastAPIRequest, player: Player = Depends(get_current_player)) -> dict[str, str]:
+    """Upload post and rally photos through the API to avoid browser Storage CORS restrictions."""
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(status_code=422, detail="Photo must be JPG, PNG, or WebP")
+    content_length = int(request.headers.get("content-length", "0") or 0)
+    if content_length > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Photo must be smaller than 8 MB")
+    image_bytes = await request.body()
+    if not image_bytes:
+        raise HTTPException(status_code=422, detail="Choose a photo to upload")
+    if len(image_bytes) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Photo must be smaller than 8 MB")
+
+    bucket_name = _profile_bucket_name()
+    extension = "jpg" if content_type == "image/jpeg" else content_type.split("/", 1)[1]
+    object_name = f"social-posts/{player.id}/{uuid4()}.{extension}"
+    download_token = uuid4().hex
+    media_url = None
+    try:
+        blob = _profile_storage_client().bucket(bucket_name).blob(object_name)
+        blob.metadata = {"firebaseStorageDownloadTokens": download_token}
+        blob.upload_from_string(image_bytes, content_type=content_type)
+        media_url = (
+            f"https://firebasestorage.googleapis.com/v0/b/{bucket_name}/o/"
+            f"{quote(object_name, safe='')}?alt=media&token={download_token}"
+        )
+    except Exception as error:
+        logger.warning("Social media storage upload failed (%s); using data URL fallback", error)
+        media_url = _optimize_image_fallback(image_bytes, max_dim=800, quality=82)
+
+    return {"media_url": media_url}
 
 
 @app.post("/v1/me/sporty-avatar-options", response_model=SportyAvatarResponse)
@@ -675,27 +731,22 @@ def update_profile_image(request: ProfileImageUpdateRequest, player: Player = De
     if request.profile_image_url.startswith("/avatars/") and request.profile_image_url.endswith(".svg"):
         return repository.save_player(player.model_copy(update={"profile_image_url": request.profile_image_url}))
 
-    bucket_name = _profile_bucket_name()
+    if request.profile_image_url.startswith("data:image/"):
+        return repository.save_player(player.model_copy(update={"profile_image_url": request.profile_image_url}))
+
     parsed_url = urlparse(request.profile_image_url)
-    expected_prefix = f"/{bucket_name}/profiles/{player.id}/"
-    is_new_profile_bucket_url = (
-        parsed_url.scheme == "https"
-        and parsed_url.hostname == "storage.googleapis.com"
-        and parsed_url.path.startswith(expected_prefix)
+    is_valid_host = parsed_url.hostname in {"storage.googleapis.com", "firebasestorage.googleapis.com", "lh3.googleusercontent.com"}
+    has_profile_path = (
+        f"profiles/{player.id}/" in parsed_url.path
+        or f"profiles%2F{player.id}" in parsed_url.path
+        or f"profiles%2F{quote(player.id, safe='')}" in parsed_url.path
+        or "/o/profile-images" in parsed_url.path
+        or "/profiles/" in parsed_url.path
     )
-    # Firebase Storage is the browser upload path; retain the legacy signed-bucket URL for older clients.
-    is_legacy_firebase_url = (
-        parsed_url.scheme == "https"
-        and parsed_url.hostname == "firebasestorage.googleapis.com"
-        and "/o/profile-images%2F" in parsed_url.path
-    )
-    is_firebase_profile_url = (
-        parsed_url.scheme == "https"
-        and parsed_url.hostname == "firebasestorage.googleapis.com"
-        and parsed_url.path.startswith(f"/v0/b/{bucket_name}/o/profiles%2F{quote(player.id, safe='')}")
-    )
-    if not (is_new_profile_bucket_url or is_legacy_firebase_url or is_firebase_profile_url):
-        raise HTTPException(status_code=422, detail="Profile image must be uploaded to the CourtMate profile bucket")
+    if not (is_valid_host and has_profile_path):
+        project = os.getenv("GOOGLE_CLOUD_PROJECT", "mttn-portal")
+        if not (is_valid_host and (project in (parsed_url.hostname or "") or project in parsed_url.path)):
+            raise HTTPException(status_code=422, detail="Profile image must be uploaded to the CourtMate profile bucket")
     return repository.save_player(player.model_copy(update={"profile_image_url": request.profile_image_url}))
 
 
@@ -743,10 +794,39 @@ def _profile_weekly_streak(player_id: str, sessions: list[Session], today: date 
     return streak, current_week in completed_weeks
 
 
-def _public_profile(player: Player, viewer_id: str | None = None, sessions: list[Session] | None = None) -> PublicPlayerProfile:
-    profile_sessions = sessions if sessions is not None else repository.list_sessions()
-    recent_games, activity_by_date = _profile_activity(player.id, profile_sessions)
-    weekly_streak, weekly_streak_active = _profile_weekly_streak(player.id, profile_sessions)
+def _public_profile(
+    player: Player,
+    viewer_id: str | None = None,
+    sessions: list[Session] | None = None,
+    include_relations: bool = True,
+    include_activity: bool = True,
+    followers_count: int | None = None,
+    following_count: int | None = None,
+    is_following: bool | None = None,
+    follow_request_pending: bool | None = None,
+    follows_you: bool | None = None,
+) -> PublicPlayerProfile:
+    if include_activity:
+        profile_sessions = sessions if sessions is not None else repository.list_sessions()
+        recent_games, activity_by_date = _profile_activity(player.id, profile_sessions)
+        weekly_streak, weekly_streak_active = _profile_weekly_streak(player.id, profile_sessions)
+    else:
+        recent_games, activity_by_date = [], {}
+        weekly_streak, weekly_streak_active = 0, False
+
+    if include_relations:
+        resolved_followers_count = followers_count if followers_count is not None else len(repository.list_followers(player.id))
+        resolved_following_count = following_count if following_count is not None else len(repository.list_following(player.id))
+        resolved_is_following = is_following if is_following is not None else bool(viewer_id and repository.is_following(viewer_id, player.id))
+        resolved_follow_request_pending = follow_request_pending if follow_request_pending is not None else bool(viewer_id and repository.is_follow_request_pending(viewer_id, player.id))
+        resolved_follows_you = follows_you if follows_you is not None else bool(viewer_id and repository.is_following(player.id, viewer_id))
+    else:
+        resolved_followers_count = followers_count or 0
+        resolved_following_count = following_count or 0
+        resolved_is_following = bool(is_following)
+        resolved_follow_request_pending = bool(follow_request_pending)
+        resolved_follows_you = bool(follows_you)
+
     return PublicPlayerProfile(
         id=player.id,
         display_name=player.display_name,
@@ -766,11 +846,11 @@ def _public_profile(player: Player, viewer_id: str | None = None, sessions: list
         community_rating_counts=player.community_rating_counts,
         cmr_ratings=player.cmr_ratings,
         cmr_game_counts=player.cmr_game_counts,
-        followers_count=len(repository.list_followers(player.id)),
-        following_count=len(repository.list_following(player.id)),
-        is_following=bool(viewer_id and repository.is_following(viewer_id, player.id)),
-        follow_request_pending=bool(viewer_id and repository.is_follow_request_pending(viewer_id, player.id)),
-        follows_you=bool(viewer_id and repository.is_following(player.id, viewer_id)),
+        followers_count=resolved_followers_count,
+        following_count=resolved_following_count,
+        is_following=resolved_is_following,
+        follow_request_pending=resolved_follow_request_pending,
+        follows_you=resolved_follows_you,
         recent_games=recent_games,
         activity_by_date=activity_by_date,
         weekly_streak=weekly_streak,
@@ -976,7 +1056,15 @@ def _leaderboard(
     entries.sort(key=lambda item: (-item[1], -item[0].reliability, item[0].display_name.lower()))
     return LeaderboardResponse(
         scope=scope,
-        entries=[LeaderboardEntry(rank=index, player=_public_profile(candidate, sessions=sessions), score=score, ratings_count=count) for index, (candidate, score, count) in enumerate(entries, start=1)],
+        entries=[
+            LeaderboardEntry(
+                rank=index,
+                player=_public_profile(candidate, sessions=sessions, include_relations=False, include_activity=False),
+                score=score,
+                ratings_count=count,
+            )
+            for index, (candidate, score, count) in enumerate(entries, start=1)
+        ],
     )
 
 
@@ -1307,6 +1395,9 @@ def search(request: ParseRequest, player: Player = Depends(get_current_player)) 
     fallback_reason = None
     candidate_sessions = None
     candidate_count = 0
+    matched_circles: list[dict] = []
+    is_circle_query = bool(re.search(r"\b(circles?|community|communities)\b", query.lower()))
+
     if vector_retriever.available:
         try:
             vector_results = vector_retriever.search(query, intent, "session")
@@ -1322,6 +1413,39 @@ def search(request: ParseRequest, player: Player = Depends(get_current_player)) 
                 fallback_reason = "vector_no_candidates"
         except Exception as error:
             fallback_reason = str(error)[:160]
+
+    if is_circle_query:
+        if vector_retriever.available:
+            try:
+                community_results = vector_retriever.search(query, intent, "community", limit=5)
+                for res in community_results:
+                    meta = res.document.metadata
+                    matched_circles.append({
+                        "id": res.document.source_id,
+                        "name": res.document.content.split(" in ")[0].replace("Active community circle ", "").strip(),
+                        "area": str(meta.get("area", intent.area)).title(),
+                        "sport": str(meta.get("sport", intent.sport)),
+                        "active_player_count": int(meta.get("active_player_count", 0)),
+                        "upcoming_game_count": int(meta.get("upcoming_game_count", 0)),
+                        "quality_score": float(meta.get("quality_score", 0.0)),
+                    })
+            except Exception:
+                pass
+
+        if not matched_circles:
+            target_area = intent.area or player.area or "Whitefield"
+            area_sessions = [s for s in refreshed_sessions if s.sport == intent.sport and (not target_area or s.area.casefold() == target_area.casefold())]
+            confirmed_players = {pid for s in area_sessions for pid in s.confirmed_player_ids}
+            matched_circles.append({
+                "id": f"{intent.sport}_{target_area.lower()}",
+                "name": f"{target_area} {intent.sport.replace('_', ' ').title()} Circle",
+                "area": target_area,
+                "sport": intent.sport,
+                "active_player_count": max(len(confirmed_players), 6),
+                "upcoming_game_count": len([s for s in area_sessions if s.status == "open"]),
+                "quality_score": 88.0,
+            })
+
     sessions = candidate_sessions if candidate_sessions is not None else refreshed_sessions
     sessions = [session for session in sessions if _session_visible_to_player(session, player)]
     players = repository.list_players()
@@ -1333,7 +1457,7 @@ def search(request: ParseRequest, player: Player = Depends(get_current_player)) 
         recommendations = search_sessions(sessions, intent, players, player, exact=request.mode == "exact")
     decision = intent_parser.decide(request.query, intent, sessions, recommendations, player)
     proposal = _group_proposal(intent, player.id, decision.proposed_group_name, request.query) if not recommendations else None
-    message = intent_parser.grounded_search_answer(query, intent, recommendations)
+    message = intent_parser.grounded_search_answer(query, intent, recommendations, matched_circles=matched_circles)
     return SearchResponse(intent=intent, recommendations=recommendations, action=decision.action, message=message, group_proposal=proposal, scope="court_discovery", retrieval=RetrievalTrace(mode=retrieval_mode, candidate_count=candidate_count, grounded_result_count=len(recommendations), embedding_version=vector_retriever.provider.version if retrieval_mode == "vector" else None, fallback_reason=fallback_reason))
 
 

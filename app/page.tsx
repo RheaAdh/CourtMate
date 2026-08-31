@@ -7,7 +7,7 @@ import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 
 import { auth, isFirebaseConfigured, storage } from "../firebase";
 import { GroupSpace } from "./group-space";
-import { CommunityHub } from "./community-hub";
+import { CommunityHub, type NearbyGame } from "./community-hub";
 import { PostGameFeedbackPanel } from "./post-game-feedback";
 import { SocialFeed } from "./social-feed";
 import { TennisBallLoader } from "./tennis-ball-loader";
@@ -770,7 +770,7 @@ export default function Home() {
   useEffect(() => {
     if (!authReady) return;
     if (user && pathname === "/") router.replace(`/home${window.location.search}`);
-    if (!user && pathname === "/home") router.replace("/");
+    if (!user && pathname === "/home") router.replace(`/${window.location.search}`);
   }, [authReady, pathname, router, user]);
 
   useEffect(() => {
@@ -833,10 +833,25 @@ export default function Home() {
       setUser(nextUser);
       setAuthReady(true);
       if (nextUser) {
-        setActiveTab("social");
+        const searchParams = new URLSearchParams(window.location.search);
+        const hasSharedRallyCircle = searchParams.has("rally-circle");
+        const tabParam = searchParams.get("tab");
+        const viewParam = searchParams.get("view");
+        if (hasSharedRallyCircle) {
+          setActiveTab("games");
+        } else if (tabParam && ["home", "social", "games", "profile", "communities"].includes(tabParam)) {
+          setActiveTab(tabParam as AppTab);
+        } else {
+          setActiveTab("social");
+        }
+        if (viewParam && ["explore", "pending", "upcoming", "awaiting_feedback", "history", "requested", "confirmed", "past", "incoming"].includes(viewParam)) {
+          setGamesViewTab(viewParam as GamesViewTab);
+        }
         void loadProfile(nextUser);
-        void loadNotifications(nextUser);
-        void loadGamesActivity(nextUser, false, false);
+        if (!hasSharedRallyCircle) {
+          void loadNotifications(nextUser);
+          void loadGamesActivity(nextUser, false, false);
+        }
       } else {
         setActiveTab("home");
         setSettingsOpen(false);
@@ -850,11 +865,11 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!authReady) return;
+    if (!authReady || !user) return;
     const searchParams = new URLSearchParams(window.location.search);
     const sharedGameId = searchParams.get("rally-circle");
     if (!sharedGameId) return;
-    const handledKey = `${sharedGameId}:${user?.uid ?? "guest"}`;
+    const handledKey = `${sharedGameId}:${user.uid}`;
     if (sharedGameHandledRef.current === handledKey) return;
     sharedGameHandledRef.current = handledKey;
     setActiveTab("games");
@@ -885,15 +900,14 @@ export default function Home() {
 
   useEffect(() => {
     const hash = window.location.hash;
-    if (!workspaceGroup && hash.startsWith("#group-space-")) window.history.back();
-    if (!rankingGame && hash.startsWith("#ranking-")) window.history.back();
-    if (!viewedGroup && hash.startsWith("#group-preview-")) window.history.back();
+    const cleanHash = () => {
+      if (window.history.length > 1) window.history.back();
+      else window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    };
+    if (!workspaceGroup && hash.startsWith("#group-space-")) cleanHash();
+    if (!rankingGame && hash.startsWith("#ranking-")) cleanHash();
+    if (!viewedGroup && hash.startsWith("#group-preview-")) cleanHash();
   }, [workspaceGroup, viewedGroup, viewedProfile]);
-
-  useEffect(() => {
-    if (viewedProfile || window.location.hash.startsWith("#player-profile-") || new URLSearchParams(window.location.search).has("rally-circle")) return;
-    setActiveTab(profileReturnTab);
-  }, [viewedProfile, profileReturnTab]);
 
   async function authorizedFetch(url: string, options: RequestInit = {}, authUser: User | null = user) {
     if (!authUser) throw new Error("Sign in required");
@@ -941,6 +955,7 @@ export default function Home() {
     }
     try {
       setProfilePictureUploading(true);
+      // Keep profile uploads on the authenticated API: browser Firebase uploads can fail CORS preflight.
       const response = await authorizedFetch(`${apiUrl}/v1/me/profile-image/upload`, {
         method: "POST",
         headers: { "content-type": file.type },
@@ -948,9 +963,10 @@ export default function Home() {
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({})) as { detail?: string };
-        throw new Error(payload.detail ?? "Could not prepare profile photo upload");
+        throw new Error(payload.detail ?? "Could not upload profile photo");
       }
       const savedProfile = await response.json() as PlayerProfile;
+
       setProfile(savedProfile);
       setSocialProfile((current) => current ? { ...current, profile_image_url: savedProfile.profile_image_url ?? null } : current);
       setToast("Profile photo updated");
@@ -999,10 +1015,14 @@ export default function Home() {
       return null;
     }
     try {
-      const extension = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
-      const imageRef = ref(storage, `activity-proofs/${user.uid}/profile/${crypto.randomUUID()}.${extension}`);
-      const upload = await uploadBytes(imageRef, file, { contentType: file.type });
-      const imageUrl = await getDownloadURL(upload.ref);
+      const uploadRes = await authorizedFetch(`${apiUrl}/v1/social/media/upload`, {
+        method: "POST",
+        headers: { "content-type": file.type },
+        body: file,
+      });
+      if (!uploadRes.ok) throw new Error("Could not upload screenshot");
+      const uploadPayload = await uploadRes.json() as { media_url: string };
+      const imageUrl = uploadPayload.media_url;
       setToast("Gemini is reading your performance...");
       const response = await authorizedFetch(`${apiUrl}/v1/me/activity-proof/analyze`, {
         method: "POST",
@@ -1477,7 +1497,9 @@ export default function Home() {
           capacity: payload.group_proposal.capacity ?? 6,
         });
       }
-      if (exact && requestQuery.trim()) {
+      if (shouldShowMessage && payload.message) {
+        setChatMessages((messages) => [...messages.slice(-8), { id: `${requestTimestamp}-assistant`, role: "assistant", text: payload.message }]);
+      } else if (exact && requestQuery.trim()) {
         setChatMessages((messages) => [...messages.slice(-8), { id: `${requestTimestamp}-assistant`, role: "assistant", text: payload.message || (payload.recommendations.length ? "I found a few games that could work." : "I could not find an exact match yet.") }]);
       }
       if (shouldStartCreation) {
@@ -2156,7 +2178,13 @@ export default function Home() {
     recognition.start();
   }
 
-  async function joinSession(sessionId: string, name: string, organizerId?: string) {
+  async function joinSession(
+    sessionId: string,
+    name: string,
+    organizerId?: string,
+    redirectToPending = false,
+    sessionCandidate?: ActivityGroup | Session | NearbyGame,
+  ) {
     if (joiningSessionId) return;
     if ((organizerId ?? sessions.find((session) => session.id === sessionId)?.organizer_id) === user?.uid) {
       setToast("You created this group");
@@ -2170,27 +2198,65 @@ export default function Home() {
         method: "POST",
         headers: { "content-type": "application/json" },
       });
-      const payload = await response.json().catch(() => ({})) as JoinRequest & { detail?: string };
+      const payload = (await response.json().catch(() => ({}))) as JoinRequest & { detail?: string };
       if (!response.ok) throw new Error(payload.detail ?? "Unable to join");
       if (!payload.status) throw new Error("The join request response was incomplete");
       setLastChatRequest({ name, status: payload.status });
-      const requestedSession = sessions.find((session) => session.id === sessionId);
-      if (requestedSession) {
-        setMyRequests((requests) => requests.some(({ request }) => request.id === payload.id || request.session_id === sessionId)
-          ? requests
-          : [{ request: payload, session: { ...requestedSession, status: requestedSession.status ?? "open" } }, ...requests]);
+
+      const foundSession = sessions.find((session) => session.id === sessionId);
+      const resolvedSession: ActivityGroup | null = foundSession
+        ? { ...foundSession, status: foundSession.status ?? "open" }
+        : sessionCandidate
+        ? {
+            id: sessionCandidate.id,
+            organizer_id: "organizer_id" in sessionCandidate ? sessionCandidate.organizer_id : "",
+            group_name: sessionCandidate.group_name,
+            sport: sessionCandidate.sport,
+            area: sessionCandidate.area,
+            venue_name: "venue_name" in sessionCandidate ? sessionCandidate.venue_name : null,
+            session_date: sessionCandidate.session_date,
+            start_time: sessionCandidate.start_time,
+            end_time: sessionCandidate.end_time,
+            skill_min: "skill_min" in sessionCandidate ? sessionCandidate.skill_min : 1,
+            skill_max: "skill_max" in sessionCandidate ? sessionCandidate.skill_max : 100,
+            style: "style" in sessionCandidate ? sessionCandidate.style : "casual",
+            capacity: "capacity" in sessionCandidate ? sessionCandidate.capacity : 4,
+            confirmed_player_ids: "confirmed_player_ids" in sessionCandidate ? sessionCandidate.confirmed_player_ids : [],
+            status: "open",
+          }
+        : null;
+
+      if (resolvedSession) {
+        setMyRequests((requests) =>
+          requests.some(({ request }) => request.id === payload.id || request.session_id === sessionId)
+            ? requests
+            : [{ request: payload, session: resolvedSession }, ...requests],
+        );
       }
       setSessions((currentSessions) => currentSessions.filter((session) => session.id !== sessionId));
       setViewedGroup(null);
-      const statusMessage = payload.status === "waitlisted"
-        ? `You are on the waitlist for ${name}. I’ve saved your place and you can track it in Games → Pending.`
-        : `Request sent to ${name}. The organizer needs to approve you. You can track it in Games → Pending.`;
-      setChatMessages((messages) => [...messages.slice(-8), { id: `${Date.now()}-join-confirmation`, role: "assistant", text: statusMessage }]);
+
+      if (redirectToPending) {
+        setActiveTab("games");
+        setGamesViewTab("pending");
+      }
+
+      const statusMessage =
+        payload.status === "waitlisted"
+          ? `You are on the waitlist for ${name}. I’ve saved your place and you can track it in Games → Pending.`
+          : `Request sent to ${name}. The organizer needs to approve you. You can track it in Games → Pending.`;
+      setChatMessages((messages) => [
+        ...messages.slice(-8),
+        { id: `${Date.now()}-join-confirmation`, role: "assistant", text: statusMessage },
+      ]);
       setToast(payload.status === "waitlisted" ? `You are on the waitlist for ${name}` : `Join request sent to ${name}`);
       void loadGamesActivity(user, false, false, true);
     } catch (error) {
       const message = error instanceof Error ? error.message : `Could not request to join ${name}`;
-      setChatMessages((messages) => [...messages.slice(-8), { id: `${Date.now()}-join-error`, role: "assistant", text: `I could not send the request for ${name}: ${message}` }]);
+      setChatMessages((messages) => [
+        ...messages.slice(-8),
+        { id: `${Date.now()}-join-error`, role: "assistant", text: `I could not send the request for ${name}: ${message}` },
+      ]);
       setToast(message);
     } finally {
       setJoiningSessionId(null);
@@ -2254,6 +2320,11 @@ export default function Home() {
     }
   }
 
+  function showGroupPreview(group: GroupView, sessionId: string) {
+    setViewedGroup(group);
+    if (window.location.hash !== `#group-preview-${sessionId}`) window.history.pushState({ courtMatePage: "group-preview" }, "", `#group-preview-${sessionId}`);
+  }
+
   async function viewGroup(sessionId: string, authUser: User | null = user) {
     setLoadingGroupId(sessionId);
     try {
@@ -2263,8 +2334,7 @@ export default function Home() {
         if (response.status === 404) throw new Error("This group no longer exists.");
         throw new Error(`Group request failed (${response.status})`);
       }
-      setViewedGroup(await response.json() as GroupView);
-      if (window.location.hash !== `#group-preview-${sessionId}`) window.history.pushState({ courtMatePage: "group-preview" }, "", `#group-preview-${sessionId}`);
+      showGroupPreview(await response.json() as GroupView, sessionId);
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not load this group");
       window.setTimeout(() => setToast(""), 2600);
@@ -2284,7 +2354,7 @@ export default function Home() {
       if (group.session.confirmed_player_ids.includes(authUser?.uid ?? "")) {
         await openGroupSpace(group.session, authUser, group);
       } else {
-        await viewGroup(sessionId, authUser);
+        showGroupPreview(group, sessionId);
       }
     } catch {
       await viewGroup(sessionId, authUser);
@@ -2588,7 +2658,7 @@ export default function Home() {
     const publicOrigin = configuredOrigin || (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
       ? "https://court-mate-blr.vercel.app"
       : window.location.origin);
-    const shareUrl = new URL("/", publicOrigin);
+    const shareUrl = new URL("/home", publicOrigin);
     shareUrl.searchParams.set("rally-circle", game.id);
     return shareUrl.toString();
   }
@@ -2889,7 +2959,32 @@ export default function Home() {
         {myGroups.length > 0 && <div className="organizer-page-card"><div><span className="kicker">ORGANIZER</span><h2>Your groups</h2><p>Manage requests, chat, and feedback for groups you created.</p></div>{myGroups.map((group) => <div className="organizer-page-row" key={group.id}><div><strong>{group.group_name}</strong><small>{sportLabel(group.sport)} · {group.session_date} · {group.confirmed_player_ids.length}/{group.capacity} players</small></div><div className="organizer-page-actions"><button className="manage-group-button" onClick={() => void openGroupSpace(group)}>Group space</button><button className="manage-group-button" onClick={() => { setManagedGroupId(group.id); void loadJoinRequests(group.id); }}>Requests</button></div></div>)}{managedGroupId && <div className="request-card page-request-card"><p>Requests for <strong>{myGroups.find((group) => group.id === managedGroupId)?.group_name ?? "your group"}</strong>. Approve a player before they join.</p>{requestsLoading ? <p className="request-empty">Loading requests...</p> : joinRequests.length ? <div className="request-list">{joinRequests.map((request) => <div className="request-row" key={request.id}><div><strong>{request.player_display_name ?? request.player_id.slice(0, 10)}</strong><small className={`status-badge ${request.status}`}>{request.status}</small></div>{request.status === "pending" && <div className="request-actions"><button onClick={() => void decideJoinRequest(request.id, "approved")}>Approve</button><button onClick={() => void decideJoinRequest(request.id, "declined")}>Decline</button></div>}</div>)}</div> : <p className="request-empty">No requests waiting for approval.</p>}</div>}</div>}
       </section>}
 
-      {activeTab === "communities" && user && <CommunityHub apiUrl={apiUrl} authorizedFetch={authorizedFetch} currentCmr={profile?.cmr_ratings?.[selectedSport]} gamesLogged={profile?.cmr_game_counts?.[selectedSport] ?? 0} requestedSessionIds={myRequests.filter(({ request }) => request.status === "pending" || request.status === "waitlisted").map(({ request }) => request.session_id)} joinedSessionIds={Array.from(new Set([...approvedGames, ...myGroups].map((game) => game.id)))} onOpenExistingGame={(_, status) => { setActiveTab("games"); setGamesViewTab(status === "joined" ? "confirmed" : "pending"); }} initialLatitude={profile?.latitude} initialLongitude={profile?.longitude} initialArea={profile?.area} />}
+      {activeTab === "communities" && user && (
+        <CommunityHub
+          apiUrl={apiUrl}
+          authorizedFetch={authorizedFetch}
+          currentCmr={profile?.cmr_ratings?.[selectedSport]}
+          gamesLogged={profile?.cmr_game_counts?.[selectedSport] ?? 0}
+          requestedSessionIds={myRequests
+            .filter(({ request }) => request.status === "pending" || request.status === "waitlisted")
+            .map(({ request }) => request.session_id)}
+          joinedSessionIds={Array.from(new Set([...approvedGames, ...myGroups].map((game) => game.id)))}
+          onOpenExistingGame={(_, status) => {
+            setActiveTab("games");
+            setGamesViewTab(status === "joined" ? "upcoming" : "pending");
+          }}
+          onOpenRallyCircle={(sessionId) => {
+            setActiveTab("games");
+            void openSharedGame(sessionId, user);
+          }}
+          onRequestJoin={async (game) => {
+            await joinSession(game.id, game.group_name, undefined, true, game);
+          }}
+          initialLatitude={profile?.latitude}
+          initialLongitude={profile?.longitude}
+          initialArea={profile?.area}
+        />
+      )}
 
       {activeTab === "profile" && !viewedProfile && <section className="page-view profile-page">
         {user && profile && <section className="player-profile-hero">
