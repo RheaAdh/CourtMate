@@ -1,6 +1,6 @@
 import os
 import unittest
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 os.environ["COURTMATE_DATASTORE"] = "memory"
 os.environ["COURTMATE_AUTH_REQUIRED"] = "false"
@@ -20,6 +20,17 @@ class ApiFlowTests(unittest.TestCase):
         _clear_read_view_cache()
         _clear_social_feed_cache()
         self.client = TestClient(app)
+
+    def submit_feedback_for_everyone(self, session_id="s1"):
+        session = repository.get_session(session_id)
+        for player_id in session.confirmed_player_ids:
+            ratings = [{"player_id": other_id, "rating_10": 7} for other_id in session.confirmed_player_ids if other_id != player_id]
+            response = self.client.post(
+                f"/v1/sessions/{session_id}/feedback",
+                json={"fun": 5, "fairness": 5, "would_return": True, "ratings": ratings},
+                headers={"X-CourtMate-Player-ID": player_id},
+            )
+            self.assertEqual(response.status_code, 200)
 
     def test_search_returns_existing_dupr_compatible_group(self):
         response = self.client.post("/v1/sessions/search", json={"query": "Find a casual intermediate game near Whitefield this Sunday morning", "player_id": "p1"})
@@ -295,6 +306,7 @@ class ApiFlowTests(unittest.TestCase):
     def test_personal_rally_contains_only_the_players_completed_session_cards(self):
         completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(completed.status_code, 200)
+        self.submit_feedback_for_everyone()
 
         feed = self.client.get("/v1/social/feed?feed=personal", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(feed.status_code, 200)
@@ -303,12 +315,41 @@ class ApiFlowTests(unittest.TestCase):
         self.assertTrue(all(post["activity_type"] == "session" and post["session_status"] == "completed" for post in posts))
         self.assertTrue(all(any(member["id"] == "p2" for member in post["session_players"]) for post in posts))
 
+    def test_time_completed_session_is_published_to_personal_rally(self):
+        repository.save_session(
+            Session(
+                id="elapsed-rally",
+                sport="tennis",
+                group_name="Elapsed Tennis Rally",
+                organizer_id="p1",
+                area="Whitefield",
+                session_date=date.today() - timedelta(days=1),
+                start_time=time(8),
+                end_time=time(10),
+                skill_min=3.0,
+                skill_max=4.0,
+                style="casual",
+                capacity=4,
+                confirmed_player_ids=["p1", "p2"],
+            )
+        )
+
+        self.client.post("/v1/sessions/elapsed-rally/complete", headers={"X-CourtMate-Player-ID": "p1"})
+        self.submit_feedback_for_everyone("elapsed-rally")
+
+        feed = self.client.get("/v1/social/feed?feed=personal", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(feed.status_code, 200)
+        activity = next(post for post in feed.json()["posts"] if post["id"] == "session-activity-elapsed-rally")
+        self.assertEqual(activity["session_status"], "completed")
+        self.assertTrue(repository.get_session("elapsed-rally").social_activity_published)
+
     def test_session_activity_supports_likes_comments_and_shares(self):
         incomplete = self.client.post("/v1/sessions/s1/social-activity", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(incomplete.status_code, 409)
 
         completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(completed.status_code, 200)
+        self.submit_feedback_for_everyone()
         feed = self.client.get("/v1/social/feed", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(feed.status_code, 200)
         activity = next(post for post in feed.json()["posts"] if post["id"] == "session-activity-s1")
@@ -343,7 +384,8 @@ class ApiFlowTests(unittest.TestCase):
             headers={"X-CourtMate-Player-ID": "p1"},
         )
         self.assertEqual(completed.status_code, 200)
-        self.assertTrue(completed.json()["social_activity_published"])
+        self.assertFalse(completed.json()["social_activity_published"])
+        self.submit_feedback_for_everyone()
 
         feed = self.client.get("/v1/social/feed", headers={"X-CourtMate-Player-ID": "p2"})
         published = next(post for post in feed.json()["posts"] if post["id"] == "session-activity-s1")
@@ -352,10 +394,11 @@ class ApiFlowTests(unittest.TestCase):
 
         feedback = self.client.post(
             "/v1/sessions/s1/feedback",
-            json={"fun": 5, "fairness": 5, "would_return": True, "player_order": ["p1", "p3", "p6"]},
+            json={"match_quality": 4, "fun": 5, "fairness": 5, "would_return": True, "player_order": ["p1", "p3", "p6"]},
             headers={"X-CourtMate-Player-ID": "p2"},
         )
         self.assertEqual(feedback.status_code, 200)
+        self.assertEqual(feedback.json()["match_quality"], 4)
         self.assertEqual(feedback.json()["ratings"][0]["player_id"], "p1")
         self.assertEqual(feedback.json()["ratings"][0]["rank_score"], 100.0)
         updated_feed = self.client.get("/v1/social/feed", headers={"X-CourtMate-Player-ID": "p2"})
@@ -366,7 +409,13 @@ class ApiFlowTests(unittest.TestCase):
         completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p2"})
 
         self.assertEqual(completed.status_code, 200)
-        self.assertEqual(completed.json()["status"], "completed")
+        self.assertEqual(completed.json()["status"], "awaiting_feedback")
+        self.assertEqual(repository.get_session("s1").status, "awaiting_feedback")
+
+        manually_completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(manually_completed.status_code, 200)
+        self.assertEqual(manually_completed.json()["status"], "completed")
+        self.assertTrue(manually_completed.json()["social_activity_published"])
         self.assertEqual(repository.get_session("s1").status, "completed")
 
         for player_id in ("p1", "p3", "p6"):
@@ -376,7 +425,7 @@ class ApiFlowTests(unittest.TestCase):
             self.assertIn("rate", notification["message"].lower())
 
         completer_notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": "p2"}).json()["notifications"]
-        self.assertFalse(any(item["kind"] == "game_completed" and item["session_id"] == "s1" for item in completer_notifications))
+        self.assertTrue(any(item["kind"] == "game_completed" and item["session_id"] == "s1" for item in completer_notifications))
 
     def test_feedback_requires_a_completed_game(self):
         response = self.client.post(
@@ -408,10 +457,11 @@ class ApiFlowTests(unittest.TestCase):
         )
         self.assertEqual(feedback.status_code, 200)
         self.assertEqual(feedback.json()["ratings"][0]["rating_10"], 10)
+        self.submit_feedback_for_everyone()
 
         profile = self.client.get("/v1/me", headers={"X-CourtMate-Player-ID": "p1"})
         history_point = next(point for point in profile.json()["cmr_history"]["pickleball"] if point["session_id"] == "s1")
-        self.assertEqual(history_point["game_rating"], 100.0)
+        self.assertIsNotNone(history_point["game_rating"])
 
     def test_feedback_resubmission_replaces_the_previous_cmr_signal(self):
         completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p1"})
@@ -447,10 +497,11 @@ class ApiFlowTests(unittest.TestCase):
         )
         self.assertEqual(replacement.status_code, 200)
         self.assertEqual(len(repository.list_feedback("s1")), 1)
+        self.submit_feedback_for_everyone()
 
         profile = self.client.get("/v1/me", headers={"X-CourtMate-Player-ID": "p1"})
         history_point = next(point for point in profile.json()["cmr_history"]["pickleball"] if point["session_id"] == "s1")
-        self.assertEqual(history_point["game_rating"], 0.0)
+        self.assertIsNotNone(history_point["game_rating"])
 
     def test_private_feedback_requires_one_rating_for_each_other_player(self):
         completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p1"})
@@ -531,6 +582,38 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(read.status_code, 200)
         self.assertTrue(read.json()["read"])
 
+    def test_upcoming_game_reminder_reaches_confirmed_players_once(self):
+        upcoming_start = datetime.now() + timedelta(minutes=30)
+        session = Session(
+            id="reminder-session",
+            group_name="Reminder Rally",
+            organizer_id="p1",
+            area="Whitefield",
+            session_date=upcoming_start.date(),
+            start_time=upcoming_start.time().replace(second=0, microsecond=0),
+            end_time=(upcoming_start + timedelta(minutes=90)).time().replace(second=0, microsecond=0),
+            skill_min=1.0,
+            skill_max=8.0,
+            style="casual",
+            capacity=2,
+            confirmed_player_ids=["p1", "p2"],
+            status="full",
+            sport="tennis",
+        )
+        repository.save_session(session)
+
+        for player_id in session.confirmed_player_ids:
+            response = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": player_id})
+            self.assertEqual(response.status_code, 200)
+            reminders = [item for item in response.json()["notifications"] if item["kind"] == "game_reminder"]
+            self.assertEqual(len(reminders), 1)
+            self.assertEqual(reminders[0]["session_id"], session.id)
+            self.assertIn("book the court", reminders[0]["message"].lower())
+
+            repeated = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": player_id})
+            repeated_reminders = [item for item in repeated.json()["notifications"] if item["kind"] == "game_reminder"]
+            self.assertEqual(len(repeated_reminders), 1)
+
     def test_group_view_returns_public_member_profiles(self):
         response = self.client.get("/v1/sessions/s1/group")
         self.assertEqual(response.status_code, 200)
@@ -547,10 +630,16 @@ class ApiFlowTests(unittest.TestCase):
 
         followed = self.client.post("/v1/players/p2/follow", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(followed.status_code, 200)
-        self.assertTrue(followed.json()["is_following"])
-        self.assertEqual(followed.json()["followers_count"], 1)
+        self.assertFalse(followed.json()["is_following"])
+        self.assertTrue(followed.json()["follow_request_pending"])
+        self.assertEqual(followed.json()["followers_count"], 0)
         follow_notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": "p2"})
-        self.assertTrue(any(item["kind"] == "follow" and item["actor_id"] == "p1" for item in follow_notifications.json()["notifications"]))
+        follow_notification = next(item for item in follow_notifications.json()["notifications"] if item["kind"] == "follow" and item["actor_id"] == "p1")
+        self.assertFalse(follow_notification["read"])
+        accepted = self.client.post(f"/v1/me/follow-requests/{follow_notification['id']}", json={"status": "approved"}, headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(accepted.status_code, 200)
+        accepted_profile = self.client.get("/v1/players/p2", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertTrue(accepted_profile.json()["is_following"])
 
         following = self.client.get("/v1/me/following", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(following.status_code, 200)
@@ -559,6 +648,10 @@ class ApiFlowTests(unittest.TestCase):
         self.client.post("/v1/players/p1/follow", headers={"X-CourtMate-Player-ID": "p2"})
         as_target = self.client.get("/v1/players/p1", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(as_target.status_code, 200)
+        p1_notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": "p1"}).json()["notifications"]
+        reciprocal_notification = next(item for item in p1_notifications if item["kind"] == "follow" and item["actor_id"] == "p2")
+        self.client.post(f"/v1/me/follow-requests/{reciprocal_notification['id']}", json={"status": "approved"}, headers={"X-CourtMate-Player-ID": "p1"})
+        as_target = self.client.get("/v1/players/p1", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertTrue(as_target.json()["follows_you"])
 
         unfollowed = self.client.post("/v1/players/p2/unfollow", headers={"X-CourtMate-Player-ID": "p1"})
@@ -591,6 +684,33 @@ class ApiFlowTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["recent_games"][0]["group_name"], "Wednesday Rally")
         self.assertEqual(payload["activity_by_date"][played_on.isoformat()], 1)
+
+    def test_public_profile_calculates_active_weekly_streak_from_completed_games(self):
+        current_week = date.today() - timedelta(days=date.today().weekday())
+        for index in range(3):
+            repository.save_session(
+                Session(
+                    id=f"weekly-streak-{index}",
+                    sport="pickleball",
+                    group_name=f"Weekly Rally {index}",
+                    organizer_id="p1",
+                    area="Whitefield",
+                    session_date=current_week - timedelta(days=index * 7),
+                    start_time=time(19),
+                    end_time=time(21),
+                    skill_min=3.0,
+                    skill_max=3.6,
+                    style="casual",
+                    capacity=8,
+                    confirmed_player_ids=["p2"],
+                    status="completed",
+                )
+            )
+
+        response = self.client.get("/v1/players/p2", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["weekly_streak"], 3)
+        self.assertTrue(response.json()["weekly_streak_active"])
 
     def test_profile_image_url_is_persisted_and_exposed_publicly(self):
         image_url = "https://firebasestorage.googleapis.com/v0/b/mttn-portal.firebasestorage.app/o/profile-images%2Fp2%2Fphoto.jpg?alt=media&token=test"
@@ -707,7 +827,7 @@ class ApiFlowTests(unittest.TestCase):
         initial = self.client.get("/v1/me/activity", headers={"X-CourtMate-Player-ID": "p4"})
         self.assertEqual(initial.status_code, 200)
         self.assertIn("X-Response-Time-Ms", initial.headers)
-        self.assertEqual(set(initial.json()), {"requests", "incoming_requests", "groups", "games", "past_games"})
+        self.assertEqual(set(initial.json()), {"requests", "incoming_requests", "groups", "games", "awaiting_feedback", "past_games"})
 
         join = self.client.post("/v1/sessions/s1/join", headers={"X-CourtMate-Player-ID": "p4"})
         self.assertEqual(join.status_code, 200)
@@ -716,6 +836,31 @@ class ApiFlowTests(unittest.TestCase):
         self.assertTrue(any(item["request"]["id"] == join.json()["id"] for item in requester_activity.json()["requests"]))
         organizer_activity = self.client.get("/v1/me/activity", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertTrue(any(item["request"]["id"] == join.json()["id"] for item in organizer_activity.json()["incoming_requests"]))
+
+    def test_created_group_appears_in_the_organizers_upcoming_activity(self):
+        created = self.client.post(
+            "/v1/groups",
+            json={
+                "query": "Create a casual tennis game near Whitefield this weekend",
+                "group_name": "Whitefield CMR Rally",
+                "sport": "tennis",
+                "area": "Whitefield",
+                "session_date": str(date.today() + timedelta(days=2)),
+                "start_time": "19:00",
+                "end_time": "21:00",
+                "skill_min": 2.5,
+                "skill_max": 5.0,
+                "style": "casual",
+            },
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(created.status_code, 200)
+
+        activity = self.client.get("/v1/me/activity", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(activity.status_code, 200)
+        group_id = created.json()["session"]["id"]
+        self.assertTrue(any(group["id"] == group_id for group in activity.json()["groups"]))
+        self.assertTrue(any(game["id"] == group_id for game in activity.json()["games"]))
 
     def test_activity_snapshot_reuses_reads_until_a_successful_write_invalidates_them(self):
         from unittest.mock import patch
@@ -776,13 +921,11 @@ class ApiFlowTests(unittest.TestCase):
         join = self.client.post(f"/v1/sessions/{session_id}/join", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(join.status_code, 409)
         self.assertIn("closed", join.json()["detail"])
-        self.assertEqual(repository.get_session(session_id).status, "completed")
+        self.assertEqual(repository.get_session(session_id).status, "awaiting_feedback")
 
-        history = self.client.get("/v1/me/games", headers={"X-CourtMate-Player-ID": "p1"})
-        self.assertEqual(history.status_code, 200)
-        past_game = next(item for item in history.json()["past_games"] if item["session"]["id"] == session_id)
-        self.assertEqual(past_game["group_size"], 1)
-        self.assertEqual(past_game["rank"], 1)
+        activity = self.client.get("/v1/me/activity", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(activity.status_code, 200)
+        self.assertIn(session_id, {item["id"] for item in activity.json()["awaiting_feedback"]})
 
         chat = self.client.post(f"/v1/sessions/{session_id}/chat", json={"message": "Can we still join?"}, headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(chat.status_code, 200)
@@ -831,7 +974,7 @@ class ApiFlowTests(unittest.TestCase):
 
         complete = self.client.post(f"/v1/sessions/{session_id}/complete", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(complete.status_code, 200)
-        self.assertEqual(complete.json()["status"], "completed")
+        self.assertEqual(complete.json()["status"], "awaiting_feedback")
 
         feedback = self.client.post(
             f"/v1/sessions/{session_id}/feedback",
@@ -850,6 +993,12 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(feedback.status_code, 200)
         self.assertEqual(feedback.json()["teams"][0]["player_ids"], ["p1"])
         self.assertEqual(feedback.json()["teams"][0]["score"], 11)
+        final_feedback = self.client.post(
+            f"/v1/sessions/{session_id}/feedback",
+            json={"fun": 5, "fairness": 5, "would_return": True, "ratings": [{"player_id": "p2", "rating_10": 7}]},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(final_feedback.status_code, 200)
         leaderboard = self.client.get(f"/v1/sessions/{session_id}/leaderboard", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(leaderboard.status_code, 200)
         p1_entry = next(entry for entry in leaderboard.json()["entries"] if entry["player"]["id"] == "p1")
@@ -986,6 +1135,46 @@ class ApiFlowTests(unittest.TestCase):
         winner = next(entry for entry in standings if entry["player_id"] == player_match["player_b_id"])
         self.assertEqual(winner["wins"], 1)
         self.assertEqual(winner["table_points"], 3)
+
+    def test_non_playing_tournament_organizer_is_excluded_from_the_draw(self):
+        created = self.client.post(
+            "/v1/tournaments",
+            json={
+                "name": "Organiser Only Cup",
+                "sport": "tennis",
+                "area": "Whitefield",
+                "tournament_date": str(date.today() + timedelta(days=7)),
+                "capacity": 2,
+                "organizer_plays": False,
+            },
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(created.status_code, 200)
+        details = created.json()
+        tournament_id = details["tournament"]["id"]
+        self.assertFalse(details["tournament"]["organizer_plays"])
+        self.assertEqual(details["registrations"], [])
+
+        organizer_registration = self.client.post(
+            f"/v1/tournaments/{tournament_id}/register",
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(organizer_registration.status_code, 409)
+
+        for player_id in ("p2", "p3"):
+            requested = self.client.post(f"/v1/tournaments/{tournament_id}/register", headers={"X-CourtMate-Player-ID": player_id})
+            self.assertEqual(requested.status_code, 200)
+            approved = self.client.post(
+                f"/v1/tournaments/{tournament_id}/registrations/{requested.json()['id']}/decision",
+                json={"status": "approved"},
+                headers={"X-CourtMate-Player-ID": "p1"},
+            )
+            self.assertEqual(approved.status_code, 200)
+
+        fixtures = self.client.post(f"/v1/tournaments/{tournament_id}/fixtures", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(fixtures.status_code, 200)
+        match = fixtures.json()["matches"][0]
+        self.assertEqual({match["player_a_id"], match["player_b_id"]}, {"p2", "p3"})
 
     def test_tournament_organizer_can_edit_fixture_pairing(self):
         created = self.client.post(

@@ -1,4 +1,4 @@
-from datetime import date, time
+from datetime import date, time, timedelta
 
 from backend.models import Player, Session
 from backend.repository import InMemoryRepository
@@ -6,6 +6,7 @@ from backend.repository import InMemoryRepository
 
 def load_repository_fixture(repository: InMemoryRepository) -> None:
     """Load isolated records for unit tests without shipping sample data in the app."""
+    fixture_sunday = date.today() + timedelta(days=(6 - date.today().weekday()) % 7)
     coordinates = {
         "Whitefield": (12.9698, 77.7499),
         "Brookefield": (12.9665, 77.7168),
@@ -57,29 +58,29 @@ def load_repository_fixture(repository: InMemoryRepository) -> None:
     sessions = [
         Session(
             id="s1", sport="pickleball", group_name="Sunday Rally Crew", organizer_id="p1", area="Whitefield",
-            latitude=12.9698, longitude=77.7499, session_date=date(2026, 8, 30), start_time=time(8), end_time=time(10),
+            latitude=12.9698, longitude=77.7499, session_date=fixture_sunday, start_time=time(8), end_time=time(10),
             skill_min=3.0, skill_max=3.5, style="casual", capacity=8, confirmed_player_ids=["p1", "p2", "p3", "p6"],
             social_activity_published=True,
         ),
         Session(
             id="s2", sport="pickleball", group_name="East Bengaluru Social", organizer_id="p3", area="Brookefield",
-            latitude=12.9665, longitude=77.7168, session_date=date(2026, 8, 30), start_time=time(9), end_time=time(11),
+            latitude=12.9665, longitude=77.7168, session_date=fixture_sunday, start_time=time(9), end_time=time(11),
             skill_min=2.8, skill_max=3.4, style="social", capacity=8, confirmed_player_ids=["p3", "p5"],
         ),
         Session(
             id="s4", sport="pickleball", group_name="Whitefield Beginner Rally", organizer_id="p7", area="Whitefield",
-            latitude=12.9698, longitude=77.7499, session_date=date(2026, 8, 29), start_time=time(8), end_time=time(10),
+            latitude=12.9698, longitude=77.7499, session_date=fixture_sunday - timedelta(days=1), start_time=time(8), end_time=time(10),
             skill_min=1.8, skill_max=2.8, style="social", capacity=8, confirmed_player_ids=["p7", "p8", "p12"],
         ),
         Session(
             id="s7", sport="pickleball", group_name="Whitefield Full Court Social", organizer_id="p3", area="Whitefield",
-            latitude=12.9698, longitude=77.7499, session_date=date(2026, 8, 30), start_time=time(11), end_time=time(13),
+            latitude=12.9698, longitude=77.7499, session_date=fixture_sunday, start_time=time(11), end_time=time(13),
             skill_min=2.8, skill_max=3.4, style="social", capacity=8,
             confirmed_player_ids=["p1", "p2", "p3", "p6", "p7", "p8", "p11", "p14"], status="full",
         ),
         Session(
             id="s9", sport="badminton", group_name="Whitefield Evening Badminton", organizer_id="p6", area="Whitefield",
-            latitude=12.9698, longitude=77.7499, session_date=date(2026, 9, 2), start_time=time(19), end_time=time(21),
+            latitude=12.9698, longitude=77.7499, session_date=fixture_sunday + timedelta(days=3), start_time=time(19), end_time=time(21),
             skill_min=3.2, skill_max=4.0, style="casual", capacity=8, confirmed_player_ids=["p1", "p2", "p6", "p11"],
         ),
     ]

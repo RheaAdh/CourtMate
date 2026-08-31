@@ -2,16 +2,18 @@
 
 By default this script only upserts synthetic ``demo-`` records, stable
 ``session-activity-demo-*`` engagement records, plus the optional player ID
-supplied through ``COURTMATE_DEMO_RHEA_UID``. The
-explicit ``--replace-social`` mode clears only the CourtMate social collections
-before rebuilding completed-session activity cards. It never touches Firebase
-Authentication or unrelated collections.
+supplied through ``COURTMATE_DEMO_RHEA_UID``. The optional
+``--reset-synthetic`` mode clears only this script's records across CourtMate
+collections before rebuilding them. It never touches Firebase Authentication
+or unrelated user records. Demo player and carousel media use generated
+avatars, not photographs of real people.
 """
 
 from datetime import date, datetime, time, timedelta, timezone
 import argparse
 import os
 import re
+from urllib.parse import quote
 
 from .models import (
     AppNotification,
@@ -69,11 +71,16 @@ def make_history(player_id: str, ratings: dict[str, float], games: int) -> dict[
     return history
 
 
+def avatar_url(name: str, variant: str = "initials") -> str:
+    """Use generated avatars in demo data instead of photos of real people."""
+    return f"https://api.dicebear.com/9.x/{variant}/svg?seed={quote(name)}&backgroundColor=c9e86b&textColor=1b2b24"
+
+
 def make_player(player_id: str, name: str, area: str, ratings: dict[str, float], style: str, reliability: float, history_games: int = 4, avatar_number: int | None = None, age: int | None = None, gender: str | None = None) -> Player:
     return Player(
         id=player_id,
         display_name=name,
-        profile_image_url=f"https://i.pravatar.cc/160?img={avatar_number}" if avatar_number else None,
+        profile_image_url=avatar_url(name, "initials" if avatar_number is None else "bottts-neutral"),
         area=area,
         age=age,
         gender=gender,
@@ -131,6 +138,44 @@ def delete_firestore_collection(repository: FirestoreRepository, collection_name
             batch.delete(document.reference)
         batch.commit()
         deleted += len(documents)
+
+
+SYNTHETIC_COLLECTIONS = (
+    "players", "sessions", "join_requests", "chat_posts", "feedback", "notifications",
+    "follows", "tournaments", "tournament_registrations", "tournament_matches",
+    "social_posts", "social_comments", "activity_proofs", "search_documents",
+)
+
+
+def delete_synthetic_data(repository: FirestoreRepository, rhea_id: str, batch_size: int = 250) -> dict[str, int]:
+    """Delete only records belonging to this script, leaving user data intact."""
+    deleted: dict[str, int] = {}
+    for collection_name in SYNTHETIC_COLLECTIONS:
+        documents = list(repository.client.collection(collection_name).stream())
+        candidates = []
+        for document in documents:
+            data = document.to_dict() or {}
+            document_id = document.id
+            if collection_name == "players":
+                is_synthetic = document_id.startswith("demo-") or document_id == rhea_id
+            elif collection_name == "feedback":
+                is_synthetic = document_id.startswith("demo-feedback-") or str(data.get("session_id", "")).startswith("demo-")
+            elif collection_name == "search_documents":
+                is_synthetic = str(data.get("source_id", "")).startswith("demo-") or str(data.get("session_id", "")).startswith("demo-")
+            else:
+                is_synthetic = document_id.startswith("demo-") or "demo-" in document_id or str(data.get("session_id", "")).startswith("demo-") or str(data.get("tournament_id", "")).startswith("demo-")
+            if is_synthetic:
+                candidates.append(document)
+        count = 0
+        for offset in range(0, len(candidates), batch_size):
+            batch_documents = candidates[offset:offset + batch_size]
+            batch = repository.client.batch()
+            for document in batch_documents:
+                batch.delete(document.reference)
+            batch.commit()
+            count += len(batch_documents)
+        deleted[collection_name] = count
+    return deleted
 
 
 def seed_activity_history(repository: FirestoreRepository, players: list[Player], sessions: list[Session]) -> None:
@@ -197,6 +242,22 @@ def seed_social_content(repository: FirestoreRepository, players: list[Player], 
             created_at=created_at,
         ))
         post_count += 1
+
+        # Give the Home carousel seeded media without using human photographs.
+        if session.id == "demo-pb-completed":
+            for photo_index in range(1, 3):
+                repository.save_social_post(SocialPost(
+                    id=f"demo-photo-{session.id}-{photo_index}",
+                    player_id=session.organizer_id,
+                    player_display_name=player.display_name,
+                    profile_image_url=player.profile_image_url,
+                    sport=session.sport,
+                    session_id=session.id,
+                    caption=f"Generated rally moment {photo_index} from {session.group_name}.",
+                    media_url=avatar_url(f"{session.group_name} rally moment {photo_index}", "shapes"),
+                    media_type="image",
+                    created_at=created_at + timedelta(minutes=photo_index),
+                ))
 
         for index, (commenter_id, message) in enumerate(comments, start=1):
             commenter = players_by_id.get(commenter_id)
@@ -451,12 +512,15 @@ def seed_tournaments(repository: FirestoreRepository, players: list[Player], org
     return len(events)
 
 
-def seed(replace_social: bool = False, social_only: bool = False) -> None:
+def seed(replace_social: bool = False, social_only: bool = False, reset_synthetic: bool = False) -> None:
     project = os.getenv("GOOGLE_CLOUD_PROJECT", "mttn-portal")
     rhea_id = os.getenv("COURTMATE_DEMO_RHEA_UID", "demo-rhea-adhikari").strip() or "demo-rhea-adhikari"
     repository = FirestoreRepository(project=project)
     today = date.today()
     now = datetime.now(timezone.utc)
+    deleted_synthetic: dict[str, int] = {}
+    if reset_synthetic:
+        deleted_synthetic = delete_synthetic_data(repository, rhea_id)
     deleted_social_posts = 0
     deleted_social_comments = 0
     if replace_social:
@@ -504,6 +568,7 @@ def seed(replace_social: bool = False, social_only: bool = False) -> None:
         make_session("demo-tennis-completed", "Whitefield Doubles Recap", "demo-neil", "tennis", "Whitefield", today - timedelta(days=5), time(19), time(21), 3.0, 4.6, "casual", ["demo-neil", rhea_id, "demo-vikram", "demo-meera"], status="completed"),
         make_session("demo-badminton-completed", "Brookefield Shuttle Recap", "demo-rohit", "badminton", "Brookefield", today - timedelta(days=3), time(20), time(22), 2.8, 4.2, "social", ["demo-rohit", "demo-sana", "demo-isha", "demo-dev"], status="completed"),
         make_session("demo-padel-completed", "Varthur Padel Recap", "demo-vikram", "padel", "Varthur", today - timedelta(days=1), time(9), time(11), 3.0, 4.5, "competitive", ["demo-vikram", "demo-meera", "demo-isha", "demo-kabir"], status="completed"),
+        make_session("demo-badminton-awaiting-feedback", "Whitefield Feedback Rally", rhea_id, "badminton", "Whitefield", today - timedelta(days=1), time(18), time(20), 2.8, 4.2, "social", [rhea_id, "demo-sana", "demo-isha", "demo-dev"], status="awaiting_feedback"),
     ]
     for session in sessions:
         repository.save_session(session)
@@ -512,7 +577,8 @@ def seed(replace_social: bool = False, social_only: bool = False) -> None:
     social_post_count, social_comment_count = seed_social_content(repository, players, sessions, rhea_id, now)
     if social_only:
         replacement = f" Replaced {deleted_social_posts} social posts and {deleted_social_comments} social comments." if replace_social else ""
-        print(f"Seeded synthetic CourtMate social data into {project}: {len(players)} players, {len(sessions) + generated_sessions} sessions, {social_post_count} session activity engagement records, {social_comment_count} social comments.{replacement}")
+        reset_summary = f" Reset {sum(deleted_synthetic.values())} synthetic documents." if reset_synthetic else ""
+        print(f"Seeded synthetic CourtMate social data into {project}: {len(players)} players, {len(sessions) + generated_sessions} sessions, {social_post_count} session activity engagement records, {social_comment_count} social comments.{replacement}{reset_summary}")
         return
 
     requests = [
@@ -531,6 +597,7 @@ def seed(replace_social: bool = False, social_only: bool = False) -> None:
         ChatPost(id="demo-chat-pb-sat-1", session_id="demo-pb-sat-evening", player_id=rhea_id, player_display_name="Rhea Adhikari", message="Court is pencilled in at 6 PM. Please confirm by lunch.", created_at=now - timedelta(hours=4)),
         ChatPost(id="demo-chat-pb-sat-2", session_id="demo-pb-sat-evening", player_id="demo-kavya", player_display_name="Demo Kavya", message="I can bring a spare set of balls.", created_at=now - timedelta(hours=3)),
         ChatPost(id="demo-chat-pb-sun-1", session_id="demo-pb-sun-morning", player_id="demo-rohit", player_display_name="Demo Rohit", message="Let us keep this social and rotate partners every game.", created_at=now - timedelta(days=1)),
+        ChatPost(id="demo-chat-feedback-1", session_id="demo-badminton-awaiting-feedback", player_id=rhea_id, player_display_name="Rhea Adhikari", message="That was a fun session. Please add your private player ratings when you have a minute.", created_at=now - timedelta(hours=2)),
     ]
     for post in posts:
         repository.save_chat_post(post)
@@ -574,6 +641,7 @@ def seed(replace_social: bool = False, social_only: bool = False) -> None:
         make_notification("demo-notification-rhea-follow", rhea_id, "follow", "Demo Meera followed you", "You have a new follower from the Varthur pickleball community.", "", now - timedelta(hours=3), actor_id="demo-meera"),
         make_notification("demo-notification-rhea-update", rhea_id, "request_update", "Your game request was approved", "You are confirmed for East Bengaluru Ladder.", "demo-pb-sun-competitive", now - timedelta(days=2), request_id=f"demo-pb-sun-competitive:{rhea_id}"),
         make_notification("demo-notification-rhea-pending", rhea_id, "request_update", "Your request is waiting", "The organizer is reviewing your Brookefield Badminton Mix request.", "demo-badminton-evening", now - timedelta(hours=7), request_id=f"demo-badminton-evening:{rhea_id}"),
+        make_notification("demo-notification-rhea-feedback", rhea_id, "game_completed", "Rate your Whitefield Feedback Rally", "The game is ready for private player ratings. Finish when the group is ready.", "demo-badminton-awaiting-feedback", now - timedelta(hours=2), actor_id=rhea_id),
         make_notification("demo-notification-organizer-request", rhea_id, "join_request", "Demo Rohit wants to join", "Review the request for Whitefield Sunset Rally.", "demo-pb-sat-evening", now - timedelta(hours=2), request_id="demo-pb-sat-evening:demo-rohit", actor_id="demo-rohit"),
     ]
     for notification in notifications:
@@ -582,7 +650,8 @@ def seed(replace_social: bool = False, social_only: bool = False) -> None:
     tournament_count = seed_tournaments(repository, players, rhea_id, today, now)
 
     replacement = f" Replaced {deleted_social_posts} social posts and {deleted_social_comments} social comments." if replace_social else ""
-    print(f"Seeded synthetic CourtMate data into {project}: {len(players)} players, {len(sessions) + generated_sessions} sessions, {len(requests)} requests, {len(posts)} chat posts, {social_post_count} session activity engagement records, {social_comment_count} social comments, {len(feedback)} feedback records, {len(follows)} follows, {len(notifications)} notifications, {tournament_count} tournaments.{replacement}")
+    reset_summary = f" Reset {sum(deleted_synthetic.values())} synthetic documents." if reset_synthetic else ""
+    print(f"Seeded synthetic CourtMate data into {project}: {len(players)} players, {len(sessions) + generated_sessions} sessions, {len(requests)} requests, {len(posts)} chat posts, {social_post_count} session activity engagement records, {social_comment_count} social comments, {len(feedback)} feedback records, {len(follows)} follows, {len(notifications)} notifications, {tournament_count} tournaments.{replacement}{reset_summary}")
 
 
 if __name__ == "__main__":
@@ -597,7 +666,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Stop after rebuilding players, sessions, and completed-session social activity data.",
     )
+    parser.add_argument(
+        "--reset-synthetic",
+        action="store_true",
+        help="Delete only this script's synthetic records across CourtMate collections before reseeding.",
+    )
     arguments = parser.parse_args()
     if arguments.social_only and not arguments.replace_social:
         parser.error("--social-only requires --replace-social")
-    seed(replace_social=arguments.replace_social, social_only=arguments.social_only)
+    seed(replace_social=arguments.replace_social, social_only=arguments.social_only, reset_synthetic=arguments.reset_synthetic)

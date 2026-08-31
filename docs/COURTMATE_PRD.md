@@ -23,7 +23,7 @@ Today, attendance is scattered across chat groups, skill labels are inconsistent
 
 ### Home activity feed
 
-For signed-in players, the first tab is **Home**, branded **Rally Circles**: "Your people, your sport, your next game." It has **Discover**, **Following**, and **Personal Rally** views, recommended players to follow, and activity-only completed-game cards. Personal Rally contains only the signed-in player's completed sessions. The former chat-first screen is now the **Assistant** tab and remains available through the chat icon. Home has no generic post composer or generic-feed posts.
+For signed-in players, the first tab is **Home**, branded **Rally Circles**. It has **Discover**, **Following**, and **My rallies** views, recommended players to follow, and activity-only completed-game cards. My rallies contains only the signed-in player's completed sessions. The former chat-first screen is now the **Assistant** tab and remains available through the chat icon. Home has no generic post composer or generic-feed posts.
 
 Session activity is published as leaderboard content so followers can see when someone is playing, view the current or final CMR order, and open any player profile from the author, avatar, or ranking row.
 
@@ -41,7 +41,7 @@ Informational sports and venue questions are answered without returning unrelate
 
 Games uses the same single-line tab navigator as Tournaments: **Explore, Upcoming, Pending, History**. Explore places suggested nearby games first, followed by the remaining results. The sport control contains only pickleball, badminton, tennis, padel, squash, and table tennis.
 
-Every confirmed game has one lightweight, full-page Group Space for member profiles, logistics chat, waitlist, current-CMR lineup, feedback, completion, and the post-game activity card. It is the main coordination surface before and after play. Any confirmed player can mark the game done; this publishes the completed-session card to Home and offers a direct route to Personal Rally. After completion, each player privately rates every other player from 1 to 10, which updates sport-specific CMR without score entry. Fun, fairness, and return intent remain lightweight check-in signals.
+Every confirmed game has one lightweight, full-page Group Space for member profiles, logistics chat, waitlist, current-CMR lineup, feedback, completion, and the post-game activity card. It is the main coordination surface before and after play. Any confirmed player can mark the game done; this publishes the completed-session card to Home and offers a direct route to My rallies. After completion, each player privately rates every other player from 1 to 10, which updates sport-specific CMR without score entry. Fun, fairness, and return intent remain lightweight check-in signals.
 
 ### Social activity and sharing
 

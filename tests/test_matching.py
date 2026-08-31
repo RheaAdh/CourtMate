@@ -1,5 +1,5 @@
 import unittest
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from backend.gemini import GeminiIntentParser
 from backend.matching import search_sessions, suggest_replacements
@@ -143,7 +143,8 @@ class MatchingTests(unittest.TestCase):
         self.assertEqual(intent.sport, "pickleball")
         self.assertEqual(intent.area, "Whitefield")
         self.assertEqual(intent.style, "casual")
-        self.assertEqual(intent.date, date(2026, 8, 30))
+        expected_sunday = date.today() + timedelta(days=(6 - date.today().weekday()) % 7)
+        self.assertEqual(intent.date, expected_sunday)
 
 
     def test_search_returns_open_whitefield_session(self):

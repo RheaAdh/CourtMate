@@ -55,6 +55,7 @@ class Repository(Protocol):
     def save_follow(self, follow: FollowRecord) -> FollowRecord: ...
     def delete_follow(self, follower_id: str, following_id: str) -> None: ...
     def is_following(self, follower_id: str, following_id: str) -> bool: ...
+    def is_follow_request_pending(self, follower_id: str, following_id: str) -> bool: ...
     def list_followers(self, player_id: str) -> list[FollowRecord]: ...
     def list_following(self, player_id: str) -> list[FollowRecord]: ...
     def save_tournament(self, tournament: Tournament) -> Tournament: ...
@@ -223,13 +224,18 @@ class InMemoryRepository:
         self.follows.pop(f"{follower_id}_{following_id}", None)
 
     def is_following(self, follower_id: str, following_id: str) -> bool:
-        return f"{follower_id}_{following_id}" in self.follows
+        follow = self.follows.get(f"{follower_id}_{following_id}")
+        return bool(follow and follow.status == "accepted")
+
+    def is_follow_request_pending(self, follower_id: str, following_id: str) -> bool:
+        follow = self.follows.get(f"{follower_id}_{following_id}")
+        return bool(follow and follow.status == "pending")
 
     def list_followers(self, player_id: str) -> list[FollowRecord]:
-        return [follow for follow in self.follows.values() if follow.following_id == player_id]
+        return [follow for follow in self.follows.values() if follow.following_id == player_id and follow.status == "accepted"]
 
     def list_following(self, player_id: str) -> list[FollowRecord]:
-        return [follow for follow in self.follows.values() if follow.follower_id == player_id]
+        return [follow for follow in self.follows.values() if follow.follower_id == player_id and follow.status == "accepted"]
 
     def save_tournament(self, tournament: Tournament) -> Tournament:
         self.tournaments[tournament.id] = tournament
@@ -497,15 +503,19 @@ class FirestoreRepository:
 
     def is_following(self, follower_id: str, following_id: str) -> bool:
         document = self.client.collection("follows").document(f"{follower_id}_{following_id}").get()
-        return document.exists
+        return document.exists and (document.to_dict() or {}).get("status", "accepted") == "accepted"
+
+    def is_follow_request_pending(self, follower_id: str, following_id: str) -> bool:
+        document = self.client.collection("follows").document(f"{follower_id}_{following_id}").get()
+        return document.exists and (document.to_dict() or {}).get("status", "accepted") == "pending"
 
     def list_followers(self, player_id: str) -> list[FollowRecord]:
         documents = self.client.collection("follows").where("following_id", "==", player_id).limit(self.max_player_reads).stream()
-        return [FollowRecord.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
+        return [FollowRecord.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents if (document.to_dict() or {}).get("status", "accepted") == "accepted"]
 
     def list_following(self, player_id: str) -> list[FollowRecord]:
         documents = self.client.collection("follows").where("follower_id", "==", player_id).limit(self.max_player_reads).stream()
-        return [FollowRecord.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
+        return [FollowRecord.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents if (document.to_dict() or {}).get("status", "accepted") == "accepted"]
 
     def save_tournament(self, tournament: Tournament) -> Tournament:
         reference = self.client.collection("tournaments").document(tournament.id)

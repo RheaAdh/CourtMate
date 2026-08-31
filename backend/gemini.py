@@ -1,5 +1,6 @@
 import os
 import re
+import base64
 from datetime import date, timedelta
 import logging
 
@@ -384,6 +385,36 @@ Stored player context: {context}
         if not answer:
             raise RuntimeError("Gemini returned an empty performance answer")
         return answer
+
+    def generate_sporty_avatar(self, image_bytes: bytes, mime_type: str, sport: Sport) -> list[str]:
+        """Create a few sport-themed avatar options while preserving identity."""
+        if not self._client:
+            raise RuntimeError("Gemini image generation is not configured")
+        from google import genai
+
+        prompt = (
+            f"Create a polished, friendly square profile avatar based on this person's photo, themed for {sport.replace('_', ' ')}. "
+            "Keep the person's recognizable face, age, skin tone, and expression. Use a clean illustrated editorial style, "
+            "sport-specific clothing or equipment, a bold simple background, and no text, logos, or watermark. Return one avatar image."
+        )
+        options: list[str] = []
+        for _ in range(3):
+            response = self._client.models.generate_content(
+                model=os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.0-flash-preview-image-generation"),
+                contents=[prompt, genai.types.Part.from_bytes(data=image_bytes, mime_type=mime_type)],
+                config={"response_modalities": ["TEXT", "IMAGE"]},
+            )
+            for candidate in response.candidates or []:
+                for part in candidate.content.parts if candidate.content else []:
+                    if part.inline_data and part.inline_data.data:
+                        encoded = base64.b64encode(part.inline_data.data).decode("ascii")
+                        options.append(f"data:{part.inline_data.mime_type or 'image/png'};base64,{encoded}")
+                        break
+                if options:
+                    break
+        if not options:
+            raise RuntimeError("Gemini did not return avatar images")
+        return options[:3]
 
     @staticmethod
     def _fallback_parse(query: str) -> SearchIntent:

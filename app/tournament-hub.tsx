@@ -12,11 +12,16 @@ type Tournament = {
   name: string;
   sport: Sport;
   organizer_id: string;
+  organizer_plays: boolean;
   area: string;
   venue_name?: string | null;
   tournament_date: string;
+  start_time: string;
+  end_time: string;
   format: "knockout" | "round_robin";
   capacity: number;
+  cmr_min: number;
+  cmr_max: number;
   status: TournamentStatus;
   registration_ids: string[];
   my_registration_status?: TournamentRegistration["status"] | null;
@@ -131,7 +136,11 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
   const [area, setArea] = useState("Whitefield");
   const [venue, setVenue] = useState("");
   const [date, setDate] = useState(today());
+  const [startTime, setStartTime] = useState("19:00");
+  const [endTime, setEndTime] = useState("21:00");
   const [capacity, setCapacity] = useState("8");
+  const [organizerPlays, setOrganizerPlays] = useState(true);
+  const [cmrBand, setCmrBand] = useState("all");
   const [scores, setScores] = useState<Record<string, ScoreDraft>>({});
   const [fixtureEdits, setFixtureEdits] = useState<Record<string, FixtureEdit>>({});
   const [winnerDrafts, setWinnerDrafts] = useState<Record<string, string>>({});
@@ -178,19 +187,31 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
   async function createTournament(event: FormEvent) {
     event.preventDefault();
     if (!name.trim()) return;
+    if (endTime <= startTime) {
+      onToast("Tournament end time must be after its start time");
+      return;
+    }
+    if (date === today() && startTime <= new Date().toTimeString().slice(0, 5)) {
+      onToast("Tournament start time must be in the future");
+      return;
+    }
     try {
       setBusyId("create");
       const response = await authorizedFetch(`${apiUrl}/v1/tournaments`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), sport, area: area.trim(), venue_name: venue.trim() || null, tournament_date: date, capacity: Number(capacity), format: "knockout" }),
+        body: JSON.stringify({ name: name.trim(), sport, area: area.trim(), venue_name: venue.trim() || null, tournament_date: date, start_time: startTime, end_time: endTime, capacity: Number(capacity), format: "knockout", organizer_plays: organizerPlays, cmr_min: cmrBand === "beginner" ? 0 : cmrBand === "intermediate" ? 35 : cmrBand === "advanced" ? 65 : 0, cmr_max: cmrBand === "beginner" ? 34.9 : cmrBand === "intermediate" ? 64.9 : cmrBand === "advanced" ? 100 : 100 }),
       });
       if (!response.ok) throw new Error("Tournament creation failed");
       setSelected(await response.json() as TournamentDetails);
       setShowCreate(false);
       setName("");
+      setOrganizerPlays(true);
+      setCmrBand("all");
+      setStartTime("19:00");
+      setEndTime("21:00");
       await loadTournaments();
-      onToast("Tournament created. You are registered as the first player.");
+      onToast(organizerPlays ? "Tournament created. You are registered as the first player." : "Tournament created. You are organizing only.");
     } catch {
       onToast("Could not create this tournament");
     } finally {
@@ -429,11 +450,12 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
   };
   const tournamentView = (tournament: Tournament): TournamentView => {
     if (tournament.status === "completed" || tournament.status === "cancelled" || (tournament.status === "registration" && tournament.tournament_date < today())) return "history";
+    if (tournament.organizer_id === currentUserId || tournament.my_registration_status === "registered") return "upcoming";
     if (tournament.my_registration_status === "pending" || tournament.my_registration_status === "waitlisted") return "pending";
     return "upcoming";
   };
   const exploreTournaments = tournaments
-    .filter((tournament) => tournament.status === "registration" && tournament.tournament_date >= today() && !["pending", "registered", "waitlisted"].includes(tournament.my_registration_status ?? ""))
+    .filter((tournament) => tournament.organizer_id !== currentUserId && tournament.status === "registration" && tournament.tournament_date >= today() && !["pending", "registered", "waitlisted"].includes(tournament.my_registration_status ?? ""))
     .sort((a, b) => {
       const area = playerArea?.trim().toLowerCase() ?? "";
       const areaScore = (tournament: Tournament) => area && (tournament.area.toLowerCase().includes(area) || area.includes(tournament.area.toLowerCase())) ? 0 : 1;
@@ -442,9 +464,9 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
   const visibleTournaments = activeView === "explore" ? exploreTournaments : tournaments.filter((tournament) => tournamentView(tournament) === activeView);
   const tournamentTabs: { value: TournamentView; label: string }[] = [
     { value: "explore", label: "Explore" },
-    { value: "upcoming", label: "Upcoming" },
-    { value: "pending", label: "Pending" },
-    { value: "history", label: "History" },
+    { value: "upcoming", label: "My tournaments" },
+    { value: "pending", label: "Pending requests" },
+    { value: "history", label: "Completed" },
   ];
 
   return (
@@ -470,11 +492,15 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
             <label><span>Tournament name</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Whitefield Rally Cup" required /></label>
             <label><span>Sport</span><select value={sport} onChange={(event) => setSport(event.target.value as Sport)}>{sports.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></label>
             <label><span>Date</span><input type="date" min={today()} value={date} onChange={(event) => setDate(event.target.value)} required /></label>
+            <label><span>Starts</span><input type="time" value={startTime} onChange={(event) => setStartTime(event.target.value)} required /></label>
+            <label><span>Ends</span><input type="time" value={endTime} onChange={(event) => setEndTime(event.target.value)} required /></label>
             <label><span>Players</span><select value={capacity} onChange={(event) => setCapacity(event.target.value)}>{[4, 6, 8, 10, 12, 16].map((value) => <option value={value} key={value}>{value} max</option>)}</select></label>
             <label><span>Locality</span><input value={area} onChange={(event) => setArea(event.target.value)} placeholder="Whitefield" required /></label>
             <label><span>Venue (optional)</span><input value={venue} onChange={(event) => setVenue(event.target.value)} placeholder="Community court" /></label>
+            <label><span>Player level</span><select value={cmrBand} onChange={(event) => setCmrBand(event.target.value)}><option value="all">All CMR levels</option><option value="beginner">Beginner · CMR 0–34</option><option value="intermediate">Intermediate · CMR 35–64</option><option value="advanced">Advanced · CMR 65–100</option></select></label>
           </div>
-          <button className="dark-button" type="submit" disabled={busyId === "create"}>{busyId === "create" ? "Creating..." : "Create and register"} <span>-&gt;</span></button>
+          <label className="tournament-organizer-option"><input type="checkbox" checked={organizerPlays} onChange={(event) => setOrganizerPlays(event.target.checked)} /><span><strong>Play in this tournament</strong><small>Keep this on to take one player slot and enter the draw.</small></span></label>
+          <button className="dark-button" type="submit" disabled={busyId === "create"}>{busyId === "create" ? "Creating..." : organizerPlays ? "Create and register" : "Create tournament"} <span>-&gt;</span></button>
         </form>
       )}
 
@@ -485,7 +511,7 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
             <div>
             <span className="kicker">{sportLabel(selected.tournament.sport).toUpperCase()} · {selected.tournament.format === "knockout" ? "KNOCKOUT" : "ROUND ROBIN"} · {selected.tournament.status.replace("_", " ").toUpperCase()}</span>
               <h2>{selected.tournament.name}</h2>
-              <p>{selected.tournament.tournament_date} · {selected.tournament.area}{selected.tournament.venue_name ? ` · ${selected.tournament.venue_name}` : ""}</p>
+              <p>{selected.tournament.tournament_date} · {selected.tournament.start_time.slice(0, 5)}–{selected.tournament.end_time.slice(0, 5)} · {selected.tournament.area}{selected.tournament.venue_name ? ` · ${selected.tournament.venue_name}` : ""} · {selected.tournament.cmr_min === 0 && selected.tournament.cmr_max < 35 ? "Beginner" : selected.tournament.cmr_min >= 65 ? "Advanced" : selected.tournament.cmr_min >= 35 ? "Intermediate" : "All levels"} CMR</p>
             </div>
             <div className="tournament-rule-badge"><strong>{selected.tournament.rules.point_target}</strong><span>{selected.tournament.rules.score_label.toLowerCase()} to win</span></div>
           </div>
@@ -497,7 +523,7 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
 
           {selected.tournament.status === "registration" && (
             <div className="tournament-action-row">
-              {registration && registration.status !== "declined" && registration.status !== "withdrawn" ? <span className={`status-badge ${registration.status}`}>{registration.status === "pending" ? "Request pending" : registration.status}</span> : <button className="dark-button" onClick={() => void register()} disabled={busyId === "register"}>{busyId === "register" ? "Requesting..." : "Request to play"} <span>-&gt;</span></button>}
+              {isOrganizer && !selected.tournament.organizer_plays ? <span className="status-badge registered">Organizing only</span> : registration && registration.status !== "declined" && registration.status !== "withdrawn" ? <span className={`status-badge ${registration.status}`}>{registration.status === "pending" ? "Request pending" : registration.status}</span> : <button className="dark-button" onClick={() => void register()} disabled={busyId === "register"}>{busyId === "register" ? "Requesting..." : "Request to play"} <span>-&gt;</span></button>}
               {isOrganizer && <button className="manage-group-button" onClick={() => void generateFixtures()} disabled={busyId === "fixtures"}>{busyId === "fixtures" ? "Generating..." : "Generate knockout draw"}</button>}
             </div>
           )}
@@ -577,11 +603,10 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
           <div className="tournament-tabs" role="tablist" aria-label="Tournament views">
             {tournamentTabs.map((tab) => <button type="button" role="tab" aria-selected={activeView === tab.value} className={activeView === tab.value ? "active" : ""} onClick={() => setActiveView(tab.value)} key={tab.value}>{tab.label}<span>{tab.value === "explore" ? exploreTournaments.length : tournaments.filter((tournament) => tournamentView(tournament) === tab.value).length}</span></button>)}
           </div>
-          <div className="tournament-list-heading"><div><h2>{activeView === "explore" ? "Explore tournaments" : activeView === "upcoming" ? "Upcoming tournaments" : activeView === "pending" ? "Pending registrations" : "Tournament history"}</h2></div><span>{`${visibleTournaments.length} event${visibleTournaments.length === 1 ? "" : "s"}`}</span></div>
           {visibleTournaments.length ? visibleTournaments.map((tournament) => (
             <button className="tournament-card" key={tournament.id} onClick={() => void openTournament(tournament.id)} disabled={busyId === tournament.id}>
               <span className="tournament-card-date"><strong>{new Date(`${tournament.tournament_date}T00:00:00`).toLocaleDateString("en-IN", { day: "2-digit" })}</strong><small>{new Date(`${tournament.tournament_date}T00:00:00`).toLocaleDateString("en-IN", { month: "short" })}</small></span>
-              <span className="tournament-card-copy"><strong>{tournament.name}</strong><small>{sportLabel(tournament.sport)} · {tournament.area} · {tournament.my_registration_status === "pending" ? "request pending" : tournament.my_registration_status === "waitlisted" ? "waitlisted" : tournament.status.replace("_", " ")}</small></span>
+              <span className="tournament-card-copy"><strong>{tournament.name}</strong><small>{sportLabel(tournament.sport)} · {tournament.area} · {tournament.cmr_min === 0 && tournament.cmr_max < 35 ? "Beginner" : tournament.cmr_min >= 65 ? "Advanced" : tournament.cmr_min >= 35 ? "Intermediate" : "All levels"} · {tournament.my_registration_status === "pending" ? "request pending" : tournament.my_registration_status === "waitlisted" ? "waitlisted" : tournament.status.replace("_", " ")}</small></span>
               <span className="tournament-card-meta"><strong>{tournament.registration_ids.length}/{tournament.capacity}</strong><small>players</small></span>
               <span className="tournament-card-arrow">-&gt;</span>
             </button>

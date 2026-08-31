@@ -149,15 +149,19 @@ class PublicPlayerProfile(BaseModel):
     followers_count: int = Field(default=0, ge=0)
     following_count: int = Field(default=0, ge=0)
     is_following: bool = False
+    follow_request_pending: bool = False
     follows_you: bool = False
     recent_games: list["ProfileGameSummary"] = Field(default_factory=list)
     activity_by_date: dict[str, int] = Field(default_factory=dict)
+    weekly_streak: int = Field(default=0, ge=0)
+    weekly_streak_active: bool = False
 
 
 class FollowRecord(BaseModel):
     id: str
     follower_id: str
     following_id: str
+    status: Literal["pending", "accepted"] = "accepted"
     created_at: datetime
 
 
@@ -201,6 +205,15 @@ class ProfileImageUploadResponse(BaseModel):
     expires_in: int
 
 
+class SportyAvatarRequest(BaseModel):
+    sport: Sport
+    source_image_url: str = Field(min_length=1, max_length=2048)
+
+
+class SportyAvatarResponse(BaseModel):
+    options: list[str] = Field(default_factory=list, max_length=3)
+
+
 class Session(BaseModel):
     id: str
     group_name: str
@@ -219,7 +232,7 @@ class Session(BaseModel):
     confirmed_player_ids: list[str] = Field(default_factory=list)
     waitlist_player_ids: list[str] = Field(default_factory=list)
     external_booking_url: str | None = None
-    status: Literal["open", "full", "in_progress", "completed", "cancelled"] = "open"
+    status: Literal["open", "full", "in_progress", "awaiting_feedback", "completed", "cancelled"] = "open"
     sport: Sport = "pickleball"
     visibility: SessionVisibility = "public"
     social_activity_published: bool = False
@@ -241,11 +254,16 @@ class Tournament(BaseModel):
     name: str = Field(min_length=2, max_length=80)
     sport: Sport = "pickleball"
     organizer_id: str
+    organizer_plays: bool = True
     area: str
     venue_name: str | None = None
     tournament_date: date_type
+    start_time: time = time(19)
+    end_time: time = time(21)
     format: Literal["knockout", "round_robin"] = "knockout"
     capacity: int = Field(ge=2, le=16)
+    cmr_min: float = Field(default=0, ge=0, le=100)
+    cmr_max: float = Field(default=100, ge=0, le=100)
     status: Literal["registration", "in_progress", "completed", "cancelled"] = "registration"
     registration_ids: list[str] = Field(default_factory=list)
     created_at: datetime
@@ -314,8 +332,13 @@ class CreateTournamentRequest(BaseModel):
     area: str = Field(min_length=2, max_length=80)
     venue_name: str | None = Field(default=None, max_length=120)
     tournament_date: date_type
+    start_time: time = time(19)
+    end_time: time = time(21)
     capacity: int = Field(ge=2, le=16, default=8)
     format: Literal["knockout", "round_robin"] = "knockout"
+    organizer_plays: bool = True
+    cmr_min: float = Field(default=0, ge=0, le=100)
+    cmr_max: float = Field(default=100, ge=0, le=100)
 
 
 class TournamentScoreRequest(BaseModel):
@@ -465,7 +488,7 @@ class JoinRequest(BaseModel):
 class AppNotification(BaseModel):
     id: str
     player_id: str
-    kind: Literal["game_match", "game_completed", "join_request", "request_update", "tournament_request", "tournament_update", "follow"] = "game_match"
+    kind: Literal["game_match", "game_reminder", "game_completed", "join_request", "request_update", "tournament_request", "tournament_update", "follow"] = "game_match"
     title: str
     message: str
     session_id: str
@@ -522,6 +545,7 @@ class MyActivityResponse(BaseModel):
     incoming_requests: list[JoinRequestView] = Field(default_factory=list)
     groups: list[Session] = Field(default_factory=list)
     games: list[Session] = Field(default_factory=list)
+    awaiting_feedback: list[Session] = Field(default_factory=list)
     past_games: list[PastGame] = Field(default_factory=list)
 
 
@@ -645,6 +669,7 @@ class SocialPostView(BaseModel):
     caption: str
     media_url: str | None = None
     media_type: Literal["image", "video"] | None = None
+    media_urls: list[str] = Field(default_factory=list, max_length=6)
     like_count: int = Field(default=0, ge=0)
     comment_count: int = Field(default=0, ge=0)
     share_count: int = Field(default=0, ge=0)
@@ -713,6 +738,7 @@ class CreatedGroupResponse(BaseModel):
 class FeedbackRequest(BaseModel):
     player_id: str | None = None
     rating: int | None = Field(default=None, ge=1, le=5)
+    match_quality: int = Field(default=5, ge=1, le=5)
     fun: int = Field(ge=1, le=5)
     fairness: int = Field(ge=1, le=5)
     would_return: bool
@@ -722,6 +748,7 @@ class FeedbackRequest(BaseModel):
     player_order: list[str] = Field(default_factory=list, max_length=16)
     skipped_player_ids: list[str] = Field(default_factory=list, max_length=16)
     teams: list["MatchTeam"] = Field(default_factory=list, max_length=4)
+    photo_urls: list[str] = Field(default_factory=list, max_length=6)
 
 
 class PlayerRating(BaseModel):
@@ -744,6 +771,7 @@ class MatchTeam(BaseModel):
 class Feedback(BaseModel):
     session_id: str
     player_id: str
+    match_quality: int = Field(default=5, ge=1, le=5)
     fun: int
     fairness: int
     would_return: bool

@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthIdentity, get_current_identity
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, ExploreSessionsResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyActivityResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, PlayerRating, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListItem, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentRegistrationDecisionRequest, TournamentScoreRequest, TournamentWinnerRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, ExploreSessionsResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyActivityResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, PlayerRating, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, SportyAvatarRequest, SportyAvatarResponse, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListItem, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentRegistrationDecisionRequest, TournamentScoreRequest, TournamentWinnerRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
 from .tournaments import calculate_standings, generate_knockout_matches, generate_round_robin_matches, rules_for_sport, validate_score, validate_set_scores
 from .vector_search import VectorIndexer, VectorRetriever
@@ -176,15 +176,14 @@ def _refresh_session_status(session: Session, refresh_cmr: bool = True, persist:
         return session
     now = datetime.now(local_timezone)
     start, end = _session_window(session)
-    next_status = "completed" if now >= end else "in_progress" if now >= start else session.status
+    next_status = "awaiting_feedback" if now >= end else "in_progress" if now >= start else session.status
     if next_status != session.status:
-        session = session.model_copy(update={"status": next_status})
+        updates: dict[str, object] = {"status": next_status}
+        session = session.model_copy(update=updates)
         if persist:
             repository.save_session(session)
         if index and persist:
             _index_session_best_effort(session)
-        if next_status == "completed" and refresh_cmr:
-            _refresh_cmr_ratings()
     return session
 
 
@@ -193,7 +192,7 @@ def _get_session(session_id: str) -> Session | None:
     return _refresh_session_status(session, refresh_cmr=False, index=False) if session else None
 
 
-def _refresh_all_session_statuses(persist: bool = False) -> list[Session]:
+def _refresh_all_session_statuses(persist: bool = True) -> list[Session]:
     sessions = repository.list_sessions()
     # Discovery, feeds, and activity pages are read paths. Persist only the
     # lightweight status transition; never make them wait for an embedding
@@ -210,7 +209,7 @@ def _require_active_session(session: Session) -> None:
 def _require_joinable_session(session: Session) -> None:
     """Keep completed game history stable while leaving post-game chat available."""
     _require_active_session(session)
-    if session.status == "completed":
+    if session.status in {"awaiting_feedback", "completed"}:
         raise HTTPException(status_code=409, detail="This completed game is closed to new players")
 
 
@@ -324,16 +323,18 @@ def follow_player(player_id: str, player: Player = Depends(get_current_player)) 
         raise HTTPException(status_code=404, detail="Player not found")
     if target.id == player.id:
         raise HTTPException(status_code=409, detail="You cannot follow yourself")
-    if not repository.is_following(player.id, target.id):
-        repository.save_follow(FollowRecord(id=f"{player.id}_{target.id}", follower_id=player.id, following_id=target.id, created_at=datetime.now(timezone.utc)))
+    if repository.is_following(player.id, target.id):
+        return _public_profile(target, player.id)
+    if not repository.is_follow_request_pending(player.id, target.id):
+        repository.save_follow(FollowRecord(id=f"{player.id}_{target.id}", follower_id=player.id, following_id=target.id, status="pending", created_at=datetime.now(timezone.utc)))
         _clear_social_feed_cache()
         try:
             repository.save_notification(AppNotification(
                 id=f"follow-{player.id}-{target.id}",
                 player_id=target.id,
                 kind="follow",
-                title="New follower",
-                message=f"{player.display_name} followed you.",
+                title="Follow request",
+                message=f"{player.display_name} wants to follow you.",
                 session_id="",
                 actor_id=player.id,
                 created_at=datetime.now(timezone.utc),
@@ -341,6 +342,23 @@ def follow_player(player_id: str, player: Player = Depends(get_current_player)) 
         except Exception:
             pass
     return _public_profile(target, player.id)
+
+
+@app.post("/v1/me/follow-requests/{notification_id}", response_model=PublicPlayerProfile)
+def decide_follow_request(notification_id: str, decision: JoinRequestDecisionRequest, player: Player = Depends(get_current_player)) -> PublicPlayerProfile:
+    notification = next((item for item in repository.list_notifications_for_player(player.id) if item.id == notification_id and item.kind == "follow"), None)
+    if not notification or not notification.actor_id:
+        raise HTTPException(status_code=404, detail="Follow request not found")
+    requester = repository.get_player(notification.actor_id)
+    if not requester:
+        raise HTTPException(status_code=404, detail="Requester not found")
+    if decision.status == "approved":
+        repository.save_follow(FollowRecord(id=f"{requester.id}_{player.id}", follower_id=requester.id, following_id=player.id, status="accepted", created_at=datetime.now(timezone.utc)))
+        _clear_social_feed_cache()
+    else:
+        repository.delete_follow(requester.id, player.id)
+    repository.mark_notification_read(notification.id, player.id)
+    return _public_profile(requester, player.id)
 
 
 @app.post("/v1/players/{player_id}/unfollow", response_model=PublicPlayerProfile)
@@ -387,13 +405,11 @@ def social_feed(feed: str = "all", sport: Sport | None = None, player: Player = 
     sessions = _refresh_all_session_statuses()
     players_by_id = {candidate.id: candidate for candidate in repository.list_players()}
     following_ids = {record.following_id for record in repository.list_following(player.id)}
-    session_media: dict[str, SocialPost] = {}
+    session_media: dict[str, list[SocialPost]] = {}
     for post in repository.list_social_posts():
         if not post.session_id or not post.media_url:
             continue
-        existing = session_media.get(post.session_id)
-        if existing is None or post.created_at > existing.created_at:
-            session_media[post.session_id] = post
+        session_media.setdefault(post.session_id, []).append(post)
 
     session_activities = []
     for session in sessions:
@@ -410,7 +426,7 @@ def social_feed(feed: str = "all", sport: Sport | None = None, player: Player = 
             continue
         if sport and session.sport != sport:
             continue
-        session_activities.append(_session_social_view(session, players_by_id, player.id, session_media.get(session.id)))
+        session_activities.append(_session_social_view(session, players_by_id, player.id, session_media.get(session.id, [])))
     session_activities.sort(key=lambda item: item.created_at, reverse=True)
     return _cache_social_feed(cache_key, SocialFeedResponse(posts=session_activities[:50]))
 
@@ -594,6 +610,30 @@ def create_profile_image_upload_url(request: ProfileImageUploadRequest, player: 
     return ProfileImageUploadResponse(upload_url=upload_url, image_url=image_url, object_name=object_name, expires_in=600)
 
 
+@app.post("/v1/me/sporty-avatar-options", response_model=SportyAvatarResponse)
+def create_sporty_avatar_options(request: SportyAvatarRequest, player: Player = Depends(get_current_player)) -> SportyAvatarResponse:
+    """Generate preview-only sport avatars from the user's stored profile image."""
+    source = urlparse(request.source_image_url)
+    if source.scheme != "https" or source.hostname not in {"storage.googleapis.com", "firebasestorage.googleapis.com"}:
+        raise HTTPException(status_code=422, detail="Choose a profile photo stored in CourtMate")
+    try:
+        with urlopen(Request(request.source_image_url, headers={"Accept": "image/*"}), timeout=8) as response:
+            mime_type = response.headers.get_content_type()
+            image_bytes = response.read(8 * 1024 * 1024 + 1)
+    except (OSError, ValueError) as error:
+        raise HTTPException(status_code=422, detail="Could not read your profile photo") from error
+    if mime_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(status_code=422, detail="Profile photo must be JPG, PNG, or WebP")
+    if len(image_bytes) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Profile photo is too large")
+    try:
+        return SportyAvatarResponse(options=intent_parser.generate_sporty_avatar(image_bytes, mime_type, request.sport))
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=502, detail="Gemini could not create avatar options right now") from error
+
+
 @app.post("/v1/me/profile-image", response_model=Player)
 def update_profile_image(request: ProfileImageUpdateRequest, player: Player = Depends(get_current_player)) -> Player:
     if request.profile_image_url is None:
@@ -643,8 +683,29 @@ def _profile_activity(player_id: str, sessions: list[Session] | None = None) -> 
     return recent_games, activity_by_date
 
 
+def _profile_weekly_streak(player_id: str, sessions: list[Session], today: date | None = None) -> tuple[int, bool]:
+    """Count consecutive Monday-Sunday weeks with at least one completed game."""
+    current_date = today or _local_today()
+    current_week = current_date - timedelta(days=current_date.weekday())
+    completed_weeks = {
+        session.session_date - timedelta(days=session.session_date.weekday())
+        for session in sessions
+        if player_id in session.confirmed_player_ids
+        and session.status == "completed"
+        and session.session_date <= current_date
+    }
+    streak = 0
+    week = current_week
+    while week in completed_weeks:
+        streak += 1
+        week -= timedelta(days=7)
+    return streak, current_week in completed_weeks
+
+
 def _public_profile(player: Player, viewer_id: str | None = None, sessions: list[Session] | None = None) -> PublicPlayerProfile:
-    recent_games, activity_by_date = _profile_activity(player.id, sessions)
+    profile_sessions = sessions if sessions is not None else repository.list_sessions()
+    recent_games, activity_by_date = _profile_activity(player.id, profile_sessions)
+    weekly_streak, weekly_streak_active = _profile_weekly_streak(player.id, profile_sessions)
     return PublicPlayerProfile(
         id=player.id,
         display_name=player.display_name,
@@ -667,9 +728,12 @@ def _public_profile(player: Player, viewer_id: str | None = None, sessions: list
         followers_count=len(repository.list_followers(player.id)),
         following_count=len(repository.list_following(player.id)),
         is_following=bool(viewer_id and repository.is_following(viewer_id, player.id)),
+        follow_request_pending=bool(viewer_id and repository.is_follow_request_pending(viewer_id, player.id)),
         follows_you=bool(viewer_id and repository.is_following(player.id, viewer_id)),
         recent_games=recent_games,
         activity_by_date=activity_by_date,
+        weekly_streak=weekly_streak,
+        weekly_streak_active=weekly_streak_active,
     )
 
 
@@ -785,7 +849,7 @@ def _ensure_social_target(post_id: str, player: Player) -> tuple[SocialPost, Ses
     return post, session
 
 
-def _session_social_view(session: Session, players_by_id: dict[str, Player] | None = None, viewer_id: str | None = None, media_post: SocialPost | None = None) -> SocialPostView:
+def _session_social_view(session: Session, players_by_id: dict[str, Player] | None = None, viewer_id: str | None = None, media_posts: list[SocialPost] | None = None) -> SocialPostView:
     players_by_id = players_by_id or {candidate.id: candidate for candidate in repository.list_players()}
     participants = [players_by_id.get(player_id) for player_id in session.confirmed_player_ids]
     players = [candidate for candidate in participants if candidate]
@@ -794,6 +858,8 @@ def _session_social_view(session: Session, players_by_id: dict[str, Player] | No
     organizer_name = organizer.display_name if organizer else "CourtMate player"
     activity_post_id = _session_activity_post_id(session.id)
     engagement = repository.get_social_post(activity_post_id)
+    media_posts = sorted(media_posts or [], key=lambda post: post.created_at)
+    media_urls = [post.media_url for post in media_posts if post.media_url][:6]
     return SocialPostView(
         id=activity_post_id,
         player_id=organizer.id if organizer else session.organizer_id,
@@ -805,8 +871,9 @@ def _session_social_view(session: Session, players_by_id: dict[str, Player] | No
         session_date=session.session_date,
         session_area=session.area,
         caption=f"{session.group_name} is in the books. See how the line-up moved.",
-        media_url=media_post.media_url if media_post else None,
-        media_type=media_post.media_type if media_post else None,
+        media_url=media_urls[0] if media_urls else None,
+        media_type=media_posts[0].media_type if media_urls else None,
+        media_urls=media_urls,
         # Sessions do not store a creation timestamp; use the scheduled start so
         # activity cards sort naturally alongside authored social posts.
         created_at=datetime.combine(session.session_date, session.start_time, tzinfo=local_timezone),
@@ -838,9 +905,15 @@ def _member_session(session_id: str, player: Player) -> Session:
     return session
 
 
-def _leaderboard(session_ids: list[str], scope: str, sport: str | None = None) -> LeaderboardResponse:
-    players_by_id = {candidate.id: candidate for candidate in repository.list_players() if candidate.id in session_ids}
-    sessions = repository.list_sessions()
+def _leaderboard(
+    session_ids: list[str],
+    scope: str,
+    sport: str | None = None,
+    players: list[Player] | None = None,
+    sessions: list[Session] | None = None,
+) -> LeaderboardResponse:
+    players_by_id = {candidate.id: candidate for candidate in (players or repository.list_players()) if candidate.id in session_ids}
+    sessions = sessions if sessions is not None else repository.list_sessions()
     entries = []
     for candidate in players_by_id.values():
         score = candidate.cmr_ratings.get(sport) if sport else candidate.community_score
@@ -1043,18 +1116,52 @@ def _notify_players_about_game(session: Session) -> None:
             continue
 
 
+def _ensure_upcoming_game_reminders() -> None:
+    """Create one actionable court-booking reminder per confirmed participant."""
+    now = datetime.now(local_timezone)
+    reminder_horizon = now + timedelta(hours=24)
+    affected_players: set[str] = set()
+
+    for session in repository.list_sessions():
+        if session.status in {"completed", "cancelled"} or not session.confirmed_player_ids:
+            continue
+        start, _ = _session_window(session)
+        if not now < start <= reminder_horizon:
+            continue
+
+        for player_id in set(session.confirmed_player_ids):
+            notification_id = f"game-reminder-{session.id}-{player_id}"
+            if any(item.id == notification_id for item in repository.list_notifications_for_player(player_id)):
+                continue
+            try:
+                repository.save_notification(AppNotification(
+                    id=notification_id,
+                    player_id=player_id,
+                    kind="game_reminder",
+                    title="Game starts soon",
+                    message=f"{session.group_name} starts soon. Book the court and coordinate final details in Group Space.",
+                    session_id=session.id,
+                    created_at=datetime.now(timezone.utc),
+                ))
+                affected_players.add(player_id)
+            except Exception:
+                # A reminder must never make the notification endpoint fail.
+                continue
+
+    for player_id in affected_players:
+        _read_view_cache.pop(_read_view_cache_key("notifications", player_id), None)
+
+
 def _notify_confirmed_players_game_completed(session: Session, completed_by: Player) -> None:
     """Let every participant know when post-game ratings are ready."""
     for player_id in session.confirmed_player_ids:
-        if player_id == completed_by.id:
-            continue
         try:
             repository.save_notification(AppNotification(
                 id=f"game-completed-{session.id}-{player_id}",
                 player_id=player_id,
                 kind="game_completed",
-                title="Game complete - rate your lineup",
-                message=f"{completed_by.display_name} marked {session.group_name} as complete. Rate your fellow players privately to update CMR.",
+                title="Feedback is open",
+                message=f"{completed_by.display_name} closed {session.group_name}. Rate every other player privately to update CMR.",
                 session_id=session.id,
                 actor_id=completed_by.id,
                 created_at=datetime.now(timezone.utc),
@@ -1437,6 +1544,7 @@ def my_requests(player: Player = Depends(get_current_player)) -> MyRequestsRespo
 
 @app.get("/v1/me/notifications", response_model=NotificationsResponse)
 def notifications(player: Player = Depends(get_current_player)) -> NotificationsResponse:
+    _ensure_upcoming_game_reminders()
     cache_key = _read_view_cache_key("notifications", player.id)
     cached = _get_cached_read_view(cache_key)
     if cached is not None:
@@ -1479,7 +1587,7 @@ def my_groups(player: Player = Depends(get_current_player)) -> MyGroupsResponse:
 def my_games(player: Player = Depends(get_current_player)) -> MyGamesResponse:
     _refresh_all_session_statuses()
     player_sessions = repository.list_sessions_for_player(player.id)
-    games = [session for session in player_sessions if session.session_date >= _local_today() and session.status not in {"completed", "cancelled"}]
+    games = [session for session in player_sessions if session.session_date >= _local_today() and session.status not in {"awaiting_feedback", "completed", "cancelled"}]
     games.sort(key=lambda session: (session.session_date, session.start_time))
     past_games = []
     for session in player_sessions:
@@ -1501,6 +1609,7 @@ def my_activity(player: Player = Depends(get_current_player)) -> MyActivityRespo
         return cached
 
     sessions = _refresh_all_session_statuses()
+    players = repository.list_players()
     sessions_by_id = {session.id: session for session in sessions}
     player_requests = repository.list_join_requests_for_player(player.id)
     request_views = [
@@ -1526,13 +1635,15 @@ def my_activity(player: Player = Depends(get_current_player)) -> MyActivityRespo
     incoming_requests.sort(key=lambda item: item.request.created_at, reverse=True)
 
     player_sessions = [session for session in sessions if player.id in session.confirmed_player_ids]
-    games = [session for session in player_sessions if session.session_date >= _local_today() and session.status not in {"completed", "cancelled"}]
+    games = [session for session in player_sessions if session.session_date >= _local_today() and session.status not in {"awaiting_feedback", "completed", "cancelled"}]
     games.sort(key=lambda session: (session.session_date, session.start_time))
+    awaiting_feedback = [session for session in player_sessions if session.status == "awaiting_feedback"]
+    awaiting_feedback.sort(key=lambda session: (session.session_date, session.start_time), reverse=True)
     past_games = []
     for session in player_sessions:
         if session.status != "completed":
             continue
-        entries = _leaderboard(session.confirmed_player_ids, f"group:{session.id}", session.sport).entries
+        entries = _leaderboard(session.confirmed_player_ids, f"group:{session.id}", session.sport, players=players, sessions=sessions).entries
         player_entry = next((entry for entry in entries if entry.player.id == player.id), None)
         past_games.append(PastGame(session=session, rank=player_entry.rank if player_entry else None, score=player_entry.score if player_entry else None, ratings_count=player_entry.ratings_count if player_entry else 0, group_size=len(session.confirmed_player_ids)))
     past_games.sort(key=lambda item: (item.session.session_date, item.session.start_time), reverse=True)
@@ -1542,6 +1653,7 @@ def my_activity(player: Player = Depends(get_current_player)) -> MyActivityRespo
         incoming_requests=incoming_requests,
         groups=groups,
         games=games,
+        awaiting_feedback=awaiting_feedback,
         past_games=past_games,
     ))
 
@@ -1592,6 +1704,10 @@ def explore_sessions(player: Player = Depends(get_current_player)) -> ExploreSes
 
 @app.get("/v1/sessions/{session_id}/group", response_model=GroupViewResponse)
 def group_view(session_id: str, player: Player = Depends(get_current_player)) -> GroupViewResponse:
+    cache_key = _read_view_cache_key("group", player.id, session_id)
+    cached = _get_cached_read_view(cache_key)
+    if cached is not None:
+        return cached
     session = _get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1600,7 +1716,7 @@ def group_view(session_id: str, player: Player = Depends(get_current_player)) ->
     members = [_public_profile(players_by_id[player_id], player.id, sessions) for player_id in session.confirmed_player_ids if player_id in players_by_id]
     waitlist = [_public_profile(players_by_id[player_id], player.id, sessions) for player_id in session.waitlist_player_ids if player_id in players_by_id]
     activity_proofs = repository.list_activity_proofs(session_id=session.id) if session.status == "completed" else []
-    return GroupViewResponse(session=session, members=members, waitlist=waitlist, activity_proofs=activity_proofs)
+    return _cache_read_view(cache_key, GroupViewResponse(session=session, members=members, waitlist=waitlist, activity_proofs=activity_proofs))
 
 
 def _tournament_details(tournament: Tournament) -> TournamentDetailsResponse:
@@ -1676,6 +1792,10 @@ def list_tournaments(player: Player = Depends(get_current_player)) -> Tournament
 
 @app.post("/v1/tournaments", response_model=TournamentDetailsResponse)
 def create_tournament(background_tasks: BackgroundTasks, request: CreateTournamentRequest, player: Player = Depends(get_current_player)) -> TournamentDetailsResponse:
+    if request.end_time <= request.start_time:
+        raise HTTPException(status_code=422, detail="Tournament end time must be after its start time")
+    if request.tournament_date < _local_today() or (request.tournament_date == _local_today() and datetime.combine(request.tournament_date, request.start_time, tzinfo=local_timezone) <= datetime.now(local_timezone)):
+        raise HTTPException(status_code=422, detail="Tournament start time must be in the future")
     try:
         rules = rules_for_sport(request.sport)
     except ValueError as error:
@@ -1686,26 +1806,33 @@ def create_tournament(background_tasks: BackgroundTasks, request: CreateTourname
         name=request.name.strip(),
         sport=request.sport,
         organizer_id=player.id,
+        organizer_plays=request.organizer_plays,
         area=request.area.strip(),
         venue_name=request.venue_name.strip() if request.venue_name else None,
         tournament_date=request.tournament_date,
+        start_time=request.start_time,
+        end_time=request.end_time,
         capacity=request.capacity,
+        cmr_min=request.cmr_min,
+        cmr_max=request.cmr_max,
         format=request.format,
         rules=rules,
         created_at=datetime.now(timezone.utc),
     )
-    registration = TournamentRegistration(
-        id=f"{tournament.id}_{player.id}",
-        tournament_id=tournament.id,
-        player_id=player.id,
-        display_name=player.display_name,
-        status="registered",
-        cmr_rating=player.cmr_ratings.get(request.sport),
-        created_at=datetime.now(timezone.utc),
-    )
-    tournament.registration_ids.append(registration.id)
     repository.save_tournament(tournament)
-    repository.save_tournament_registration(registration)
+    if request.organizer_plays:
+        registration = TournamentRegistration(
+            id=f"{tournament.id}_{player.id}",
+            tournament_id=tournament.id,
+            player_id=player.id,
+            display_name=player.display_name,
+            status="registered",
+            cmr_rating=player.cmr_ratings.get(request.sport),
+            created_at=datetime.now(timezone.utc),
+        )
+        tournament.registration_ids.append(registration.id)
+        repository.save_tournament(tournament)
+        repository.save_tournament_registration(registration)
     background_tasks.add_task(_index_tournament_best_effort, tournament)
     return _tournament_details(tournament)
 
@@ -1725,6 +1852,8 @@ def register_for_tournament(tournament_id: str, player: Player = Depends(get_cur
         raise HTTPException(status_code=404, detail="Tournament not found")
     if tournament.status != "registration":
         raise HTTPException(status_code=409, detail="Registration is closed for this tournament")
+    if player.id == tournament.organizer_id and not tournament.organizer_plays:
+        raise HTTPException(status_code=409, detail="You chose to organize this tournament without playing")
     registration_id = f"{tournament.id}_{player.id}"
     existing = next((item for item in repository.list_tournament_registrations(tournament.id) if item.player_id == player.id and item.status not in {"withdrawn", "declined"}), None)
     if existing:
@@ -2124,6 +2253,11 @@ def group_leaderboard(session_id: str, player: Player = Depends(get_current_play
     return _leaderboard(session.confirmed_player_ids, f"group:{session_id}", session.sport)
 
 
+def _all_participants_submitted_feedback(session: Session) -> bool:
+    submitted_player_ids = {item.player_id for item in repository.list_feedback(session.id)}
+    return set(session.confirmed_player_ids).issubset(submitted_player_ids)
+
+
 @app.get("/v1/leaderboards/local", response_model=LeaderboardResponse)
 def local_leaderboard(area: str | None = None, sport: Sport = "pickleball", player: Player = Depends(get_current_player)) -> LeaderboardResponse:
     requested_area = (area or player.area).strip().lower()
@@ -2141,16 +2275,30 @@ def complete_session(session_id: str, background_tasks: BackgroundTasks, player:
     if session.status == "cancelled":
         raise HTTPException(status_code=409, detail="Cancelled games cannot be completed")
     if session.status == "completed":
-        return session
-    # Closing the game is the single publish action. The existing stable
-    # session activity card will now show the completed leaderboard on Home.
-    session.status = "completed"
-    session.social_activity_published = True
+        if session.social_activity_published:
+            return session
+        saved = repository.save_session(session.model_copy(update={"social_activity_published": True}))
+        _clear_social_feed_cache()
+        return saved
+    if session.status == "awaiting_feedback":
+        # A confirmed player can close the feedback round manually when the
+        # group is ready. Submitted ratings are retained and the activity is
+        # published even if some players have not responded yet.
+        completed = session.model_copy(update={"status": "completed", "social_activity_published": True})
+        saved = repository.save_session(completed)
+        _clear_social_feed_cache()
+        background_tasks.add_task(_refresh_cmr_ratings)
+        background_tasks.add_task(_refresh_community_scores)
+        background_tasks.add_task(_index_session_best_effort, saved)
+        return saved
+    # Closing a game opens the private feedback round. Home is published only
+    # after every confirmed participant has submitted their ratings.
+    session.status = "awaiting_feedback"
+    session.social_activity_published = False
     saved = repository.save_session(session)
     _clear_social_feed_cache()
     _notify_confirmed_players_game_completed(saved, player)
     background_tasks.add_task(_index_session_best_effort, saved)
-    background_tasks.add_task(_refresh_cmr_ratings)
     return saved
 
 
@@ -2210,7 +2358,7 @@ def replacement(session_id: str, player: Player = Depends(get_current_player)) -
 @app.post("/v1/sessions/{session_id}/feedback", response_model=Feedback)
 def feedback(session_id: str, request: FeedbackRequest, background_tasks: BackgroundTasks, player: Player = Depends(get_current_player)) -> Feedback:
     session = _member_session(session_id, player)
-    if session.status != "completed":
+    if session.status not in {"awaiting_feedback", "completed"}:
         raise HTTPException(status_code=409, detail="Rate players after the game is marked complete")
     confirmed_others = [player_id for player_id in session.confirmed_player_ids if player_id != player.id]
     skipped_player_ids = set(request.skipped_player_ids)
@@ -2258,7 +2406,25 @@ def feedback(session_id: str, request: FeedbackRequest, background_tasks: Backgr
                 if player_id in seen_team_players:
                     raise HTTPException(status_code=422, detail="A player can only be on one team")
                 seen_team_players.add(player_id)
-    saved = repository.save_feedback(Feedback(session_id=session_id, created_at=datetime.now(timezone.utc), player_id=player.id, fun=request.fun, fairness=request.fairness, would_return=request.would_return, ratings=ratings, teams=request.teams))
+    saved = repository.save_feedback(Feedback(session_id=session_id, created_at=datetime.now(timezone.utc), player_id=player.id, match_quality=request.match_quality, fun=request.fun, fairness=request.fairness, would_return=request.would_return, ratings=ratings, teams=request.teams))
+    for index, photo_url in enumerate(request.photo_urls[:6]):
+        repository.save_social_post(SocialPost(
+            id=f"session-photo-{session_id}-{player.id}-{index}",
+            player_id=player.id,
+            player_display_name=player.display_name,
+            profile_image_url=player.profile_image_url,
+            sport=session.sport,
+            session_id=session_id,
+            caption=f"A moment from {session.group_name}.",
+            media_url=photo_url,
+            media_type="image",
+            created_at=datetime.now(timezone.utc),
+        ))
+    if session.status == "awaiting_feedback" and _all_participants_submitted_feedback(session):
+        completed = session.model_copy(update={"status": "completed", "social_activity_published": True})
+        repository.save_session(completed)
+        _clear_social_feed_cache()
+        background_tasks.add_task(_index_session_best_effort, completed)
     background_tasks.add_task(_refresh_community_scores)
     background_tasks.add_task(_refresh_cmr_ratings)
     return saved

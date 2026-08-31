@@ -81,7 +81,11 @@ function MicrophoneIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="12" rx="4" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" /></svg>;
 }
 
-export function GroupSpace({ group, members, waitlist, posts, currentUserId, apiUrl, authorizedFetch, onClose, onRefresh, onMarkDone, onOpenPersonalRally, onChatPosted, onToast, onViewProfile }: GroupSpaceProps) {
+export function GroupSpace({ group: inputGroup, members, waitlist, posts, currentUserId, apiUrl, authorizedFetch, onClose, onRefresh, onMarkDone, onOpenPersonalRally, onChatPosted, onToast, onViewProfile }: GroupSpaceProps) {
+  const feedbackPhase = inputGroup.status === "awaiting_feedback";
+  // Reuse the compact completed-state feedback UI while keeping the phase
+  // visually distinct and withholding the Home activity card until final save.
+  const group = feedbackPhase ? { ...inputGroup, status: "completed" } : inputGroup;
   const [draft, setDraft] = useState("");
   const [listening, setListening] = useState(false);
   const [posting, setPosting] = useState(false);
@@ -89,6 +93,7 @@ export function GroupSpace({ group, members, waitlist, posts, currentUserId, api
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const composerRef = useRef<HTMLInputElement>(null);
   const currentPlayerIsConfirmed = Boolean(currentUserId && members.some((member) => member.id === currentUserId));
+  const canComplete = currentPlayerIsConfirmed && group.status !== "cancelled" && (group.status !== "completed" || feedbackPhase);
 
   function startVoice() {
     const SpeechRecognition = (window as Window & { SpeechRecognition?: new () => SpeechRecognition; webkitSpeechRecognition?: new () => SpeechRecognition }).SpeechRecognition
@@ -142,11 +147,11 @@ export function GroupSpace({ group, members, waitlist, posts, currentUserId, api
     }
   }
 
-  return <section className="group-space-page group-space-v2" aria-label={`${group.group_name} group space`}>
+  return <section className={`group-space-page group-space-v2 ${feedbackPhase ? "group-feedback-phase" : ""}`} aria-label={`${group.group_name} group space`}>
       <header className="group-space-v2-header">
         <button className="group-space-back-button" type="button" onClick={onClose} aria-label="Back to games">← <span>Games</span></button>
         <div className="group-space-title"><span className="kicker">GROUP SPACE · {group.sport.replaceAll("_", " ").toUpperCase()}</span><h1>{group.group_name}</h1><p>{group.session_date} · {group.start_time}–{group.end_time} · {group.area}</p></div>
-        <div className="group-space-header-actions"><span className={`status-badge ${group.status}`}>{group.status === "completed" ? "Game done" : group.status === "in_progress" ? "Playing now" : "Upcoming"}</span>{currentPlayerIsConfirmed && group.status !== "completed" && group.status !== "cancelled" && <button className="group-space-mark-done-button" type="button" onClick={() => void markDone()} disabled={markingDone}>{markingDone ? "Completing..." : "Complete game"}</button>}</div>
+        <div className="group-space-header-actions"><span className={`status-badge ${feedbackPhase ? "awaiting_feedback" : group.status}`}>{feedbackPhase ? "Awaiting feedback" : group.status === "completed" ? "Game done" : group.status === "in_progress" ? "Playing now" : "Upcoming"}</span>{canComplete && <button className="group-space-mark-done-button" type="button" onClick={() => void markDone()} disabled={markingDone}>{markingDone ? "Completing..." : feedbackPhase ? "Finish & publish" : "Complete game"}</button>}</div>
       </header>
       <div className="group-space-v2-grid">
         <section className="group-space-v2-chat">
@@ -172,7 +177,7 @@ export function GroupSpace({ group, members, waitlist, posts, currentUserId, api
         <div className="group-space-activity-mark" aria-hidden="true">↗</div>
         <div><span className="kicker">POST-GAME ACTIVITY</span><h2>Rally saved to your circle.</h2><p>{group.group_name} is now a completed-game update with the final line-up and each player&apos;s CMR movement.</p><div className="group-space-activity-meta"><span>{group.sport.replaceAll("_", " ")}</span><span>{members.length} players</span><span>CMR movement</span></div>
         </div>
-        <button type="button" className="group-space-activity-open" onClick={onOpenPersonalRally}>Open Personal Rally <span>→</span></button>
+        <button type="button" className="group-space-activity-open" onClick={onOpenPersonalRally}>Open My rallies <span>→</span></button>
       </section>}
       {group.status === "completed" && feedbackOpen && <div id="post-game-feedback"><PostGameFeedbackPanel sessionId={group.id} sport={group.sport} members={members} currentUserId={currentUserId} apiUrl={apiUrl} authorizedFetch={authorizedFetch} onSaved={() => { setFeedbackOpen(false); onRefresh(); }} onToast={onToast} /></div>}
     </section>;

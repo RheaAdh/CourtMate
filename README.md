@@ -129,6 +129,15 @@ COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
 
 `--replace-social` is intentionally opt-in and deletes every document in only those two CourtMate collections. To attach the Rhea Adhikari demo profile to your signed-in Firebase account, pass the Firebase Auth UID from that account:
 
+To fully refresh the demo state for the current product flows, delete only synthetic CourtMate records and reseed all screens in one command. This preserves unrelated player and application data:
+
+```bash
+COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
+  python -m backend.seed_synthetic_firestore --reset-synthetic
+```
+
+The refreshed dataset includes upcoming, pending, waitlisted, awaiting-feedback, and completed games; generated-avatar profiles; group chat; notifications; private feedback and CMR history; Home activity cards with carousel media; and registration, live, and completed knockout tournaments. Demo media uses generated avatars/shapes rather than photographs of real people.
+
 For a faster social-only reset that skips unrelated requests, notifications, and tournament writes, add `--social-only` to the replacement command.
 
 ```bash
