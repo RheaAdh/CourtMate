@@ -95,35 +95,39 @@ def preference_fit(player: Player | None, members: list[Player]) -> float:
     return round(sum(signals) / len(signals), 3) if signals else 0.7
 
 
-def search_sessions(sessions: list[Session], query: SearchIntent, players: list[Player] | None = None, player: Player | None = None, exact: bool = False) -> list[SessionRecommendation]:
+def search_sessions(sessions: list[Session], query: SearchIntent, players: list[Player] | None = None, player: Player | None = None, exact: bool = False, strict: bool = True) -> list[SessionRecommendation]:
     results: list[SessionRecommendation] = []
     for session in sessions:
         if session.sport != query.sport:
             continue
-        if session.status not in {"open", "full"} or session.open_slots < query.open_slots_required:
+        if session.status not in {"open", "full"} or (strict and session.open_slots < query.open_slots_required):
             continue
         if query.date and session.session_date != query.date:
             continue
         location_matches, area_fit, distance = _location_match(session, query, player)
-        if not location_matches:
+        if strict and not location_matches:
             continue
         time_fit = _time_fit(session.start_time, session.end_time, query) if query.start_time is not None else _profile_availability_fit(session, player)
-        if time_fit == 0:
+        if strict and time_fit == 0:
             continue
         skill_min = query.skill_min if query.skill_min is not None else session.skill_min
         skill_max = query.skill_max if query.skill_max is not None else session.skill_max
         skill_fit = 1.0 if session.skill_min <= skill_max and session.skill_max >= skill_min else 0.25
-        if skill_fit < 1.0:
+        if strict and skill_fit < 1.0:
             continue
         if exact and query.style != "any" and session.style != query.style:
             continue
         # An explicit level in the search describes this game; otherwise only a
         # computed or externally verified rating should constrain the player.
         player_rating = rating_for_sport(player, query.sport) if player and query.skill_min is None and query.skill_max is None else None
-        if player and player_rating is not None and not session.skill_min <= player_rating <= session.skill_max:
+        if strict and player and player_rating is not None and not session.skill_min <= player_rating <= session.skill_max:
             continue
         if player_rating is not None:
-            skill_fit = _in_band_skill_fit(player_rating, session.skill_min, session.skill_max)
+            skill_fit = _in_band_skill_fit(player_rating, session.skill_min, session.skill_max) if strict else _skill_fit(player_rating, session.skill_min, session.skill_max)
+        elif not strict:
+            skill_fit = 0.6
+        if not strict and distance is not None:
+            area_fit = max(area_fit, 1.0 / (1.0 + distance / 20.0))
         style_fit = 1.0 if query.style == session.style else 0.45
         if query.style == "any" and player:
             style_fit = 1.0 if player.style == session.style else 0.55

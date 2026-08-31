@@ -240,7 +240,9 @@ button { cursor:pointer; }
 .game-create-backdrop .game-create-form {
   width: min(720px, 100%);
   max-height: calc(100vh - 40px);
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   margin: 0;
 }
 
@@ -269,10 +271,23 @@ html[data-theme="dark"] .game-create-backdrop { background: rgba(0, 0, 0, .7); }
 html[data-theme="dark"] .game-create-close { border-color: #6f8d3d; color: #f3f8e9; }
 
 @media (max-width: 600px) {
-  .game-create-backdrop { align-items: end; padding: 10px; }
+  .game-create-backdrop {
+    place-items: center;
+    padding: 16px 10px;
+  }
   .game-create-backdrop .game-create-form {
-    max-height: calc(100vh - 20px);
-    border-radius: 18px 18px 12px 12px;
+    width: min(100%, 520px);
+    max-height: calc(100dvh - 32px);
+    border-radius: 18px;
+  }
+  .game-create-heading {
+    position: sticky;
+    top: -16px;
+    z-index: 2;
+    margin: -16px -16px 0;
+    padding: 16px 50px 12px 16px;
+    background: linear-gradient(135deg, rgba(246,252,222,.99), rgba(243,240,255,.98));
+    border-bottom: 1px solid rgba(201, 215, 174, .7);
   }
 }
 
@@ -9087,6 +9102,41 @@ html[data-theme="dark"] .copy-link-button:hover {
 @media (max-width: 600px) {
   .cmr-range-sliders {
     height: 42px;
+  }
+}
+
+/* Native range inputs need to receive the pointer event themselves. Keep the
+   two ends visually grouped, but do not stack transparent controls over one
+   another or dragging becomes unreliable on mobile browsers. */
+.cmr-range-sliders {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  height: auto;
+  gap: 14px;
+}
+
+.cmr-range-sliders > div {
+  display: grid;
+  gap: 8px;
+}
+
+.cmr-range-sliders > div > span {
+  position: static;
+  display: flex;
+  justify-content: space-between;
+}
+
+.game-create-grid .cmr-range-sliders input[type="range"] {
+  position: static;
+  z-index: auto;
+  pointer-events: auto;
+  width: 100%;
+}
+
+@media (max-width: 600px) {
+  .cmr-range-sliders {
+    grid-template-columns: 1fr;
+    height: auto;
   }
 }
 

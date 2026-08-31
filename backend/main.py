@@ -17,7 +17,7 @@ from .auth import AuthIdentity, get_current_identity
 from .facilities import BENGALURU_FACILITIES
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, BookingUpdateRequest, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CommunityLeaderboardEntry, CommunityLeaderboardResponse, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, ExploreSessionsResponse, Facility, FacilityListResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyActivityResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, PlayerDensityPoint, PlayerDensityResponse, PlayerRating, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, SportyAvatarRequest, SportyAvatarResponse, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListItem, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentRegistrationDecisionRequest, TournamentScoreRequest, TournamentWinnerRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, BookingUpdateRequest, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CommunityJoinRequest, CommunityLeaderboardEntry, CommunityLeaderboardResponse, CommunityMembership, CommunityMembershipResponse, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, ExploreSessionsResponse, Facility, FacilityListResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyActivityResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, PlayerDensityPoint, PlayerDensityResponse, PlayerRating, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, SportyAvatarRequest, SportyAvatarResponse, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListItem, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentRegistrationDecisionRequest, TournamentScoreRequest, TournamentWinnerRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
 from .tournaments import calculate_standings, generate_knockout_matches, generate_round_robin_matches, rules_for_sport, validate_score, validate_set_scores
 from .vector_search import VectorIndexer, VectorRetriever
@@ -1716,7 +1716,7 @@ def my_activity(player: Player = Depends(get_current_player)) -> MyActivityRespo
 
 @app.get("/v1/me/explore", response_model=ExploreSessionsResponse)
 def explore_sessions(player: Player = Depends(get_current_player)) -> ExploreSessionsResponse:
-    """Recommend open games nearby that this player can still request to join."""
+    """Return every visible game the player can still request, ranked by fit."""
     cache_key = _read_view_cache_key("explore", player.id)
     cached = _get_cached_read_view(cache_key)
     if cached is not None:
@@ -1733,8 +1733,8 @@ def explore_sessions(player: Player = Depends(get_current_player)) -> ExploreSes
         if session.organizer_id != player.id
         and player.id not in session.confirmed_player_ids
         and session.id not in active_request_session_ids
-        and session.status == "open"
-        and session.open_slots > 0
+        and _session_visible_to_player(session, player)
+        and session.status in {"open", "full"}
     ]
     players = repository.list_players()
     recommendations = []
@@ -1746,7 +1746,7 @@ def explore_sessions(player: Player = Depends(get_current_player)) -> ExploreSes
             longitude=player.longitude,
             open_slots_required=1,
         )
-        recommendations.extend(search_sessions(source_sessions, intent, players, player, exact=False))
+        recommendations.extend(search_sessions(source_sessions, intent, players, player, exact=False, strict=False))
     recommendations.sort(
         key=lambda item: (
             -item.score,
@@ -1755,7 +1755,7 @@ def explore_sessions(player: Player = Depends(get_current_player)) -> ExploreSes
             item.session.start_time,
         )
     )
-    return _cache_read_view(cache_key, ExploreSessionsResponse(recommendations=recommendations[:50]))
+    return _cache_read_view(cache_key, ExploreSessionsResponse(recommendations=recommendations))
 
 
 def _player_cmr_100(player: Player, sport: Sport) -> float | None:
@@ -1878,6 +1878,33 @@ def nearby_facilities(
     records.sort(key=lambda record: (0 if requested_area and requested_area in str(record["area"]).casefold() else 1, str(record["name"]).casefold()))
     facilities = [Facility.model_validate(record) for record in records[:limit]]
     return FacilityListResponse(sport=sport, area=area or player.area, facilities=facilities)
+
+
+def _community_id(sport: Sport, area: str) -> str:
+    return f"community:{sport}:{area.casefold().replace(' ', '-')}"
+
+
+@app.get("/v1/me/communities", response_model=CommunityMembershipResponse)
+def my_communities(player: Player = Depends(get_current_player)) -> CommunityMembershipResponse:
+    return CommunityMembershipResponse(memberships=repository.list_community_memberships_for_player(player.id))
+
+
+@app.post("/v1/me/communities/join", response_model=CommunityMembership)
+def join_community(request: CommunityJoinRequest, player: Player = Depends(get_current_player)) -> CommunityMembership:
+    area = request.area.strip()
+    community_id = _community_id(request.sport, area)
+    existing = repository.get_community_membership(community_id, player.id)
+    if existing:
+        return existing
+    membership = CommunityMembership(
+        id=f"{community_id}:{player.id}",
+        community_id=community_id,
+        player_id=player.id,
+        sport=request.sport,
+        area=area,
+        joined_at=datetime.now(timezone.utc),
+    )
+    return repository.save_community_membership(membership)
 
 
 @app.get("/v1/sessions/{session_id}/group", response_model=GroupViewResponse)

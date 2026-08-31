@@ -174,6 +174,7 @@ type CreateGroupDraft = {
   style: "casual" | "social" | "competitive";
   game_format: "singles" | "doubles";
   capacity: number;
+  slots_available: number;
 };
 
 type SearchResponse = {
@@ -512,6 +513,10 @@ function ChatIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-4.5 3v-3H5a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z" /><path d="M7 10h10M7 13.5h6" /></svg>;
 }
 
+function PeopleIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3" /><path d="M3.5 19c.4-3.2 2.2-5 5.5-5s5.1 1.8 5.5 5" /><path d="M15 6.5a2.7 2.7 0 0 1 0 5.2M16 14c2.8.3 4.2 1.9 4.5 4.5" /></svg>;
+}
+
 function CopyIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>;
 }
@@ -627,7 +632,7 @@ export default function Home() {
   const [loadingMessage, setLoadingMessage] = useState("Finding your best match...");
   const [groupProposal, setGroupProposal] = useState<GroupProposal | null>(null);
   const [groupNameDraft, setGroupNameDraft] = useState("");
-  const [createGroupDraft, setCreateGroupDraft] = useState<CreateGroupDraft>({ sport: "pickleball", area: "", session_date: localDateInput(), start_time: "19:00", end_time: "21:00", skill_min: "3.0", skill_max: "3.5", style: "casual", game_format: "doubles", capacity: 6 });
+  const [createGroupDraft, setCreateGroupDraft] = useState<CreateGroupDraft>({ sport: "pickleball", area: "", session_date: localDateInput(), start_time: "19:00", end_time: "21:00", skill_min: "3.0", skill_max: "3.5", style: "casual", game_format: "doubles", capacity: 6, slots_available: 5 });
   const [createQuery, setCreateQuery] = useState("");
   const [showCreateGame, setShowCreateGame] = useState(false);
   const [showCraftedGame, setShowCraftedGame] = useState(false);
@@ -1399,6 +1404,7 @@ export default function Home() {
           style: payload.group_proposal.style as CreateGroupDraft["style"],
           game_format: payload.group_proposal.game_format ?? "doubles",
           capacity: payload.group_proposal.capacity ?? 6,
+          slots_available: (payload.group_proposal.capacity ?? 6) - 1,
         });
       }
       if (exact && requestQuery.trim()) {
@@ -1461,7 +1467,7 @@ export default function Home() {
     const firstStep = explicitSport ? "time" : "sport";
     setCreationStep(firstStep);
     setCreateQuery(sourceQuery || `Create a ${sportLabel(requestSport)} game near ${area}`);
-    setCreateGroupDraft({ sport: nextProposal.sport, area: nextProposal.area, session_date: nextProposal.session_date ?? localDateInput(), start_time: nextProposal.start_time ?? "19:00", end_time: nextProposal.end_time ?? "21:00", skill_min: nextProposal.skill_min.toString(), skill_max: nextProposal.skill_max.toString(), style: nextProposal.style as CreateGroupDraft["style"], game_format: nextProposal.game_format, capacity: nextProposal.capacity });
+    setCreateGroupDraft({ sport: nextProposal.sport, area: nextProposal.area, session_date: nextProposal.session_date ?? localDateInput(), start_time: nextProposal.start_time ?? "19:00", end_time: nextProposal.end_time ?? "21:00", skill_min: nextProposal.skill_min.toString(), skill_max: nextProposal.skill_max.toString(), style: nextProposal.style as CreateGroupDraft["style"], game_format: nextProposal.game_format, capacity: nextProposal.capacity, slots_available: nextProposal.capacity - 1 });
     setChatMessages((messages) => [...messages.slice(-8), { id: `${Date.now()}-creation-assistant`, role: "assistant", text: `I can create a ${sportLabel(requestSport)} game. ${creationQuestion(firstStep)}` }]);
   }
 
@@ -1481,7 +1487,7 @@ export default function Home() {
     const cmrMax = clampCmr(playerCmr + 20);
     const style: CreateGroupDraft["style"] = profile?.style === "social" || profile?.style === "competitive" ? profile.style : "casual";
     setGroupNameDraft(`${area || "Local"} ${sportLabel(sport)} Game`);
-    setCreateGroupDraft({ sport, area, session_date: localDateInput(), start_time: "19:00", end_time: "21:00", skill_min: skillBandFromCmr(cmrMin).toString(), skill_max: skillBandFromCmr(cmrMax).toString(), style, game_format: "doubles", capacity: 6 });
+    setCreateGroupDraft({ sport, area, session_date: localDateInput(), start_time: "19:00", end_time: "21:00", skill_min: skillBandFromCmr(cmrMin).toString(), skill_max: skillBandFromCmr(cmrMax).toString(), style, game_format: "doubles", capacity: 6, slots_available: 5 });
     setShowCreateGame(true);
   }
 
@@ -1955,7 +1961,7 @@ export default function Home() {
 
   function changeGameFormat(gameFormat: CreateGroupDraft["game_format"]) {
     const capacity = gameFormat === "singles" ? 2 : createGroupDraft.capacity < 4 ? 6 : createGroupDraft.capacity;
-    setCreateGroupDraft((draft) => ({ ...draft, game_format: gameFormat, capacity }));
+    setCreateGroupDraft((draft) => ({ ...draft, game_format: gameFormat, capacity, slots_available: capacity - 1 }));
     setGroupProposal((proposal) => proposal ? { ...proposal, game_format: gameFormat, capacity } : proposal);
   }
 
@@ -1989,7 +1995,7 @@ export default function Home() {
           skill_max: Number(createGroupDraft.skill_max),
           style: createGroupDraft.style,
           game_format: createGroupDraft.game_format,
-          capacity: createGroupDraft.capacity,
+          capacity: createGroupDraft.game_format === "singles" ? 2 : createGroupDraft.slots_available + 1,
           visibility: profile?.default_session_visibility ?? "public",
         }),
       });
@@ -2504,7 +2510,11 @@ export default function Home() {
   }
 
   function getGroupSpaceUrl(game: Pick<ShareableGame, "id">) {
-    const shareUrl = new URL("/", window.location.origin);
+    const configuredOrigin = process.env.NEXT_PUBLIC_APP_URL?.trim();
+    const publicOrigin = configuredOrigin || (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+      ? "https://court-mate-blr.vercel.app"
+      : window.location.origin);
+    const shareUrl = new URL("/", publicOrigin);
     shareUrl.searchParams.set("group-space", game.id);
     return shareUrl.toString();
   }
@@ -2552,19 +2562,20 @@ export default function Home() {
     const dateLabel = new Date(`${game.session_date}T12:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short" });
     const location = game.venue_name ? `${game.venue_name}, ${game.area}` : game.area;
     const groupSpaceUrl = getGroupSpaceUrl(game);
-    const message = `Join me for ${game.group_name}\n${sportLabel(game.sport)} · ${dateLabel} · ${game.start_time}–${game.end_time}\n${location}\n\nOpen the CourtMate Group Space: ${groupSpaceUrl}`;
+    const title = `Join me for ${game.group_name}`;
+    const message = `${sportLabel(game.sport)} · ${dateLabel} · ${game.start_time}–${game.end_time}\n${location}\n\nOpen the CourtMate Group Space: ${groupSpaceUrl}`;
     try {
       if (navigator.share) {
-        await navigator.share({ title: game.group_name, text: message, url: groupSpaceUrl });
+        await navigator.share({ title, text: message });
         setToast("Game details shared");
       } else {
-        await copyText(message);
+        await copyText(`${title}\n${message}`);
         setToast("Game details copied");
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       try {
-        await copyText(message);
+        await copyText(`${title}\n${message}`);
         setToast("Game details copied");
       } catch {
         setToast("Could not share game details");
@@ -2702,8 +2713,9 @@ export default function Home() {
   const exploreWeekEnd = new Date(`${today}T00:00:00`);
   exploreWeekEnd.setDate(exploreWeekEnd.getDate() + 7);
   const filteredExploreGames = exploreGames.filter((game) => {
-    const search = exploreSearch.trim().toLowerCase();
-    if (search && !`${game.group_name} ${game.area} ${sportLabel(game.sport)}`.toLowerCase().includes(search)) return false;
+    const searchTerms = exploreSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const searchableGame = `${game.group_name} ${game.area} ${sportLabel(game.sport)} ${game.style} ${game.session_date} ${game.start_time} ${game.end_time} ${game.venue_name ?? ""}`.toLowerCase();
+    if (searchTerms.some((term) => !searchableGame.includes(term))) return false;
     if (exploreSportApplied !== "all" && game.sport !== exploreSportApplied) return false;
     if (exploreAvailabilityApplied === "open" && game.open_slots < 1) return false;
     if (exploreDateApplied === "today" && game.session_date !== today) return false;
@@ -2745,7 +2757,7 @@ export default function Home() {
       {user && <nav className="app-tabs" aria-label="CourtMate sections">
         <button className={activeTab === "social" ? "active" : ""} onClick={() => { setSocialFeedEntry("all"); selectTab("social"); }} title="Home"><span className="app-tab-icon"><HomeIcon /></span><span>Home</span></button>
         <button className={activeTab === "games" ? "active" : ""} onClick={() => selectTab("games")} title="Your games"><span className="app-tab-icon"><PickleballPaddleIcon /></span><span>Games</span></button>
-        <button className={activeTab === "communities" ? "active" : ""} onClick={() => { selectTab("communities"); void loadExploreGames(); }} title="Communities"><span className="app-tab-icon" aria-hidden="true">👥</span><span>Communities</span></button>
+        <button className={activeTab === "communities" ? "active" : ""} onClick={() => { selectTab("communities"); void loadExploreGames(); }} title="Communities"><span className="app-tab-icon"><PeopleIcon /></span><span>Communities</span></button>
         <button className={activeTab === "home" ? "active" : ""} onClick={() => selectTab("home")} title="Assistant"><span className="app-tab-icon"><ChatIcon /></span><span>Assistant</span></button>
       </nav>}
       {activeTab === "home" && !user && <section className="guest-home" aria-label="CourtMate introduction">
@@ -2777,7 +2789,7 @@ export default function Home() {
 
       {activeTab === "games" && <section className="page-view games-page">
         <button type="button" className="section-fab games-fab" onClick={toggleGamesForm} aria-label={showCreateGame ? "Close game form" : "Create a game"} title={showCreateGame ? "Close" : "Create a game"}>{showCreateGame ? "×" : "+"}</button>
-        {showCreateGame && <div className="game-create-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowCreateGame(false); }}><form className="game-create-form" onSubmit={(event) => { event.preventDefault(); void createGroup(); }}><div className="game-create-heading"><div><span className="kicker">NEW GAME</span><h2>Create a game</h2></div><span>Fill in the details</span><button className="game-create-close" type="button" onClick={() => setShowCreateGame(false)} aria-label="Close create game form">×</button></div><div className="game-create-grid"><label className="game-create-wide"><span>Game name</span><input value={groupNameDraft} onChange={(event) => setGroupNameDraft(event.target.value)} placeholder="Whitefield Saturday Rally" required /></label><label><span>Sport</span><select value={createGroupDraft.sport} onChange={(event) => changeCreateSport(event.target.value as Sport)}>{sportOptions.map((sport) => <option value={sport.value} key={sport.value}>{sport.label}</option>)}</select></label><label><span>Area</span><input value={createGroupDraft.area} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, area: event.target.value })} placeholder="Any neighbourhood" required /></label><label><span>Date</span><input type="date" min={localDateInput()} value={createGroupDraft.session_date} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, session_date: event.target.value })} required /></label><label><span>Starts</span><input type="time" value={createGroupDraft.start_time} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, start_time: event.target.value })} required /></label><label><span>Ends</span><input type="time" value={createGroupDraft.end_time} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, end_time: event.target.value })} required /></label><div className="cmr-range-field game-create-wide"><div className="cmr-range-heading"><div><span>Preferred player CMR</span><strong>{createCmrMin}–{createCmrMax}</strong></div><button type="button" onClick={() => setCreateGroupCmrRange(createPlayerCmr - 20, createPlayerCmr + 20)}>Use my CMR</button></div><p>Set to your CMR of {createPlayerCmr} plus or minus 20 by default. CourtMate will match players inside this band.</p><div className="cmr-range-sliders"><div><span>From <b>{createCmrMin}</b></span><input type="range" min="0" max={createCmrMax} step="1" value={createCmrMin} onChange={(event) => setCreateGroupCmrRange(Number(event.target.value), createCmrMax)} aria-label="Minimum player CMR" /></div><div><span>To <b>{createCmrMax}</b></span><input type="range" min={createCmrMin} max="100" step="1" value={createCmrMax} onChange={(event) => setCreateGroupCmrRange(createCmrMin, Number(event.target.value))} aria-label="Maximum player CMR" /></div></div></div><label><span>Match type</span><select value={createGroupDraft.game_format} onChange={(event) => changeGameFormat(event.target.value as CreateGroupDraft["game_format"])}><option value="singles">Singles · 2 players</option><option value="doubles">Doubles</option></select></label><label><span>Total player slots</span><select value={createGroupDraft.capacity} onChange={(event) => setCreateGroupDraft((draft) => ({ ...draft, capacity: Number(event.target.value) }))} disabled={createGroupDraft.game_format === "singles"}>{(createGroupDraft.game_format === "singles" ? [2] : [4, 6, 8]).map((capacity) => <option value={capacity} key={capacity}>{capacity} players</option>)}</select><small className="game-create-hint">{createGroupDraft.game_format === "singles" ? "One opponent plus you." : "Includes you. Six players is the usual doubles rally."}</small></label><label><span>Game mood</span><select value={createGroupDraft.style} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, style: event.target.value as CreateGroupDraft["style"] })}><option value="casual">Casual</option><option value="social">Social</option><option value="competitive">Competitive</option></select></label></div><div className="game-create-actions"><button className="dark-button" type="submit" disabled={createGroupLoading}>{createGroupLoading ? "Creating..." : "Create game"}<span>→</span></button><button className="text-button" type="button" onClick={() => setShowCreateGame(false)}>Cancel</button></div></form></div>}
+        {showCreateGame && <div className="game-create-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowCreateGame(false); }}><form className="game-create-form" onSubmit={(event) => { event.preventDefault(); void createGroup(); }}><div className="game-create-heading"><div><span className="kicker">NEW GAME</span><h2>Create a game</h2></div><span>Fill in the details</span><button className="game-create-close" type="button" onClick={() => setShowCreateGame(false)} aria-label="Close create game form">×</button></div><div className="game-create-grid"><label className="game-create-wide"><span>Game name</span><input value={groupNameDraft} onChange={(event) => setGroupNameDraft(event.target.value)} placeholder="Whitefield Saturday Rally" required /></label><label><span>Sport</span><select value={createGroupDraft.sport} onChange={(event) => changeCreateSport(event.target.value as Sport)}>{sportOptions.map((sport) => <option value={sport.value} key={sport.value}>{sport.label}</option>)}</select></label><label><span>Area</span><input value={createGroupDraft.area} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, area: event.target.value })} placeholder="Any neighbourhood" required /></label><label><span>Date</span><input type="date" min={localDateInput()} value={createGroupDraft.session_date} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, session_date: event.target.value })} required /></label><label><span>Starts</span><input type="time" value={createGroupDraft.start_time} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, start_time: event.target.value })} required /></label><label><span>Ends</span><input type="time" value={createGroupDraft.end_time} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, end_time: event.target.value })} required /></label><div className="cmr-range-field game-create-wide"><div className="cmr-range-heading"><div><span>Preferred player CMR</span><strong>{createCmrMin}–{createCmrMax}</strong></div><button type="button" onClick={() => setCreateGroupCmrRange(createPlayerCmr - 20, createPlayerCmr + 20)}>Use my CMR</button></div><p>Current {sportLabel(createGroupDraft.sport)} CMR: <strong>{createPlayerCmr}</strong>. The default range is CMR ±20; adjust either end below.</p><div className="cmr-range-sliders"><div><span>From <b>{createCmrMin}</b></span><input type="range" min="0" max={createCmrMax} step="1" value={createCmrMin} onChange={(event) => setCreateGroupCmrRange(Number(event.target.value), createCmrMax)} aria-label="Minimum player CMR" /></div><div><span>To <b>{createCmrMax}</b></span><input type="range" min={createCmrMin} max="100" step="1" value={createCmrMax} onChange={(event) => setCreateGroupCmrRange(createCmrMin, Number(event.target.value))} aria-label="Maximum player CMR" /></div></div></div><label><span>Match type</span><select value={createGroupDraft.game_format} onChange={(event) => changeGameFormat(event.target.value as CreateGroupDraft["game_format"])}><option value="singles">Singles</option><option value="doubles">Doubles</option></select></label><label><span>Total player slots</span><select value={createGroupDraft.capacity} onChange={(event) => setCreateGroupDraft((draft) => ({ ...draft, capacity: Number(event.target.value), slots_available: Number(event.target.value) - 1 }))} disabled={createGroupDraft.game_format === "singles"}>{(createGroupDraft.game_format === "singles" ? [2] : [4, 6, 8]).map((capacity) => <option value={capacity} key={capacity}>{capacity} players</option>)}</select><small className="game-create-hint">{createGroupDraft.game_format === "singles" ? "One opponent plus you." : "Includes you. Six players is the usual doubles rally."}</small></label><label><span>Slots available</span><select value={createGroupDraft.slots_available} onChange={(event) => setCreateGroupDraft((draft) => ({ ...draft, slots_available: Number(event.target.value), capacity: Number(event.target.value) + 1 }))}><option value="1">1 player</option>{createGroupDraft.game_format === "doubles" && [3, 5, 7].map((slots) => <option value={slots} key={slots}>{slots} players</option>)}</select><small className="game-create-hint">Additional players needed after you.</small></label><label><span>Game mood</span><select value={createGroupDraft.style} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, style: event.target.value as CreateGroupDraft["style"] })}><option value="casual">Casual</option><option value="social">Social</option><option value="competitive">Competitive</option></select></label></div><div className="game-create-actions"><button className="dark-button" type="submit" disabled={createGroupLoading}>{createGroupLoading ? "Creating..." : "Create game"}<span>→</span></button><button className="text-button" type="button" onClick={() => setShowCreateGame(false)}>Cancel</button></div></form></div>}
         <div className="tournament-tabs" role="tablist" aria-label="Game views"><button className={gamesViewTab === "explore" ? "active" : ""} onClick={() => { setGamesViewTab("explore"); void loadExploreGames(); }}>Explore <span>{exploreGames.length}</span></button><button className={gamesViewTab === "upcoming" ? "active" : ""} onClick={() => setGamesViewTab("upcoming")}>My games <span>{upcomingGames.length}</span></button><button className={gamesViewTab === "pending" ? "active" : ""} onClick={() => setGamesViewTab("pending")} aria-label="Pending Requests">Pending <span>{requestedGames.length}</span></button><button className={gamesViewTab === "awaiting_feedback" ? "active" : ""} onClick={() => setGamesViewTab("awaiting_feedback")} aria-label="Awaiting feedback">Feedback <span>{awaitingFeedbackGames.length}</span></button></div>
         {gamesViewTab === "explore" && <div className="explore-filters" aria-label="Filter nearby games"><label className="explore-filter-search"><span>Search games</span><input value={exploreSearchDraft} onChange={(event) => setExploreSearchDraft(event.target.value)} placeholder="Name, sport, or area" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); setExploreSearch(exploreSearchDraft); setExploreSportApplied(exploreSportFilter); setExploreDateApplied(exploreDateFilter); setExploreAvailabilityApplied(exploreAvailabilityFilter); } }} /></label><label><span>Sport</span><select value={exploreSportFilter} onChange={(event) => setExploreSportFilter(event.target.value as Sport | "all")}><option value="all">All sports</option>{sportOptions.map((sport) => <option value={sport.value} key={sport.value}>{sport.label}</option>)}</select></label><label><span>When</span><select value={exploreDateFilter} onChange={(event) => setExploreDateFilter(event.target.value as "all" | "today" | "week")}><option value="all">Any date</option><option value="today">Today</option><option value="week">Next 7 days</option></select></label><label><span>Availability</span><select value={exploreAvailabilityFilter} onChange={(event) => setExploreAvailabilityFilter(event.target.value as "all" | "open")}><option value="all">Any group</option><option value="open">Spots open</option></select></label><button type="button" className="explore-filter-search-button" onClick={() => { setExploreSearch(exploreSearchDraft); setExploreSportApplied(exploreSportFilter); setExploreDateApplied(exploreDateFilter); setExploreAvailabilityApplied(exploreAvailabilityFilter); }}>Search</button><button type="button" className="explore-filter-reset" onClick={() => { setExploreSearchDraft(""); setExploreSearch(""); setExploreSportFilter("all"); setExploreDateFilter("all"); setExploreAvailabilityFilter("all"); setExploreSportApplied("all"); setExploreDateApplied("all"); setExploreAvailabilityApplied("all"); }} disabled={!exploreSearch && exploreSportApplied === "all" && exploreDateApplied === "all" && exploreAvailabilityApplied === "all"}>Reset</button></div>}
         {gamesViewTab === "explore" && <div className="game-list">{exploreLoading ? <TennisBallLoader label="Finding nearby games" /> : filteredExploreGames.length ? filteredExploreGames.map((game) => <article className="game-row" key={game.id}><div className="game-date"><strong>{new Date(game.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><span>{new Date(game.session_date).getDate()}</span></div><div className="game-copy"><h2>{game.group_name}</h2><p>{sportLabel(game.sport)} · {game.session_date} · {game.start_time}–{game.end_time} · {game.area}</p><small className="waitlist-summary">{Math.round(game.score * 100)}% match · {game.open_slots} spot{game.open_slots === 1 ? "" : "s"} open</small></div><div className="game-row-actions"><button className="manage-group-button" onClick={() => void viewGroup(game.id)} disabled={loadingGroupId === game.id}>{loadingGroupId === game.id ? "Loading..." : "View group"}</button><button className="copy-link-button" onClick={() => void copyGroupSpaceLink(game)} aria-label={`Copy ${game.group_name} link`} title="Copy share link"><CopyIcon /><span>Copy link</span></button><button className="game-share-button" onClick={() => void shareGame(game)} aria-label={`Share ${game.group_name}`}>Share <span>↗</span></button><button className="join-button" onClick={() => void joinSession(game.id, game.group_name, game.organizer_id)} disabled={joiningSessionId !== null}>{joiningSessionId === game.id ? "Requesting..." : "Request to join"}<span>→</span></button></div></article>) : <div className="page-empty"><strong>No games match these filters.</strong><p>Try widening the sport, date, or availability filters.</p><button className="dark-button" onClick={() => { setExploreSportFilter("all"); setExploreDateFilter("all"); setExploreAvailabilityFilter("all"); }}>Clear filters <span>→</span></button></div>}</div>}

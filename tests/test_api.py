@@ -54,6 +54,25 @@ class ApiFlowTests(unittest.TestCase):
         self.assertIn("cmr_min", payload["points"][0])
         self.assertNotIn("player_ids", payload["points"][0])
 
+    def test_explore_keeps_visible_games_that_are_not_a_hard_location_or_cmr_match(self):
+        far_game = repository.get_session("s1").model_copy(update={
+            "id": "far-game",
+            "group_name": "Far Squash Rally",
+            "organizer_id": "p2",
+            "sport": "squash",
+            "area": "Indiranagar",
+            "latitude": 12.9784,
+            "longitude": 77.6408,
+            "skill_min": 4.8,
+            "skill_max": 5.0,
+            "confirmed_player_ids": ["p2"],
+        })
+        repository.save_session(far_game)
+        response = self.client.get("/v1/me/explore", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(response.status_code, 200)
+        games = {item["session"]["id"] for item in response.json()["recommendations"]}
+        self.assertIn("far-game", games)
+
     def test_curated_facilities_filter_by_sport_and_area(self):
         response = self.client.get(
             "/v1/me/venues",
@@ -74,6 +93,17 @@ class ApiFlowTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["entries"], [])
+
+    def test_joining_community_is_persistent_and_idempotent(self):
+        payload = {"sport": "badminton", "area": "Whitefield"}
+        first = self.client.post("/v1/me/communities/join", json=payload, headers={"X-CourtMate-Player-ID": "p1"})
+        second = self.client.post("/v1/me/communities/join", json=payload, headers={"X-CourtMate-Player-ID": "p1"})
+        listed = self.client.get("/v1/me/communities", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json(), second.json())
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(len(listed.json()["memberships"]), 1)
+        self.assertEqual(listed.json()["memberships"][0]["community_id"], "community:badminton:whitefield")
 
     def test_chat_followup_keeps_previous_game_context(self):
         original = "Find a pickleball game near Whitefield this Sunday morning"
