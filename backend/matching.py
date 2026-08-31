@@ -41,6 +41,14 @@ def _skill_fit(rating: float | None, minimum: float, maximum: float) -> float:
     return max(0.0, 1.0 - distance / 1.5)
 
 
+def _in_band_skill_fit(rating: float, minimum: float, maximum: float) -> float:
+    """Prefer players near a group's CMR midpoint while keeping the band as a hard gate."""
+    midpoint = (minimum + maximum) / 2
+    half_width = max((maximum - minimum) / 2, 0.25)
+    midpoint_distance = min(abs(rating - midpoint) / half_width, 1.0)
+    return round(1.0 - midpoint_distance * 0.25, 3)
+
+
 def _time_fit(start, end, query: SearchIntent) -> float:
     if query.start_time is None:
         return 0.7
@@ -114,6 +122,8 @@ def search_sessions(sessions: list[Session], query: SearchIntent, players: list[
         player_rating = rating_for_sport(player, query.sport) if player and query.skill_min is None and query.skill_max is None else None
         if player and player_rating is not None and not session.skill_min <= player_rating <= session.skill_max:
             continue
+        if player_rating is not None:
+            skill_fit = _in_band_skill_fit(player_rating, session.skill_min, session.skill_max)
         style_fit = 1.0 if query.style == session.style else 0.45
         if query.style == "any" and player:
             style_fit = 1.0 if player.style == session.style else 0.55

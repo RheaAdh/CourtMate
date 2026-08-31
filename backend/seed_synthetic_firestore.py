@@ -566,9 +566,12 @@ def seed(replace_social: bool = False, social_only: bool = False, reset_syntheti
         make_session("demo-padel-sunday", "Varthur Padel Pairs", "demo-vikram", "padel", "Varthur", today + timedelta(days=4), time(9), time(11), 3.0, 4.5, "competitive", ["demo-vikram", "demo-meera"]),
         make_session("demo-pb-completed", "Past Sunday Rally", rhea_id, "pickleball", "Whitefield", today - timedelta(days=7), time(8), time(10), 3.0, 4.1, "casual", [rhea_id, "demo-kavya", "demo-rohit", "demo-sana"], status="completed"),
         make_session("demo-tennis-completed", "Whitefield Doubles Recap", "demo-neil", "tennis", "Whitefield", today - timedelta(days=5), time(19), time(21), 3.0, 4.6, "casual", ["demo-neil", rhea_id, "demo-vikram", "demo-meera"], status="completed"),
+        make_session("demo-tennis-completed-2", "Whitefield Tennis Social", rhea_id, "tennis", "Whitefield", today - timedelta(days=12), time(7), time(9), 3.0, 4.5, "social", [rhea_id, "demo-neil", "demo-arjun", "demo-tara"], status="completed"),
+        make_session("demo-tennis-completed-3", "Whitefield Tennis Rally", "demo-meera", "tennis", "Whitefield", today - timedelta(days=19), time(18), time(20), 3.2, 4.8, "competitive", ["demo-meera", rhea_id, "demo-vikram", "demo-arjun"], status="completed"),
         make_session("demo-badminton-completed", "Brookefield Shuttle Recap", "demo-rohit", "badminton", "Brookefield", today - timedelta(days=3), time(20), time(22), 2.8, 4.2, "social", ["demo-rohit", "demo-sana", "demo-isha", "demo-dev"], status="completed"),
         make_session("demo-padel-completed", "Varthur Padel Recap", "demo-vikram", "padel", "Varthur", today - timedelta(days=1), time(9), time(11), 3.0, 4.5, "competitive", ["demo-vikram", "demo-meera", "demo-isha", "demo-kabir"], status="completed"),
         make_session("demo-badminton-awaiting-feedback", "Whitefield Feedback Rally", rhea_id, "badminton", "Whitefield", today - timedelta(days=1), time(18), time(20), 2.8, 4.2, "social", [rhea_id, "demo-sana", "demo-isha", "demo-dev"], status="awaiting_feedback"),
+        make_session("demo-tennis-awaiting-feedback", "Whitefield Tennis Review", rhea_id, "tennis", "Whitefield", today - timedelta(days=2), time(19), time(21), 3.0, 4.6, "casual", [rhea_id, "demo-neil"], status="awaiting_feedback"),
     ]
     for session in sessions:
         repository.save_session(session)
@@ -633,6 +636,18 @@ def seed(replace_social: bool = False, social_only: bool = False, reset_syntheti
                 ],
                 created_at=now - timedelta(days=max((date.today() - session.session_date).days - 1, 0)),
             ))
+
+    # Leave one awaiting-feedback game one response away from completion so
+    # the demo account can verify the full feedback-to-CMR flow.
+    feedback.append(Feedback(
+        session_id="demo-tennis-awaiting-feedback",
+        player_id="demo-neil",
+        fun=5,
+        fairness=5,
+        would_return=True,
+        ratings=[PlayerRating(player_id=rhea_id, rating_10=8)],
+        created_at=now - timedelta(hours=3),
+    ))
     for item in feedback:
         repository.client.collection("feedback").document(f"demo-feedback-{item.session_id}-{item.player_id}").set(item.model_dump(mode="json"))
 

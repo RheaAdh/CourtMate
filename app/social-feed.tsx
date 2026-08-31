@@ -44,6 +44,14 @@ function socialFeedCacheKey(playerId: string, feed: FeedFilter) {
   return `courtmate:social-feed:${playerId}:${feed}`;
 }
 
+function newestFirst(posts: SocialPost[]) {
+  return [...posts].sort((left, right) => {
+    const rightTime = Date.parse(right.created_at);
+    const leftTime = Date.parse(left.created_at);
+    return (Number.isNaN(rightTime) ? 0 : rightTime) - (Number.isNaN(leftTime) ? 0 : leftTime);
+  });
+}
+
 function socialRecommendationsCacheKey(playerId: string) {
   return `courtmate:social-recommendations:${playerId}`;
 }
@@ -378,7 +386,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
         const raw = window.sessionStorage.getItem(key);
         const cached = raw ? JSON.parse(raw) as { cachedAt?: number; posts?: SocialPost[] } : null;
         if (cached?.cachedAt && Date.now() - cached.cachedAt < SOCIAL_FEED_CACHE_TTL_MS && Array.isArray(cached.posts)) {
-          setPosts(cached.posts);
+          setPosts(newestFirst(cached.posts));
           setLoadError("");
           setLoading(false);
           return;
@@ -404,9 +412,10 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
         socialFeedRequests.set(key, request);
       }
       const nextPosts = await request;
-      setPosts(nextPosts);
+      const orderedPosts = newestFirst(nextPosts);
+      setPosts(orderedPosts);
       try {
-        window.sessionStorage.setItem(key, JSON.stringify({ cachedAt: Date.now(), posts: nextPosts }));
+        window.sessionStorage.setItem(key, JSON.stringify({ cachedAt: Date.now(), posts: orderedPosts }));
       } catch {
         // A disabled or full session storage should never block the feed.
       }
@@ -661,8 +670,8 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
   return <section className="social-page" aria-label="Rally Circles">
     <div className="social-page-heading">
       <div className="rally-circles-intro"><h1>Rally Circles</h1><p>Your people, your sport, your next game. Completed games become shared CMR stories, so every rally leaves your circle stronger.</p></div>
-      <div className="social-feed-tabs" role="tablist" aria-label="Rally feed"><button className={feedFilter === "all" ? "active" : ""} type="button" onClick={() => changeFilter("all")} role="tab" aria-selected={feedFilter === "all"}>Discover</button><button className={feedFilter === "following" ? "active" : ""} type="button" onClick={() => changeFilter("following")} role="tab" aria-selected={feedFilter === "following"}>Following</button><button className={feedFilter === "personal" ? "active" : ""} type="button" onClick={() => changeFilter("personal")} role="tab" aria-selected={feedFilter === "personal"}>My rallies</button></div>
     </div>
+    <div className="social-feed-tabs" role="tablist" aria-label="Rally feed"><button className={feedFilter === "all" ? "active" : ""} type="button" onClick={() => changeFilter("all")} role="tab" aria-selected={feedFilter === "all"}>Discover</button><button className={feedFilter === "following" ? "active" : ""} type="button" onClick={() => changeFilter("following")} role="tab" aria-selected={feedFilter === "following"}>Following</button><button className={feedFilter === "personal" ? "active" : ""} type="button" onClick={() => changeFilter("personal")} role="tab" aria-selected={feedFilter === "personal"}>My rallies</button></div>
 
     {feedFilter === "all" && !recommendationsLoading && recommendedPlayers.length > 0 && <section className="social-recommendations" aria-labelledby="social-recommendations-title">
       <div className="social-recommendations-heading"><div><h2 id="social-recommendations-title">People worth playing with</h2></div><span>Nearby and active</span></div>

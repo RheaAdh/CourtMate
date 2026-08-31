@@ -7,6 +7,7 @@ import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 
 import { auth, isFirebaseConfigured, storage } from "../firebase";
 import { GroupSpace } from "./group-space";
+import { CommunityHub } from "./community-hub";
 import { PostGameFeedbackPanel } from "./post-game-feedback";
 import { SocialFeed } from "./social-feed";
 import { TennisBallLoader } from "./tennis-ball-loader";
@@ -132,6 +133,7 @@ type Session = {
   skill_min: number;
   skill_max: number;
   style: string;
+  game_format: "singles" | "doubles";
   capacity: number;
   confirmed_player_ids: string[];
   waitlist_player_ids?: string[];
@@ -156,6 +158,8 @@ type GroupProposal = {
   skill_min: number;
   skill_max: number;
   style: string;
+  game_format: "singles" | "doubles";
+  capacity: number;
   explanation: string;
 };
 
@@ -168,6 +172,8 @@ type CreateGroupDraft = {
   skill_min: string;
   skill_max: string;
   style: "casual" | "social" | "competitive";
+  game_format: "singles" | "doubles";
+  capacity: number;
 };
 
 type SearchResponse = {
@@ -369,7 +375,7 @@ type CMRHistoryPoint = {
   delta?: number | null;
 };
 
-type AppTab = "home" | "social" | "games" | "profile" | "tournaments";
+type AppTab = "home" | "social" | "games" | "profile" | "tournaments" | "communities";
 type GamesViewTab = "explore" | "pending" | "upcoming" | "awaiting_feedback" | "history" | "requested" | "confirmed" | "past" | "incoming";
 type ConnectionsTab = "following" | "followers";
 
@@ -621,7 +627,7 @@ export default function Home() {
   const [loadingMessage, setLoadingMessage] = useState("Finding your best match...");
   const [groupProposal, setGroupProposal] = useState<GroupProposal | null>(null);
   const [groupNameDraft, setGroupNameDraft] = useState("");
-  const [createGroupDraft, setCreateGroupDraft] = useState<CreateGroupDraft>({ sport: "pickleball", area: "", session_date: localDateInput(), start_time: "19:00", end_time: "21:00", skill_min: "3.0", skill_max: "3.5", style: "casual" });
+  const [createGroupDraft, setCreateGroupDraft] = useState<CreateGroupDraft>({ sport: "pickleball", area: "", session_date: localDateInput(), start_time: "19:00", end_time: "21:00", skill_min: "3.0", skill_max: "3.5", style: "casual", game_format: "doubles", capacity: 6 });
   const [createQuery, setCreateQuery] = useState("");
   const [showCreateGame, setShowCreateGame] = useState(false);
   const [showCraftedGame, setShowCraftedGame] = useState(false);
@@ -650,6 +656,11 @@ export default function Home() {
   const [exploreSportFilter, setExploreSportFilter] = useState<Sport | "all">("all");
   const [exploreDateFilter, setExploreDateFilter] = useState<"all" | "today" | "week">("all");
   const [exploreAvailabilityFilter, setExploreAvailabilityFilter] = useState<"all" | "open">("all");
+  const [exploreSearchDraft, setExploreSearchDraft] = useState("");
+  const [exploreSearch, setExploreSearch] = useState("");
+  const [exploreSportApplied, setExploreSportApplied] = useState<Sport | "all">("all");
+  const [exploreDateApplied, setExploreDateApplied] = useState<"all" | "today" | "week">("all");
+  const [exploreAvailabilityApplied, setExploreAvailabilityApplied] = useState<"all" | "open">("all");
   const [exploreLoading, setExploreLoading] = useState(false);
   const [activityLoading, setActivityLoading] = useState(false);
   const [leavingGameId, setLeavingGameId] = useState<string | null>(null);
@@ -726,6 +737,15 @@ export default function Home() {
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [settingsOpen, notificationsOpen, connectionsOpen]);
+
+  useEffect(() => {
+    if (!showCreateGame) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setShowCreateGame(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [showCreateGame]);
 
   useEffect(() => {
     const syncUtilityPage = () => {
@@ -838,31 +858,18 @@ export default function Home() {
     }
     try {
       setProfilePictureUploading(true);
-      const uploadTargetResponse = await authorizedFetch(`${apiUrl}/v1/me/profile-image/upload-url`, {
+      const response = await authorizedFetch(`${apiUrl}/v1/me/profile-image/upload`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content_type: file.type }),
-      });
-      if (!uploadTargetResponse.ok) {
-        const payload = await uploadTargetResponse.json().catch(() => ({})) as { detail?: string };
-        throw new Error(payload.detail ?? "Could not prepare profile photo upload");
-      }
-      const uploadTarget = await uploadTargetResponse.json() as { upload_url: string; image_url: string };
-      const uploadResponse = await fetch(uploadTarget.upload_url, { method: "PUT", headers: { "content-type": file.type }, body: file });
-      if (!uploadResponse.ok) throw new Error("Profile photo upload failed");
-      const imageUrl = uploadTarget.image_url;
-      const response = await authorizedFetch(`${apiUrl}/v1/me/profile-image`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ profile_image_url: imageUrl }),
+        headers: { "content-type": file.type },
+        body: file,
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({})) as { detail?: string };
-        throw new Error(payload.detail ?? "Profile photo could not be saved");
+        throw new Error(payload.detail ?? "Could not prepare profile photo upload");
       }
       const savedProfile = await response.json() as PlayerProfile;
       setProfile(savedProfile);
-      setSocialProfile((current) => current ? { ...current, profile_image_url: savedProfile.profile_image_url ?? imageUrl } : current);
+      setSocialProfile((current) => current ? { ...current, profile_image_url: savedProfile.profile_image_url ?? null } : current);
       setToast("Profile photo updated");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not upload profile photo");
@@ -1390,6 +1397,8 @@ export default function Home() {
           skill_min: payload.group_proposal.skill_min.toString(),
           skill_max: payload.group_proposal.skill_max.toString(),
           style: payload.group_proposal.style as CreateGroupDraft["style"],
+          game_format: payload.group_proposal.game_format ?? "doubles",
+          capacity: payload.group_proposal.capacity ?? 6,
         });
       }
       if (exact && requestQuery.trim()) {
@@ -1438,6 +1447,8 @@ export default function Home() {
       skill_min: skillBandFromCmr(cmrMin),
       skill_max: skillBandFromCmr(cmrMax),
       style: profile?.style ?? "casual",
+      game_format: "doubles",
+      capacity: 6,
       explanation: "Set the details for your game. CourtMate will keep the group organized and help you find compatible players.",
     };
     setSelectedSport(requestSport);
@@ -1450,7 +1461,7 @@ export default function Home() {
     const firstStep = explicitSport ? "time" : "sport";
     setCreationStep(firstStep);
     setCreateQuery(sourceQuery || `Create a ${sportLabel(requestSport)} game near ${area}`);
-    setCreateGroupDraft({ sport: nextProposal.sport, area: nextProposal.area, session_date: nextProposal.session_date ?? localDateInput(), start_time: nextProposal.start_time ?? "19:00", end_time: nextProposal.end_time ?? "21:00", skill_min: nextProposal.skill_min.toString(), skill_max: nextProposal.skill_max.toString(), style: nextProposal.style as CreateGroupDraft["style"] });
+    setCreateGroupDraft({ sport: nextProposal.sport, area: nextProposal.area, session_date: nextProposal.session_date ?? localDateInput(), start_time: nextProposal.start_time ?? "19:00", end_time: nextProposal.end_time ?? "21:00", skill_min: nextProposal.skill_min.toString(), skill_max: nextProposal.skill_max.toString(), style: nextProposal.style as CreateGroupDraft["style"], game_format: nextProposal.game_format, capacity: nextProposal.capacity });
     setChatMessages((messages) => [...messages.slice(-8), { id: `${Date.now()}-creation-assistant`, role: "assistant", text: `I can create a ${sportLabel(requestSport)} game. ${creationQuestion(firstStep)}` }]);
   }
 
@@ -1470,7 +1481,7 @@ export default function Home() {
     const cmrMax = clampCmr(playerCmr + 20);
     const style: CreateGroupDraft["style"] = profile?.style === "social" || profile?.style === "competitive" ? profile.style : "casual";
     setGroupNameDraft(`${area || "Local"} ${sportLabel(sport)} Game`);
-    setCreateGroupDraft({ sport, area, session_date: localDateInput(), start_time: "19:00", end_time: "21:00", skill_min: skillBandFromCmr(cmrMin).toString(), skill_max: skillBandFromCmr(cmrMax).toString(), style });
+    setCreateGroupDraft({ sport, area, session_date: localDateInput(), start_time: "19:00", end_time: "21:00", skill_min: skillBandFromCmr(cmrMin).toString(), skill_max: skillBandFromCmr(cmrMax).toString(), style, game_format: "doubles", capacity: 6 });
     setShowCreateGame(true);
   }
 
@@ -1942,6 +1953,12 @@ export default function Home() {
     setGroupProposal((proposal) => proposal ? { ...proposal, sport, group_name: proposal.group_name.replace(/(Pickleball|Badminton|Tennis|Padel|Squash|Table tennis) Game$/i, `${sportLabel(sport)} Game`), skill_min: skillMin, skill_max: skillMax } : proposal);
   }
 
+  function changeGameFormat(gameFormat: CreateGroupDraft["game_format"]) {
+    const capacity = gameFormat === "singles" ? 2 : createGroupDraft.capacity < 4 ? 6 : createGroupDraft.capacity;
+    setCreateGroupDraft((draft) => ({ ...draft, game_format: gameFormat, capacity }));
+    setGroupProposal((proposal) => proposal ? { ...proposal, game_format: gameFormat, capacity } : proposal);
+  }
+
   async function createGroup() {
     if (!user) {
       setToast("Sign in with Google before creating a group");
@@ -1971,6 +1988,8 @@ export default function Home() {
           skill_min: Number(createGroupDraft.skill_min),
           skill_max: Number(createGroupDraft.skill_max),
           style: createGroupDraft.style,
+          game_format: createGroupDraft.game_format,
+          capacity: createGroupDraft.capacity,
           visibility: profile?.default_session_visibility ?? "public",
         }),
       });
@@ -2485,9 +2504,27 @@ export default function Home() {
   }
 
   function getGroupSpaceUrl(game: Pick<ShareableGame, "id">) {
-    const shareUrl = new URL(window.location.origin);
+    const shareUrl = new URL("/", window.location.origin);
     shareUrl.searchParams.set("group-space", game.id);
     return shareUrl.toString();
+  }
+
+  async function copyText(text: string) {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    const fallback = document.createElement("textarea");
+    fallback.value = text;
+    fallback.setAttribute("readonly", "");
+    fallback.style.position = "fixed";
+    fallback.style.opacity = "0";
+    document.body.appendChild(fallback);
+    fallback.select();
+    fallback.setSelectionRange(0, fallback.value.length);
+    const copied = document.execCommand("copy");
+    fallback.remove();
+    if (!copied) throw new Error("Clipboard unavailable");
   }
 
   function invalidateSocialFeedCache() {
@@ -2503,7 +2540,7 @@ export default function Home() {
 
   async function copyGroupSpaceLink(game: Pick<ShareableGame, "id">) {
     try {
-      await navigator.clipboard.writeText(getGroupSpaceUrl(game));
+      await copyText(getGroupSpaceUrl(game));
       setToast("Group Space link copied");
     } catch {
       setToast("Could not copy the Group Space link");
@@ -2518,16 +2555,16 @@ export default function Home() {
     const message = `Join me for ${game.group_name}\n${sportLabel(game.sport)} · ${dateLabel} · ${game.start_time}–${game.end_time}\n${location}\n\nOpen the CourtMate Group Space: ${groupSpaceUrl}`;
     try {
       if (navigator.share) {
-        await navigator.share({ title: game.group_name, text: message });
+        await navigator.share({ title: game.group_name, text: message, url: groupSpaceUrl });
         setToast("Game details shared");
       } else {
-        await navigator.clipboard.writeText(message);
+        await copyText(message);
         setToast("Game details copied");
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       try {
-        await navigator.clipboard.writeText(message);
+        await copyText(message);
         setToast("Game details copied");
       } catch {
         setToast("Could not share game details");
@@ -2665,10 +2702,12 @@ export default function Home() {
   const exploreWeekEnd = new Date(`${today}T00:00:00`);
   exploreWeekEnd.setDate(exploreWeekEnd.getDate() + 7);
   const filteredExploreGames = exploreGames.filter((game) => {
-    if (exploreSportFilter !== "all" && game.sport !== exploreSportFilter) return false;
-    if (exploreAvailabilityFilter === "open" && game.open_slots < 1) return false;
-    if (exploreDateFilter === "today" && game.session_date !== today) return false;
-    if (exploreDateFilter === "week" && (game.session_date < today || game.session_date > exploreWeekEnd.toISOString().slice(0, 10))) return false;
+    const search = exploreSearch.trim().toLowerCase();
+    if (search && !`${game.group_name} ${game.area} ${sportLabel(game.sport)}`.toLowerCase().includes(search)) return false;
+    if (exploreSportApplied !== "all" && game.sport !== exploreSportApplied) return false;
+    if (exploreAvailabilityApplied === "open" && game.open_slots < 1) return false;
+    if (exploreDateApplied === "today" && game.session_date !== today) return false;
+    if (exploreDateApplied === "week" && (game.session_date < today || game.session_date > exploreWeekEnd.toISOString().slice(0, 10))) return false;
     return true;
   });
   const activeSports = sportOptions.filter((sport) => profile?.cmr_ratings?.[sport.value] != null || (profile?.cmr_game_counts?.[sport.value] ?? 0) > 0);
@@ -2700,13 +2739,13 @@ export default function Home() {
         <div className="brand" aria-label="CourtMate"><img className="brand-icon brand-logo-light" src="/courtmate-header-logo-light.png" alt="CourtMate" /><img className="brand-icon brand-logo-dark" src="/courtmate-header-logo-dark.png" alt="" aria-hidden="true" /></div>
         <div className="nav-right"><button className="about-link" onClick={() => { if (!user) document.querySelector(".guest-story")?.scrollIntoView({ behavior: "smooth" }); else selectTab("home"); }}>How it works</button><span className="location-pill"><span className="dot" /> Whitefield, Bengaluru</span><button className="theme-toggle" type="button" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}><ThemeIcon dark={theme === "dark"} /></button>{user ? <><button className={`settings-button ${settingsOpen ? "active" : ""}`} type="button" onClick={openSettings} aria-label="Open preferences" title="Preferences"><SettingsIcon /></button><div className="notification-wrap">
           <button className={`notification-button ${notificationsOpen ? "active" : ""}`} type="button" onClick={openNotifications} aria-label={`Notifications${unreadNotifications ? `, ${unreadNotifications} unread` : ""}`} title="Notifications"><BellIcon />{unreadNotifications > 0 && <span className="notification-count">{unreadNotifications > 9 ? "9+" : unreadNotifications}</span>}</button>
-        </div><span className="user-name">{user.displayName ?? user.email}</span><button className="avatar" onClick={() => selectTab("profile")} title="Open profile">{profile?.profile_image_url ? <img src={profile.profile_image_url} alt="" /> : initials(user.displayName ?? user.email ?? "CourtMate")}</button><button className="nav-sign-out" type="button" onClick={() => void signOutUser()}>Sign out</button></> : <button className="sign-in-button" onClick={() => void signIn()}>{authReady ? "Sign in with Google" : "Loading auth"}</button>}</div>
+        </div><span className="user-name">{user.displayName ?? user.email}</span><button className="avatar" onClick={() => selectTab("profile")} title="Open profile">{profile?.profile_image_url ? <img src={profile.profile_image_url} alt="" /> : initials(user.displayName ?? user.email ?? "CourtMate")}</button></> : <button className="sign-in-button" onClick={() => void signIn()}>{authReady ? "Sign in with Google" : "Loading auth"}</button>}</div>
       </nav>
       {user && <span className="nav-streak" title={`${socialProfile?.weekly_streak ?? 0} week streak`} aria-label={`${socialProfile?.weekly_streak ?? 0} week streak`}><StreakFireIcon /><b>{socialProfile?.weekly_streak ?? 0}</b></span>}
       {user && <nav className="app-tabs" aria-label="CourtMate sections">
         <button className={activeTab === "social" ? "active" : ""} onClick={() => { setSocialFeedEntry("all"); selectTab("social"); }} title="Home"><span className="app-tab-icon"><HomeIcon /></span><span>Home</span></button>
         <button className={activeTab === "games" ? "active" : ""} onClick={() => selectTab("games")} title="Your games"><span className="app-tab-icon"><PickleballPaddleIcon /></span><span>Games</span></button>
-        <button className={activeTab === "tournaments" ? "active" : ""} onClick={() => selectTab("tournaments")} title="Tournaments"><span className="app-tab-icon"><TournamentIcon /></span><span>Tournaments</span></button>
+        <button className={activeTab === "communities" ? "active" : ""} onClick={() => { selectTab("communities"); void loadExploreGames(); }} title="Communities"><span className="app-tab-icon" aria-hidden="true">👥</span><span>Communities</span></button>
         <button className={activeTab === "home" ? "active" : ""} onClick={() => selectTab("home")} title="Assistant"><span className="app-tab-icon"><ChatIcon /></span><span>Assistant</span></button>
       </nav>}
       {activeTab === "home" && !user && <section className="guest-home" aria-label="CourtMate introduction">
@@ -2738,9 +2777,9 @@ export default function Home() {
 
       {activeTab === "games" && <section className="page-view games-page">
         <button type="button" className="section-fab games-fab" onClick={toggleGamesForm} aria-label={showCreateGame ? "Close game form" : "Create a game"} title={showCreateGame ? "Close" : "Create a game"}>{showCreateGame ? "×" : "+"}</button>
-        {showCreateGame && <form className="game-create-form" onSubmit={(event) => { event.preventDefault(); void createGroup(); }}><div className="game-create-heading"><div><span className="kicker">NEW GAME</span><h2>Create a game</h2></div><span>Fill in the details</span></div><div className="game-create-grid"><label className="game-create-wide"><span>Game name</span><input value={groupNameDraft} onChange={(event) => setGroupNameDraft(event.target.value)} placeholder="Whitefield Saturday Rally" required /></label><label><span>Sport</span><select value={createGroupDraft.sport} onChange={(event) => changeCreateSport(event.target.value as Sport)}>{sportOptions.map((sport) => <option value={sport.value} key={sport.value}>{sport.label}</option>)}</select></label><label><span>Area</span><input value={createGroupDraft.area} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, area: event.target.value })} placeholder="Any neighbourhood" required /></label><label><span>Date</span><input type="date" min={localDateInput()} value={createGroupDraft.session_date} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, session_date: event.target.value })} required /></label><label><span>Starts</span><input type="time" value={createGroupDraft.start_time} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, start_time: event.target.value })} required /></label><label><span>Ends</span><input type="time" value={createGroupDraft.end_time} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, end_time: event.target.value })} required /></label><div className="cmr-range-field game-create-wide"><div className="cmr-range-heading"><div><span>Preferred player CMR</span><strong>{createCmrMin}–{createCmrMax}</strong></div><button type="button" onClick={() => setCreateGroupCmrRange(createPlayerCmr - 20, createPlayerCmr + 20)}>Use my CMR</button></div><p>Set to your CMR of {createPlayerCmr} plus or minus 20 by default. CourtMate will match players inside this band.</p><div className="cmr-range-sliders"><div><span>From <b>{createCmrMin}</b></span><input type="range" min="0" max="100" step="1" value={createCmrMin} onChange={(event) => setCreateGroupCmrRange(Number(event.target.value), createCmrMax)} aria-label="Minimum player CMR" /></div><div><span>To <b>{createCmrMax}</b></span><input type="range" min="0" max="100" step="1" value={createCmrMax} onChange={(event) => setCreateGroupCmrRange(createCmrMin, Number(event.target.value))} aria-label="Maximum player CMR" /></div></div></div><label><span>Game mood</span><select value={createGroupDraft.style} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, style: event.target.value as CreateGroupDraft["style"] })}><option value="casual">Casual</option><option value="social">Social</option><option value="competitive">Competitive</option></select></label></div><div className="game-create-actions"><button className="dark-button" type="submit" disabled={createGroupLoading}>{createGroupLoading ? "Creating..." : "Create game"}<span>→</span></button><button className="text-button" type="button" onClick={() => setShowCreateGame(false)}>Cancel</button></div></form>}
+        {showCreateGame && <div className="game-create-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowCreateGame(false); }}><form className="game-create-form" onSubmit={(event) => { event.preventDefault(); void createGroup(); }}><div className="game-create-heading"><div><span className="kicker">NEW GAME</span><h2>Create a game</h2></div><span>Fill in the details</span><button className="game-create-close" type="button" onClick={() => setShowCreateGame(false)} aria-label="Close create game form">×</button></div><div className="game-create-grid"><label className="game-create-wide"><span>Game name</span><input value={groupNameDraft} onChange={(event) => setGroupNameDraft(event.target.value)} placeholder="Whitefield Saturday Rally" required /></label><label><span>Sport</span><select value={createGroupDraft.sport} onChange={(event) => changeCreateSport(event.target.value as Sport)}>{sportOptions.map((sport) => <option value={sport.value} key={sport.value}>{sport.label}</option>)}</select></label><label><span>Area</span><input value={createGroupDraft.area} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, area: event.target.value })} placeholder="Any neighbourhood" required /></label><label><span>Date</span><input type="date" min={localDateInput()} value={createGroupDraft.session_date} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, session_date: event.target.value })} required /></label><label><span>Starts</span><input type="time" value={createGroupDraft.start_time} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, start_time: event.target.value })} required /></label><label><span>Ends</span><input type="time" value={createGroupDraft.end_time} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, end_time: event.target.value })} required /></label><div className="cmr-range-field game-create-wide"><div className="cmr-range-heading"><div><span>Preferred player CMR</span><strong>{createCmrMin}–{createCmrMax}</strong></div><button type="button" onClick={() => setCreateGroupCmrRange(createPlayerCmr - 20, createPlayerCmr + 20)}>Use my CMR</button></div><p>Set to your CMR of {createPlayerCmr} plus or minus 20 by default. CourtMate will match players inside this band.</p><div className="cmr-range-sliders"><div><span>From <b>{createCmrMin}</b></span><input type="range" min="0" max={createCmrMax} step="1" value={createCmrMin} onChange={(event) => setCreateGroupCmrRange(Number(event.target.value), createCmrMax)} aria-label="Minimum player CMR" /></div><div><span>To <b>{createCmrMax}</b></span><input type="range" min={createCmrMin} max="100" step="1" value={createCmrMax} onChange={(event) => setCreateGroupCmrRange(createCmrMin, Number(event.target.value))} aria-label="Maximum player CMR" /></div></div></div><label><span>Match type</span><select value={createGroupDraft.game_format} onChange={(event) => changeGameFormat(event.target.value as CreateGroupDraft["game_format"])}><option value="singles">Singles · 2 players</option><option value="doubles">Doubles</option></select></label><label><span>Total player slots</span><select value={createGroupDraft.capacity} onChange={(event) => setCreateGroupDraft((draft) => ({ ...draft, capacity: Number(event.target.value) }))} disabled={createGroupDraft.game_format === "singles"}>{(createGroupDraft.game_format === "singles" ? [2] : [4, 6, 8]).map((capacity) => <option value={capacity} key={capacity}>{capacity} players</option>)}</select><small className="game-create-hint">{createGroupDraft.game_format === "singles" ? "One opponent plus you." : "Includes you. Six players is the usual doubles rally."}</small></label><label><span>Game mood</span><select value={createGroupDraft.style} onChange={(event) => setCreateGroupDraft({ ...createGroupDraft, style: event.target.value as CreateGroupDraft["style"] })}><option value="casual">Casual</option><option value="social">Social</option><option value="competitive">Competitive</option></select></label></div><div className="game-create-actions"><button className="dark-button" type="submit" disabled={createGroupLoading}>{createGroupLoading ? "Creating..." : "Create game"}<span>→</span></button><button className="text-button" type="button" onClick={() => setShowCreateGame(false)}>Cancel</button></div></form></div>}
         <div className="tournament-tabs" role="tablist" aria-label="Game views"><button className={gamesViewTab === "explore" ? "active" : ""} onClick={() => { setGamesViewTab("explore"); void loadExploreGames(); }}>Explore <span>{exploreGames.length}</span></button><button className={gamesViewTab === "upcoming" ? "active" : ""} onClick={() => setGamesViewTab("upcoming")}>My games <span>{upcomingGames.length}</span></button><button className={gamesViewTab === "pending" ? "active" : ""} onClick={() => setGamesViewTab("pending")} aria-label="Pending Requests">Pending <span>{requestedGames.length}</span></button><button className={gamesViewTab === "awaiting_feedback" ? "active" : ""} onClick={() => setGamesViewTab("awaiting_feedback")} aria-label="Awaiting feedback">Feedback <span>{awaitingFeedbackGames.length}</span></button></div>
-        {gamesViewTab === "explore" && <div className="explore-filters" aria-label="Filter nearby games"><label><span>Sport</span><select value={exploreSportFilter} onChange={(event) => setExploreSportFilter(event.target.value as Sport | "all")}><option value="all">All sports</option>{sportOptions.map((sport) => <option value={sport.value} key={sport.value}>{sport.label}</option>)}</select></label><label><span>When</span><select value={exploreDateFilter} onChange={(event) => setExploreDateFilter(event.target.value as "all" | "today" | "week")}><option value="all">Any date</option><option value="today">Today</option><option value="week">Next 7 days</option></select></label><label><span>Availability</span><select value={exploreAvailabilityFilter} onChange={(event) => setExploreAvailabilityFilter(event.target.value as "all" | "open")}><option value="all">Any group</option><option value="open">Spots open</option></select></label><button type="button" className="explore-filter-reset" onClick={() => { setExploreSportFilter("all"); setExploreDateFilter("all"); setExploreAvailabilityFilter("all"); }} disabled={exploreSportFilter === "all" && exploreDateFilter === "all" && exploreAvailabilityFilter === "all"}>Reset</button></div>}
+        {gamesViewTab === "explore" && <div className="explore-filters" aria-label="Filter nearby games"><label className="explore-filter-search"><span>Search games</span><input value={exploreSearchDraft} onChange={(event) => setExploreSearchDraft(event.target.value)} placeholder="Name, sport, or area" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); setExploreSearch(exploreSearchDraft); setExploreSportApplied(exploreSportFilter); setExploreDateApplied(exploreDateFilter); setExploreAvailabilityApplied(exploreAvailabilityFilter); } }} /></label><label><span>Sport</span><select value={exploreSportFilter} onChange={(event) => setExploreSportFilter(event.target.value as Sport | "all")}><option value="all">All sports</option>{sportOptions.map((sport) => <option value={sport.value} key={sport.value}>{sport.label}</option>)}</select></label><label><span>When</span><select value={exploreDateFilter} onChange={(event) => setExploreDateFilter(event.target.value as "all" | "today" | "week")}><option value="all">Any date</option><option value="today">Today</option><option value="week">Next 7 days</option></select></label><label><span>Availability</span><select value={exploreAvailabilityFilter} onChange={(event) => setExploreAvailabilityFilter(event.target.value as "all" | "open")}><option value="all">Any group</option><option value="open">Spots open</option></select></label><button type="button" className="explore-filter-search-button" onClick={() => { setExploreSearch(exploreSearchDraft); setExploreSportApplied(exploreSportFilter); setExploreDateApplied(exploreDateFilter); setExploreAvailabilityApplied(exploreAvailabilityFilter); }}>Search</button><button type="button" className="explore-filter-reset" onClick={() => { setExploreSearchDraft(""); setExploreSearch(""); setExploreSportFilter("all"); setExploreDateFilter("all"); setExploreAvailabilityFilter("all"); setExploreSportApplied("all"); setExploreDateApplied("all"); setExploreAvailabilityApplied("all"); }} disabled={!exploreSearch && exploreSportApplied === "all" && exploreDateApplied === "all" && exploreAvailabilityApplied === "all"}>Reset</button></div>}
         {gamesViewTab === "explore" && <div className="game-list">{exploreLoading ? <TennisBallLoader label="Finding nearby games" /> : filteredExploreGames.length ? filteredExploreGames.map((game) => <article className="game-row" key={game.id}><div className="game-date"><strong>{new Date(game.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><span>{new Date(game.session_date).getDate()}</span></div><div className="game-copy"><h2>{game.group_name}</h2><p>{sportLabel(game.sport)} · {game.session_date} · {game.start_time}–{game.end_time} · {game.area}</p><small className="waitlist-summary">{Math.round(game.score * 100)}% match · {game.open_slots} spot{game.open_slots === 1 ? "" : "s"} open</small></div><div className="game-row-actions"><button className="manage-group-button" onClick={() => void viewGroup(game.id)} disabled={loadingGroupId === game.id}>{loadingGroupId === game.id ? "Loading..." : "View group"}</button><button className="copy-link-button" onClick={() => void copyGroupSpaceLink(game)} aria-label={`Copy ${game.group_name} link`} title="Copy share link"><CopyIcon /><span>Copy link</span></button><button className="game-share-button" onClick={() => void shareGame(game)} aria-label={`Share ${game.group_name}`}>Share <span>↗</span></button><button className="join-button" onClick={() => void joinSession(game.id, game.group_name, game.organizer_id)} disabled={joiningSessionId !== null}>{joiningSessionId === game.id ? "Requesting..." : "Request to join"}<span>→</span></button></div></article>) : <div className="page-empty"><strong>No games match these filters.</strong><p>Try widening the sport, date, or availability filters.</p><button className="dark-button" onClick={() => { setExploreSportFilter("all"); setExploreDateFilter("all"); setExploreAvailabilityFilter("all"); }}>Clear filters <span>→</span></button></div>}</div>}
         {!activityLoading && gamesViewTab === "upcoming" && <div className="game-list">{upcomingGames.length ? upcomingGames.map((game) => { const owned = myGroups.some((group) => group.id === game.id); const groupRequests = incomingRequests.filter(({ session }) => session.id === game.id); const waitlistCount = game.waitlist_player_ids?.length ?? 0; return <article className="game-row upcoming-game-row" key={game.id}><div className="game-date confirmed"><strong>{new Date(game.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><span>{new Date(game.session_date).getDate()}</span></div><div className="game-copy"><h2>{game.group_name}</h2><p>{sportLabel(game.sport)} · {game.session_date} · {game.start_time}–{game.end_time} · {game.area}</p><small className="waitlist-summary">{waitlistCount ? `${waitlistCount} player${waitlistCount === 1 ? "" : "s"} on waitlist` : "Waitlist empty"}</small></div><div className="game-row-actions"><button className="manage-group-button" onClick={() => void openGroupSpace(game)}>Group space</button><button className="copy-link-button" onClick={() => void copyGroupSpaceLink(game)} aria-label={`Copy ${game.group_name} link`} title="Copy share link"><CopyIcon /><span>Copy link</span></button><button className="game-share-button" onClick={() => void shareGame(game)} aria-label={`Share ${game.group_name}`}>Share <span>↗</span></button>{owned && <button className="manage-group-button" onClick={() => { if (managedGroupId === game.id) { setManagedGroupId(null); setJoinRequests([]); } else { setManagedGroupId(game.id); void loadJoinRequests(game.id); } }}>{managedGroupId === game.id ? "Hide requests" : `${groupRequests.length ? `${groupRequests.length} ` : ""}Review requests`}</button>}{!owned && <><button className="calendar-button" onClick={() => addToGoogleCalendar(game)}>Add to Google Calendar</button><button className="leave-game-button" onClick={() => void leaveGame(game.id, game.group_name)}>Back out</button></>}</div>{managedGroupId === game.id && <div className="inline-request-list">{requestsLoading ? <p className="request-empty">Loading requests...</p> : joinRequests.length ? joinRequests.map((request) => <div className="request-row" key={request.id}><div><strong>{request.player_display_name ?? request.player_id.slice(0, 10)}</strong><small className={`status-badge ${request.status}`}>{request.status}</small></div>{request.status === "pending" && <div className="request-actions"><button onClick={() => void decideJoinRequest(request.id, "approved", game.id)}>Approve</button><button onClick={() => void decideJoinRequest(request.id, "declined", game.id)}>Decline</button></div>}</div>) : <p className="request-empty">No requests waiting for approval.</p>}</div>}</article>; }) : <div className="page-empty"><strong>No upcoming games yet.</strong><p>Join a nearby game or create a game from Home.</p><button className="dark-button" onClick={() => selectTab("home")}>Find a game <span>→</span></button></div>}</div>}
         {!activityLoading && gamesViewTab === "pending" && <div className="game-list">{requestedGames.length ? requestedGames.map(({ request, session }) => <article className="game-row" key={request.id}><div className="game-date"><strong>{new Date(session.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><span>{new Date(session.session_date).getDate()}</span></div><div className="game-copy"><h2>{session.group_name}</h2><p>{sportLabel(session.sport)} · {session.start_time}–{session.end_time} · {session.area}</p><small className="waitlist-summary">{request.status === "waitlisted" ? "On waitlist" : "Waiting for organizer approval"}</small></div><div className="game-row-actions game-row-status-actions"><span className={`status-badge game-row-status ${request.status}`} role="status"><i aria-hidden="true" />{request.status === "waitlisted" ? "Waitlisted" : "Pending"}</span><button className="leave-game-button" onClick={() => void leaveGame(session.id, session.group_name, request.id)} disabled={leavingGameId === session.id}>{leavingGameId === session.id ? "Withdrawing..." : request.status === "waitlisted" ? "Leave waitlist" : "Withdraw request"}</button></div></article>) : <div className="page-empty"><strong>No pending requests.</strong><p>Games you request will stay here until the organizer approves them.</p><button className="dark-button" onClick={() => selectTab("home")}>Find a game <span>→</span></button></div>}</div>}
@@ -2754,6 +2793,7 @@ export default function Home() {
         {myGroups.length > 0 && <div className="organizer-page-card"><div><span className="kicker">ORGANIZER</span><h2>Your groups</h2><p>Manage requests, chat, and feedback for groups you created.</p></div>{myGroups.map((group) => <div className="organizer-page-row" key={group.id}><div><strong>{group.group_name}</strong><small>{sportLabel(group.sport)} · {group.session_date} · {group.confirmed_player_ids.length}/{group.capacity} players</small></div><div className="organizer-page-actions"><button className="manage-group-button" onClick={() => void openGroupSpace(group)}>Group space</button><button className="manage-group-button" onClick={() => { setManagedGroupId(group.id); void loadJoinRequests(group.id); }}>Requests</button></div></div>)}{managedGroupId && <div className="request-card page-request-card"><p>Requests for <strong>{myGroups.find((group) => group.id === managedGroupId)?.group_name ?? "your group"}</strong>. Approve a player before they join.</p>{requestsLoading ? <p className="request-empty">Loading requests...</p> : joinRequests.length ? <div className="request-list">{joinRequests.map((request) => <div className="request-row" key={request.id}><div><strong>{request.player_display_name ?? request.player_id.slice(0, 10)}</strong><small className={`status-badge ${request.status}`}>{request.status}</small></div>{request.status === "pending" && <div className="request-actions"><button onClick={() => void decideJoinRequest(request.id, "approved")}>Approve</button><button onClick={() => void decideJoinRequest(request.id, "declined")}>Decline</button></div>}</div>)}</div> : <p className="request-empty">No requests waiting for approval.</p>}</div>}</div>}
       </section>}
 
+      {activeTab === "communities" && user && <CommunityHub apiUrl={apiUrl} authorizedFetch={authorizedFetch} sessions={exploreGames} currentUserId={user.uid} currentCmr={profile?.cmr_ratings?.[selectedSport]} gamesLogged={profile?.cmr_game_counts?.[selectedSport] ?? 0} initialLatitude={profile?.latitude} initialLongitude={profile?.longitude} initialArea={profile?.area} loading={exploreLoading} onJoinGame={(game) => void joinSession(game.id, game.group_name, game.organizer_id)} onViewGroup={(game) => void viewGroup(game.id)} />}
       {activeTab === "tournaments" && <TournamentHub apiUrl={apiUrl} currentUserId={user?.uid} playerArea={profile?.area} authorizedFetch={authorizedFetch} onToast={setToast} onSignIn={() => void signIn()} />}
 
       {activeTab === "profile" && !viewedProfile && <section className="page-view profile-page">
@@ -2763,12 +2803,13 @@ export default function Home() {
             <div className="player-profile-copy"><span className="kicker">PLAYER CARD</span><h1>{profile.display_name}</h1><p><span className="player-profile-presence" />{profile.area || "Set your locality"} · {profile.style} player</p><small className="profile-bio-line">{profile.bio?.trim() || "Add a short bio to let your next group know your game."}</small><div className="profile-photo-actions"><button type="button" className="profile-edit-bio-button" onClick={() => setBioEditing((editing) => !editing)}>{bioEditing ? "Cancel" : "Edit bio"}</button><SportyAvatarStudio profileImageUrl={profile.profile_image_url} apiUrl={apiUrl} authorizedFetch={authorizedFetch} onUseAvatar={(file) => void uploadProfilePicture(file)} />{profile.profile_image_url && <button type="button" className="profile-remove-photo" onClick={() => void removeProfilePicture()} disabled={profilePictureUploading}>Use initials</button>}<button type="button" className="profile-calendar-inline-button" onClick={openProfileCalendar}><span className="profile-calendar-inline-icon">▦</span><span>Activity calendar</span></button></div>{bioEditing && <form className="profile-bio-inline-editor" onSubmit={saveBio}><textarea value={profileDraft.bio} maxLength={240} placeholder="A line about how you like to play..." onChange={(event) => setProfileDraft({ ...profileDraft, bio: event.target.value })} aria-label="Profile bio" autoFocus /><button className="dark-button" type="submit" disabled={bioSaving}>{bioSaving ? "Saving..." : "Save bio"}<span>→</span></button></form>}</div>
           </div>
           <div className="player-profile-score"><span>Current {sportLabel(profileSelectedSport)} CMR</span><strong>{currentCmr?.toFixed(1) ?? "--"}</strong><small>{currentCmr ? cmrLevelForRating(currentCmr) : "Complete a game to start"}</small></div>
+          <details className="cmr-glossary"><summary>How CMR is computed</summary><div className="cmr-glossary-copy"><p><strong>CMR means CourtMate Rating.</strong> It is a sport-specific score from 0 to 100 that becomes more reliable as you play and receive feedback.</p><dl><div><dt>Starting point</dt><dd>New players start from their saved or self-reported level, converted to the 0–100 scale.</dd></div><div><dt>After each game</dt><dd>Private ratings from the other players are combined into one game rating. Recent games count, but the score is smoothed so one game does not overreact.</dd></div><div><dt>Rank feedback</dt><dd>When players rank the lineup, movement is limited to 5 points per game to keep subjective feedback fair.</dd></div><div><dt>Match results</dt><dd>Confirmed team results can add an outcome and margin signal, adjusted for the expected strength of both teams.</dd></div><div><dt>Better matches</dt><dd>CMR is calculated separately for every sport and used to keep your recommendations inside a compatible skill band.</dd></div></dl><small>Your CMR updates after the feedback round is complete and is never based on one person&apos;s rating alone.</small></div></details>
           <div className="player-profile-metrics"><span><b>{totalGames}</b><small>Games</small></span>{socialProfile && <span className={`player-profile-streak ${socialProfile.weekly_streak_active ? "active" : "at-risk"}`} title={socialProfile.weekly_streak_active ? "You completed a game this week." : "Complete a game this week to start a streak."}><b>{socialProfile.weekly_streak}</b><small>{socialProfile.weekly_streak_active ? "Week streak active" : "Week streak - play this week"}</small></span>}<span><b>{Math.round(profile.reliability * 100)}%</b><small>Reliable</small></span>{socialProfile && <button type="button" onClick={() => openConnections("followers")}><b>{socialProfile.followers_count}</b><small>Followers</small></button>}{socialProfile && <button type="button" onClick={() => openConnections("following")}><b>{socialProfile.following_count}</b><small>Following</small></button>}</div>
         </section>}
         {user && profile && <ProfileSportOverview profile={profile} sports={activeSports} selectedSport={profileSelectedSport} onSelect={setProfileSport} />}
         {user && profile && <section className="profile-insights">{!ratedSports.length && <div className="cmr-no-ratings"><strong>No sport ratings yet.</strong><span>Complete a game and submit feedback to build your first CMR.</span></div>}{socialProfile && <div className="social-stats"><button type="button" onClick={() => openConnections("followers")}><strong>{socialProfile.followers_count}</strong><span>Followers</span></button><button type="button" onClick={() => openConnections("following")}><strong>{socialProfile.following_count}</strong><span>Following</span></button><span><strong>{Math.round(profile.reliability * 100)}%</strong><span>Reliability</span></span></div>}{socialProfile && <div className="profile-activity-grid"><section className="profile-activity-card"><div className="profile-activity-heading"><div><span className="kicker">ACTIVITY</span><h2>Show up streak</h2></div><span>Last 12 weeks</span></div><ActivityHeatmap activity={socialProfile.activity_by_date} /></section><section className="profile-activity-card"><div className="profile-activity-heading"><div><span className="kicker">RECENT GAMES</span><h2>{sportLabel(profileSelectedSport)} sessions</h2></div><span>{profileRecentGames.length} shown</span></div><RecentGames games={socialProfile.recent_games} sport={profileSelectedSport} /></section></div>}{ratedSports.length > 0 && <><p className="cmr-summary">Current {sportLabel(profileSelectedSport)} CMR: <strong>{currentCmr?.toFixed(1) ?? "not built"} / 100</strong><span>{currentCmr ? ` · ${cmrLevelForRating(currentCmr)}` : " · Search by level to get started"}</span></p>{profileHistory.length ? <><div className="cmr-chart-heading"><div><span className="kicker">CMR JOURNEY · {sportLabel(profileSelectedSport).toUpperCase()}</span><h2>Rating trajectory</h2></div><span>{profileHistory.length} game{profileHistory.length === 1 ? "" : "s"}</span></div><div className="cmr-chart"><svg viewBox="0 0 560 190" role="img" aria-label={`CMR trend for ${sportLabel(profileSelectedSport)}`}><line x1="28" y1="28" x2="28" y2="162" /><line x1="28" y1="162" x2="532" y2="162" /><polyline points={cmrGraphPoints(profileHistory)} fill="none" /><g>{profileHistory.filter((point) => point.rating != null).map((point, index, ratedHistory) => { const x = ratedHistory.length === 1 ? 280 : 28 + (index * 504) / (ratedHistory.length - 1); const y = 162 - ((Math.max(0, Math.min(100, point.rating ?? 0)) * 134) / 100); return <circle key={point.session_id} cx={x} cy={y} r="5"><title>{`${point.group_name}: ${(point.rating ?? 0).toFixed(1)} CMR (${(point.delta ?? 0) >= 0 ? "+" : ""}${(point.delta ?? 0).toFixed(1)})`}</title></circle>; })}</g></svg><div className="cmr-chart-scale"><span>100</span><span>0</span></div></div><div className="cmr-history-list">{profileHistory.slice().reverse().map((point) => <article className="cmr-history-row" key={point.session_id}><div><strong>{point.group_name}</strong><small>{point.session_date} · {point.game_rating != null ? `game rating ${point.game_rating.toFixed(1)} / 100` : "awaiting player feedback"}</small></div><div>{point.rating != null ? <b>{point.rating.toFixed(1)}</b> : <b>--</b>}{point.delta != null ? <span className={`cmr-history-change ${point.delta >= 0 ? "positive" : "negative"}`}><span aria-hidden="true">{point.delta > 0 ? "↑" : point.delta < 0 ? "↓" : "•"}</span>{point.delta >= 0 ? "+" : ""}{point.delta.toFixed(1)}</span> : <span className="cmr-history-change pending"><span aria-hidden="true">•</span>Pending</span>}</div></article>)}</div></> : <div className="profile-empty-insight"><strong>Your {sportLabel(profileSelectedSport)} CMR starts after your first completed game.</strong><p>CMR changes will appear here after scores and player feedback are confirmed.</p></div>}</>}</section>}
         {!user && <div className="page-empty"><strong>Sign in to manage your profile.</strong><p>Your rating and preferences are saved securely to your CourtMate profile.</p><button className="dark-button" onClick={() => void signIn()}>Sign in with Google <span>→</span></button></div>}
-        {user && profile && <form id="profile-preferences" className="profile-form" onSubmit={saveProfile}><div className="profile-form-grid"><label><span>Locality label</span><input value={profileDraft.area} onChange={(event) => setProfileDraft({ ...profileDraft, area: event.target.value })} placeholder="e.g. Whitefield" /></label><label><span>Travel radius (km)</span><input type="number" min="1" max="100" step="1" value={profileDraft.travel_radius_km} onChange={(event) => setProfileDraft({ ...profileDraft, travel_radius_km: event.target.value })} placeholder="10" /></label><label className="location-field"><span>Map coordinates</span><button className="location-button" type="button" onClick={useCurrentLocation}>{profileDraft.latitude != null && profileDraft.longitude != null ? "Location saved" : "Use my current location"}<span>⌖</span></button></label></div><label><span>How do you like to play?</span><select value={profileDraft.style} onChange={(event) => setProfileDraft({ ...profileDraft, style: event.target.value as ProfileDraft["style"] })}><option value="casual">Casual and easy-going</option><option value="social">Social and chatty</option><option value="competitive">Competitive and focused</option></select></label><fieldset><legend>When are you usually available?</legend><div className="availability-grid">{availabilityOptions.map((slot) => <label className={`availability-option ${profileDraft.availability.includes(slot) ? "selected" : ""}`} key={slot}><input type="checkbox" checked={profileDraft.availability.includes(slot)} onChange={() => toggleAvailability(slot)} /><span>{slot}</span></label>)}</div></fieldset><div className="profile-form-actions"><button className="dark-button" type="submit">Save profile <span>→</span></button><button className="text-button" type="button" onClick={() => void signOutUser()}>Sign out</button></div></form>}
+        {user && profile && <form id="profile-preferences" className="profile-form" onSubmit={saveProfile}><div className="profile-form-grid"><label><span>Locality label</span><input value={profileDraft.area} onChange={(event) => setProfileDraft({ ...profileDraft, area: event.target.value })} placeholder="e.g. Whitefield" /></label><label><span>Travel radius (km)</span><input type="number" min="1" max="100" step="1" value={profileDraft.travel_radius_km} onChange={(event) => setProfileDraft({ ...profileDraft, travel_radius_km: event.target.value })} placeholder="10" /></label><label className="location-field"><span>Map coordinates</span><button className="location-button" type="button" onClick={useCurrentLocation}>{profileDraft.latitude != null && profileDraft.longitude != null ? "Location saved" : "Use my current location"}<span>⌖</span></button></label></div><label><span>How do you like to play?</span><select value={profileDraft.style} onChange={(event) => setProfileDraft({ ...profileDraft, style: event.target.value as ProfileDraft["style"] })}><option value="casual">Casual and easy-going</option><option value="social">Social and chatty</option><option value="competitive">Competitive and focused</option></select></label><fieldset><legend>When are you usually available?</legend><div className="availability-grid">{availabilityOptions.map((slot) => <label className={`availability-option ${profileDraft.availability.includes(slot) ? "selected" : ""}`} key={slot}><input type="checkbox" checked={profileDraft.availability.includes(slot)} onChange={() => toggleAvailability(slot)} /><span>{slot}</span></label>)}</div></fieldset><div className="profile-form-actions"><button className="dark-button" type="submit">Save profile <span>→</span></button></div><div className="profile-sign-out"><span>Done playing for now?</span><button type="button" onClick={() => void signOutUser()}>Sign out</button></div></form>}
       </section>}
 
       {connectionsOpen && user && <section className="utility-page connections-page" aria-labelledby="connections-title"><div className="connections-header"><button className="utility-back-button" type="button" onClick={closeUtilityPage} aria-label="Go back">←</button><h1 id="connections-title">Connections</h1></div><div className="connections-tabs" role="tablist" aria-label="Connections"><button type="button" className={connectionsTab === "following" ? "active" : ""} onClick={() => setConnectionsTab("following")} role="tab" aria-selected={connectionsTab === "following"}>Following</button><button type="button" className={connectionsTab === "followers" ? "active" : ""} onClick={() => setConnectionsTab("followers")} role="tab" aria-selected={connectionsTab === "followers"}>Followers</button></div>{connectionsLoading ? <div className="connections-loader"><TennisBallLoader label="Loading connections" detail="Finding your people..." /></div> : connectionsError ? <div className="utility-empty"><h2>Could not load connections</h2><p>Try again and we&apos;ll fetch your latest following list.</p><button className="dark-button" type="button" onClick={() => void loadConnections(connectionsTab)}>Try again <span>→</span></button></div> : connections.length ? <div className="connections-list" role="tabpanel">{connections.map((connection) => <article className="connection-row" key={connection.id}><button type="button" className="connection-profile" onClick={() => void viewPlayerProfile(connection.id)} disabled={profileLoadingId === connection.id} aria-label={`View ${connection.display_name}'s profile`}><span className="connection-avatar">{connection.profile_image_url ? <img src={connection.profile_image_url} alt="" /> : initials(connection.display_name)}</span><span><strong>{connection.display_name}</strong><small>{connection.area || "CourtMate player"}</small></span></button><button type="button" className={`connection-follow-button ${connection.is_following ? "following" : ""}`} onClick={() => void toggleConnection(connection)} disabled={profileLoadingId === `connection-${connection.id}`}>{profileLoadingId === `connection-${connection.id}` ? "..." : connection.is_following ? "Following" : "Follow"}</button></article>)}</div> : <div className="utility-empty"><h2>No {connectionsTab} yet</h2><p>{connectionsTab === "following" ? "Follow players from games and social to see them here." : "When players follow you, they&apos;ll appear here."}</p></div>}</section>}

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { PostGameFeedbackPanel } from "./post-game-feedback";
 
 type GroupSpaceSession = {
@@ -13,6 +13,9 @@ type GroupSpaceSession = {
   start_time: string;
   end_time: string;
   status: string;
+  external_booking_url?: string | null;
+  booking_provider?: string | null;
+  booking_reference?: string | null;
 };
 
 type GroupSpaceMember = {
@@ -91,9 +94,41 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
   const [posting, setPosting] = useState(false);
   const [markingDone, setMarkingDone] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [bookingProvider, setBookingProvider] = useState(inputGroup.booking_provider ?? "Playo");
+  const [bookingUrl, setBookingUrl] = useState(inputGroup.external_booking_url ?? "");
+  const [bookingReference, setBookingReference] = useState(inputGroup.booking_reference ?? "");
+  const [savingBooking, setSavingBooking] = useState(false);
   const composerRef = useRef<HTMLInputElement>(null);
   const currentPlayerIsConfirmed = Boolean(currentUserId && members.some((member) => member.id === currentUserId));
   const canComplete = currentPlayerIsConfirmed && group.status !== "cancelled" && (group.status !== "completed" || feedbackPhase);
+  const isOrganizer = currentUserId === group.organizer_id;
+
+  useEffect(() => {
+    setBookingProvider(inputGroup.booking_provider ?? "Playo");
+    setBookingUrl(inputGroup.external_booking_url ?? "");
+    setBookingReference(inputGroup.booking_reference ?? "");
+  }, [inputGroup.booking_provider, inputGroup.external_booking_url, inputGroup.booking_reference]);
+
+  async function saveBooking(event: FormEvent) {
+    event.preventDefault();
+    if (!bookingUrl.trim() || savingBooking) return;
+    setSavingBooking(true);
+    try {
+      const response = await authorizedFetch(`${apiUrl}/v1/sessions/${group.id}/booking`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: bookingProvider, booking_url: bookingUrl.trim(), booking_reference: bookingReference.trim() || null }),
+      });
+      const payload = await response.json().catch(() => ({})) as { detail?: string };
+      if (!response.ok) throw new Error(payload.detail ?? "Could not save the booking");
+      onToast("Booking details shared with the group");
+      await onRefresh();
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : "Could not save the booking");
+    } finally {
+      setSavingBooking(false);
+    }
+  }
 
   function startVoice() {
     const SpeechRecognition = (window as Window & { SpeechRecognition?: new () => SpeechRecognition; webkitSpeechRecognition?: new () => SpeechRecognition }).SpeechRecognition
@@ -170,6 +205,11 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
             <button className="dark-button" type="submit" disabled={!draft.trim() || posting}>{posting ? "..." : "Post"}</button>
           </form>
           <p className="group-space-v2-hint">Share practical details here. No score entry needed.</p>
+        </section>
+        <section className="workspace-panel group-booking-panel">
+          <div className="workspace-panel-heading"><div><span className="kicker">COURT BOOKING</span><h3>{group.external_booking_url ? "Booking is shared" : "Book the court"}</h3></div><span>{group.booking_provider ?? "Not booked yet"}</span></div>
+          {group.external_booking_url ? <div className="group-booking-confirmed"><p>{group.booking_provider ?? "Court booking"}{group.booking_reference ? ` · ${group.booking_reference}` : ""} is ready for the group.</p><a className="group-booking-link" href={group.external_booking_url} target="_blank" rel="noreferrer">Open booking <span>↗</span></a></div> : <p className="group-booking-copy">Open a partner to book, then paste the confirmed link here so everyone has the same source of truth.</p>}
+          {isOrganizer && <><div className="group-booking-partners" aria-label="Court booking partners"><a href="https://khelomore.com" target="_blank" rel="noreferrer">KheloMore ↗</a><a href="https://playo.co" target="_blank" rel="noreferrer">Playo ↗</a><a href="https://hudle.in" target="_blank" rel="noreferrer">Hudle ↗</a><a href="https://mygate.com" target="_blank" rel="noreferrer">MyGate ↗</a></div><form className="group-booking-form" onSubmit={saveBooking}><div><label><span>Provider</span><select value={bookingProvider} onChange={(event) => setBookingProvider(event.target.value)}><option>KheloMore</option><option>Playo</option><option>Hudle</option><option>MyGate</option><option>Other</option></select></label><label><span>Booking link</span><input type="url" value={bookingUrl} onChange={(event) => setBookingUrl(event.target.value)} placeholder="https://..." required /></label><label><span>Reference (optional)</span><input value={bookingReference} onChange={(event) => setBookingReference(event.target.value)} placeholder="Booking ID or court number" /></label></div><button className="manage-group-button" type="submit" disabled={!bookingUrl.trim() || savingBooking}>{savingBooking ? "Sharing..." : "Share booking"}</button></form></>}
         </section>
         <section className="workspace-panel group-waitlist-panel group-lineup-panel"><div className="workspace-panel-heading"><div><span className="kicker">THE LINE-UP</span><h3>Players</h3></div>{group.status === "completed" ? <button className="group-lineup-rate-button" type="button" onClick={() => setFeedbackOpen(true)}>Rate players</button> : <span>{members.length} confirmed</span>}</div><p className="group-lineup-hint">Current CMR for this sport. Ratings open when the game is complete.</p><div className="group-roster-list">{members.map((member) => { const cmr = member.cmr_ratings?.[group.sport]; return <button type="button" className="group-roster-row group-profile-row" key={member.id} onClick={() => onViewProfile(member.id)} aria-label={`View ${member.display_name}'s profile`}><span className="chat-avatar">{member.profile_image_url ? <img src={member.profile_image_url} alt="" /> : initials(member.display_name)}</span><span><strong>{member.display_name}{member.id === currentUserId ? " (You)" : ""}</strong><small>{cmr != null ? "Current CMR" : "CMR building"}</small></span><b>{cmr != null ? `${cmr.toFixed(1)} CMR` : "-"}</b></button>; })}</div><div className="group-waitlist-heading"><span className="kicker">NEXT UP</span><strong>Waitlist · {waitlist.length}</strong></div>{waitlist.length ? <div className="group-waitlist-list">{waitlist.map((member, index) => <button type="button" className="group-waitlist-row group-profile-row" key={member.id} onClick={() => onViewProfile(member.id)} aria-label={`View ${member.display_name}'s profile`}><span>#{index + 1}</span><div><strong>{member.display_name}</strong><small>{member.area} · {member.style}</small></div><b>{member.cmr_ratings?.[group.sport]?.toFixed(1) ?? "-"}</b></button>)}</div> : <p className="activity-empty">No one is waiting. A player who backs out will release the next spot here.</p>}</section>
       </div>

@@ -228,14 +228,18 @@ class Session(BaseModel):
     skill_min: float = Field(ge=1, le=8)
     skill_max: float = Field(ge=1, le=8)
     style: Literal["casual", "social", "competitive"]
+    game_format: Literal["singles", "doubles"] = "doubles"
     capacity: int = Field(ge=2, le=16)
     confirmed_player_ids: list[str] = Field(default_factory=list)
     waitlist_player_ids: list[str] = Field(default_factory=list)
     external_booking_url: str | None = None
+    booking_provider: str | None = None
+    booking_reference: str | None = None
     status: Literal["open", "full", "in_progress", "awaiting_feedback", "completed", "cancelled"] = "open"
     sport: Sport = "pickleball"
     visibility: SessionVisibility = "public"
     social_activity_published: bool = False
+    social_activity_published_at: datetime | None = None
 
     @property
     def open_slots(self) -> int:
@@ -385,6 +389,83 @@ class ExploreSessionsResponse(BaseModel):
     recommendations: list[SessionRecommendation] = Field(default_factory=list)
 
 
+class PlayerDensityPoint(BaseModel):
+    area: str
+    player_count: int = Field(ge=3)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    cmr_min: float | None = Field(default=None, ge=0, le=100)
+    cmr_max: float | None = Field(default=None, ge=0, le=100)
+    distance_km: float | None = Field(default=None, ge=0)
+    intensity: Literal["warm", "hot", "very_hot"]
+
+
+class PlayerDensityResponse(BaseModel):
+    sport: Sport
+    radius_km: float
+    points: list[PlayerDensityPoint] = Field(default_factory=list)
+
+
+class CommunityLeaderboardEntry(BaseModel):
+    rank: int
+    community_id: str
+    name: str
+    sport: Sport
+    area: str
+    quality_score: float = Field(ge=0, le=100)
+    completed_games: int = Field(ge=3)
+    active_players: int = Field(ge=0)
+    average_match_quality: float = Field(ge=1, le=5)
+    feedback_completion_rate: float = Field(ge=0, le=1)
+    repeat_play_rate: float = Field(ge=0, le=1)
+    average_cmr_improvement: float
+    average_reliability: float = Field(ge=0, le=1)
+    badge: Literal["best_quality", "most_improved", "most_reliable", "fastest_growing"] | None = None
+
+
+class CommunityLeaderboardResponse(BaseModel):
+    sport: Sport
+    area: str | None = None
+    entries: list[CommunityLeaderboardEntry] = Field(default_factory=list)
+
+
+class Facility(BaseModel):
+    id: str
+    name: str
+    sport: Sport
+    area: str
+    phone: str | None = None
+    booking_method: str
+    booking_url: str | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    distance_km: float | None = Field(default=None, ge=0)
+
+
+class FacilityListResponse(BaseModel):
+    sport: Sport
+    area: str | None = None
+    facilities: list[Facility] = Field(default_factory=list)
+
+
+class CommunityMembership(BaseModel):
+    id: str
+    community_id: str
+    player_id: str
+    sport: Sport
+    area: str
+    joined_at: datetime
+
+
+class CommunityJoinRequest(BaseModel):
+    sport: Sport
+    area: str = Field(min_length=1, max_length=100)
+
+
+class CommunityMembershipResponse(BaseModel):
+    memberships: list[CommunityMembership] = Field(default_factory=list)
+
+
 class GroupProposal(BaseModel):
     group_name: str
     area: str
@@ -397,7 +478,8 @@ class GroupProposal(BaseModel):
     skill_min: float
     skill_max: float
     style: Literal["casual", "social", "competitive"]
-    capacity: int = Field(default=8, ge=2, le=16)
+    game_format: Literal["singles", "doubles"] = "doubles"
+    capacity: int = Field(default=6, ge=2, le=16)
     sport: Sport = "pickleball"
     explanation: str
 
@@ -601,6 +683,12 @@ class ChatPostRequest(BaseModel):
     teams: list["MatchTeam"] = Field(default_factory=list, max_length=2)
 
 
+class BookingUpdateRequest(BaseModel):
+    provider: str = Field(min_length=1, max_length=40)
+    booking_url: str = Field(min_length=1, max_length=2048)
+    booking_reference: str | None = Field(default=None, max_length=120)
+
+
 class ChatResultDecisionRequest(BaseModel):
     agree: bool
 
@@ -727,6 +815,8 @@ class CreateGroupRequest(BaseModel):
     skill_min: float | None = Field(default=None, ge=1, le=8)
     skill_max: float | None = Field(default=None, ge=1, le=8)
     style: Literal["casual", "social", "competitive"] | None = None
+    game_format: Literal["singles", "doubles"] = "doubles"
+    capacity: int = Field(default=6, ge=2, le=16)
     visibility: SessionVisibility | None = None
 
 

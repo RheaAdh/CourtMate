@@ -10,13 +10,14 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request as FastAPIRequest
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import AuthIdentity, get_current_identity
+from .facilities import BENGALURU_FACILITIES
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, ExploreSessionsResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyActivityResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, PlayerRating, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, SportyAvatarRequest, SportyAvatarResponse, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListItem, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentRegistrationDecisionRequest, TournamentScoreRequest, TournamentWinnerRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, BookingUpdateRequest, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CommunityLeaderboardEntry, CommunityLeaderboardResponse, CreateGroupRequest, CreatedGroupResponse, CreateTournamentRequest, ExploreSessionsResponse, Facility, FacilityListResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyActivityResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, PlayerDensityPoint, PlayerDensityResponse, PlayerRating, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, SportyAvatarRequest, SportyAvatarResponse, Tournament, TournamentDetailsResponse, TournamentFixtureUpdateRequest, TournamentListItem, TournamentListResponse, TournamentMatch, TournamentRegistration, TournamentRegistrationDecisionRequest, TournamentScoreRequest, TournamentWinnerRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
 from .tournaments import calculate_standings, generate_knockout_matches, generate_round_robin_matches, rules_for_sport, validate_score, validate_set_scores
 from .vector_search import VectorIndexer, VectorRetriever
@@ -439,8 +440,11 @@ def publish_session_social_activity(session_id: str, player: Player = Depends(ge
         raise HTTPException(status_code=409, detail="Cancelled games cannot be posted")
     if session.status != "completed":
         raise HTTPException(status_code=409, detail="Complete the game before publishing its Rally Circles activity")
-    if not session.social_activity_published:
-        session = repository.save_session(session.model_copy(update={"social_activity_published": True}))
+    if not session.social_activity_published or not session.social_activity_published_at:
+        session = repository.save_session(session.model_copy(update={
+            "social_activity_published": True,
+            "social_activity_published_at": datetime.now(timezone.utc),
+        }))
     activity_post, _ = _ensure_social_target(_session_activity_post_id(session.id), player)
     _clear_social_feed_cache()
     players_by_id = {candidate.id: candidate for candidate in repository.list_players()}
@@ -572,6 +576,11 @@ def _profile_storage_client():
     return storage.Client(project=os.getenv("GOOGLE_CLOUD_PROJECT"))
 
 
+def _profile_bucket_name() -> str:
+    project = os.getenv("GOOGLE_CLOUD_PROJECT", "mttn-portal")
+    return os.getenv("COURTMATE_PROFILE_BUCKET") or os.getenv("NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET") or f"{project}.firebasestorage.app"
+
+
 def _generate_profile_upload_url(blob, content_type: str) -> str:
     """Generate a signed URL using a key or IAM signBlob, depending on ADC."""
     credentials = blob.bucket._client._credentials
@@ -595,7 +604,7 @@ def _generate_profile_upload_url(blob, content_type: str) -> str:
 
 @app.post("/v1/me/profile-image/upload-url", response_model=ProfileImageUploadResponse)
 def create_profile_image_upload_url(request: ProfileImageUploadRequest, player: Player = Depends(get_current_player)) -> ProfileImageUploadResponse:
-    bucket_name = os.getenv("COURTMATE_PROFILE_BUCKET", "profile-pictures")
+    bucket_name = _profile_bucket_name()
     extension = "jpg" if request.content_type == "image/jpeg" else request.content_type.split("/", 1)[1]
     object_name = f"profiles/{player.id}/{uuid4()}.{extension}"
     try:
@@ -608,6 +617,41 @@ def create_profile_image_upload_url(request: ProfileImageUploadRequest, player: 
         raise HTTPException(status_code=502, detail="Could not create a profile picture upload URL") from error
     image_url = f"https://storage.googleapis.com/{bucket_name}/{quote(object_name, safe='/')}"
     return ProfileImageUploadResponse(upload_url=upload_url, image_url=image_url, object_name=object_name, expires_in=600)
+
+
+@app.post("/v1/me/profile-image/upload", response_model=Player)
+async def upload_profile_image(request: FastAPIRequest, player: Player = Depends(get_current_player)) -> Player:
+    """Upload profile bytes through the API so browsers do not need Storage CORS or signed URL support."""
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(status_code=422, detail="Profile photo must be JPG, PNG, or WebP")
+    content_length = int(request.headers.get("content-length", "0") or 0)
+    if content_length > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Profile photos must be smaller than 5 MB")
+    image_bytes = await request.body()
+    if not image_bytes:
+        raise HTTPException(status_code=422, detail="Choose a profile photo")
+    if len(image_bytes) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Profile photos must be smaller than 5 MB")
+
+    bucket_name = _profile_bucket_name()
+    extension = "jpg" if content_type == "image/jpeg" else content_type.split("/", 1)[1]
+    object_name = f"profiles/{player.id}/{uuid4()}.{extension}"
+    download_token = uuid4().hex
+    try:
+        blob = _profile_storage_client().bucket(bucket_name).blob(object_name)
+        blob.metadata = {"firebaseStorageDownloadTokens": download_token}
+        blob.upload_from_string(image_bytes, content_type=content_type)
+    except ImportError as error:
+        raise HTTPException(status_code=500, detail="Install google-cloud-storage to upload profile pictures") from error
+    except Exception as error:
+        raise HTTPException(status_code=502, detail="Could not upload profile picture to storage") from error
+
+    image_url = (
+        f"https://firebasestorage.googleapis.com/v0/b/{bucket_name}/o/"
+        f"{quote(object_name, safe='')}?alt=media&token={download_token}"
+    )
+    return repository.save_player(player.model_copy(update={"profile_image_url": image_url}))
 
 
 @app.post("/v1/me/sporty-avatar-options", response_model=SportyAvatarResponse)
@@ -639,7 +683,7 @@ def update_profile_image(request: ProfileImageUpdateRequest, player: Player = De
     if request.profile_image_url is None:
         return repository.save_player(player.model_copy(update={"profile_image_url": None}))
 
-    bucket_name = os.getenv("COURTMATE_PROFILE_BUCKET", "profile-pictures")
+    bucket_name = _profile_bucket_name()
     parsed_url = urlparse(request.profile_image_url)
     expected_prefix = f"/{bucket_name}/profiles/{player.id}/"
     is_new_profile_bucket_url = (
@@ -653,7 +697,12 @@ def update_profile_image(request: ProfileImageUpdateRequest, player: Player = De
         and parsed_url.hostname == "firebasestorage.googleapis.com"
         and "/o/profile-images%2F" in parsed_url.path
     )
-    if not (is_new_profile_bucket_url or is_legacy_firebase_url):
+    is_firebase_profile_url = (
+        parsed_url.scheme == "https"
+        and parsed_url.hostname == "firebasestorage.googleapis.com"
+        and parsed_url.path.startswith(f"/v0/b/{bucket_name}/o/profiles%2F{quote(player.id, safe='')}")
+    )
+    if not (is_new_profile_bucket_url or is_legacy_firebase_url or is_firebase_profile_url):
         raise HTTPException(status_code=422, detail="Profile image must be uploaded to the CourtMate profile bucket")
     return repository.save_player(player.model_copy(update={"profile_image_url": request.profile_image_url}))
 
@@ -874,9 +923,13 @@ def _session_social_view(session: Session, players_by_id: dict[str, Player] | No
         media_url=media_urls[0] if media_urls else None,
         media_type=media_posts[0].media_type if media_urls else None,
         media_urls=media_urls,
-        # Sessions do not store a creation timestamp; use the scheduled start so
-        # activity cards sort naturally alongside authored social posts.
-        created_at=datetime.combine(session.session_date, session.start_time, tzinfo=local_timezone),
+        # New activities sort by publication time. Older sessions without this
+        # field retain a stable scheduled-start fallback.
+        created_at=session.social_activity_published_at or datetime.combine(
+            session.session_date,
+            session.start_time,
+            tzinfo=local_timezone,
+        ),
         activity_type="session",
         session_status=session.status,
         like_count=len(engagement.liked_by) if engagement else 0,
@@ -1198,6 +1251,7 @@ def _group_proposal(intent: SearchIntent, player_id: str, proposed_name: str | N
     skill_min = intent.skill_min if intent.skill_min is not None else max(1.0, round(rating - .3, 1))
     skill_max = intent.skill_max if intent.skill_max is not None else min(8.0, round(rating + .3, 1))
     style = intent.style if intent.style != "any" else player.style if player else "casual"
+    game_format = "singles" if re.search(r"\bsingles?\b", query.lower()) else "doubles"
     return GroupProposal(
         group_name=proposed_name or _query_group_name(query, intent, style),
         area=intent.area,
@@ -1209,6 +1263,8 @@ def _group_proposal(intent: SearchIntent, player_id: str, proposed_name: str | N
         skill_min=skill_min,
         skill_max=skill_max,
         style=style,
+        game_format=game_format,
+        capacity=2 if game_format == "singles" else 6,
         sport=intent.sport,
         explanation=f"No existing {intent.sport.replace('_', ' ')} group met every requirement. Start this group and CourtMate can invite nearby players in the same skill band.",
     )
@@ -1702,6 +1758,128 @@ def explore_sessions(player: Player = Depends(get_current_player)) -> ExploreSes
     return _cache_read_view(cache_key, ExploreSessionsResponse(recommendations=recommendations[:50]))
 
 
+def _player_cmr_100(player: Player, sport: Sport) -> float | None:
+    if sport in player.cmr_ratings:
+        return player.cmr_ratings[sport]
+    legacy_rating = rating_for_sport(player, sport)
+    return cmr_from_legacy_rating(legacy_rating) if legacy_rating is not None else None
+
+
+def _community_name(sport: Sport, area: str) -> str:
+    return f"{area} {sport.replace('_', ' ').title()} Circle"
+
+
+@app.get("/v1/me/player-density", response_model=PlayerDensityResponse)
+def player_density(
+    sport: Sport = "pickleball",
+    latitude: float | None = Query(default=None, ge=-90, le=90),
+    longitude: float | None = Query(default=None, ge=-180, le=180),
+    radius_km: float = Query(default=20, ge=1, le=100),
+    cmr_min: float | None = Query(default=None, ge=0, le=100),
+    cmr_max: float | None = Query(default=None, ge=0, le=100),
+    player: Player = Depends(get_current_player),
+) -> PlayerDensityResponse:
+    """Return aggregated neighborhood demand, never individual player locations."""
+    if cmr_min is not None and cmr_max is not None and cmr_min > cmr_max:
+        raise HTTPException(status_code=422, detail="CMR minimum must not exceed maximum")
+    origin_latitude = latitude if latitude is not None else player.latitude
+    origin_longitude = longitude if longitude is not None else player.longitude
+    buckets: dict[str, list[tuple[Player, float | None, float | None, float | None]]] = {}
+    for candidate in repository.list_players():
+        if candidate.is_profile_private:
+            continue
+        candidate_cmr = _player_cmr_100(candidate, sport)
+        if candidate_cmr is None and sport not in candidate.skill_levels:
+            continue
+        if cmr_min is not None and candidate_cmr is not None and candidate_cmr < cmr_min:
+            continue
+        if cmr_max is not None and candidate_cmr is not None and candidate_cmr > cmr_max:
+            continue
+        candidate_latitude, candidate_longitude = candidate.latitude, candidate.longitude
+        if candidate_latitude is None or candidate_longitude is None:
+            fallback_coordinates = _geocode_area(candidate.area)
+            if fallback_coordinates:
+                candidate_latitude, candidate_longitude = fallback_coordinates
+        distance = None
+        if origin_latitude is not None and origin_longitude is not None and candidate_latitude is not None and candidate_longitude is not None:
+            distance = distance_km(origin_latitude, origin_longitude, candidate_latitude, candidate_longitude)
+            if distance > radius_km:
+                continue
+        key = candidate.area.strip() or "Nearby"
+        buckets.setdefault(key, []).append((candidate, candidate_cmr, candidate_latitude, candidate_longitude))
+
+    points = []
+    for area, entries in buckets.items():
+        if len(entries) < 3:
+            continue
+        coordinates = [(entry[2], entry[3]) for entry in entries if entry[2] is not None and entry[3] is not None]
+        latitude_average = round(sum(item[0] for item in coordinates) / len(coordinates), 3) if coordinates else None
+        longitude_average = round(sum(item[1] for item in coordinates) / len(coordinates), 3) if coordinates else None
+        cmrs = [entry[1] for entry in entries if entry[1] is not None]
+        point_distance = distance_km(origin_latitude, origin_longitude, latitude_average, longitude_average) if origin_latitude is not None and origin_longitude is not None and latitude_average is not None and longitude_average is not None else None
+        count = len(entries)
+        intensity = "very_hot" if count >= 15 else "hot" if count >= 8 else "warm"
+        points.append(PlayerDensityPoint(area=area, player_count=count, latitude=latitude_average, longitude=longitude_average, cmr_min=round(min(cmrs), 1) if cmrs else None, cmr_max=round(max(cmrs), 1) if cmrs else None, distance_km=round(point_distance, 1) if point_distance is not None else None, intensity=intensity))
+    points.sort(key=lambda point: (point.distance_km if point.distance_km is not None else 9999, -point.player_count))
+    return PlayerDensityResponse(sport=sport, radius_km=radius_km, points=points[:20])
+
+
+@app.get("/v1/me/community-leaderboard", response_model=CommunityLeaderboardResponse)
+def community_leaderboard(sport: Sport = "pickleball", area: str | None = None, player: Player = Depends(get_current_player)) -> CommunityLeaderboardResponse:
+    """Rank sufficiently active sport-area circles by quality, not popularity."""
+    sessions = [session for session in repository.list_sessions() if session.sport == sport and session.status == "completed" and (not area or session.area.casefold() == area.casefold())]
+    feedback_by_session = {session.id: repository.list_feedback(session.id) for session in sessions}
+    players_by_id = {candidate.id: candidate for candidate in repository.list_players()}
+    grouped: dict[str, list[Session]] = {}
+    for session in sessions:
+        grouped.setdefault(session.area.strip() or "Nearby", []).append(session)
+    entries = []
+    for community_area, community_sessions in grouped.items():
+        feedback = [item for session in community_sessions for item in feedback_by_session[session.id]]
+        submitted_pairs = {(item.session_id, item.player_id) for item in feedback}
+        expected_pairs = {(session.id, player_id) for session in community_sessions for player_id in session.confirmed_player_ids}
+        completion_rate = len(submitted_pairs & expected_pairs) / len(expected_pairs) if expected_pairs else 0
+        rating_count = sum(len(item.ratings) for item in feedback)
+        if len(community_sessions) < 3 or rating_count < 5:
+            continue
+        member_ids = {player_id for session in community_sessions for player_id in session.confirmed_player_ids}
+        play_counts = {player_id: sum(player_id in session.confirmed_player_ids for session in community_sessions) for player_id in member_ids}
+        repeat_rate = sum(count > 1 for count in play_counts.values()) / len(play_counts) if play_counts else 0
+        match_quality = sum(item.match_quality for item in feedback) / len(feedback) if feedback else 1
+        reliability = sum(players_by_id[player_id].reliability for player_id in member_ids if player_id in players_by_id) / max(len([player_id for player_id in member_ids if player_id in players_by_id]), 1)
+        deltas = [point.delta for player_id in member_ids for point in players_by_id.get(player_id, Player(id="missing", display_name="", area="")).cmr_history.get(sport, []) if point.session_id in {session.id for session in community_sessions} and point.delta is not None]
+        average_improvement = sum(deltas) / len(deltas) if deltas else 0
+        improvement_signal = max(0, min(1, (average_improvement + 10) / 20))
+        quality_score = round((match_quality / 5) * 35 + completion_rate * 20 + repeat_rate * 20 + reliability * 15 + improvement_signal * 10, 1)
+        entries.append(CommunityLeaderboardEntry(rank=0, community_id=f"community:{sport}:{community_area.casefold().replace(' ', '-')}", name=_community_name(sport, community_area), sport=sport, area=community_area, quality_score=quality_score, completed_games=len(community_sessions), active_players=len(member_ids), average_match_quality=round(match_quality, 2), feedback_completion_rate=round(completion_rate, 3), repeat_play_rate=round(repeat_rate, 3), average_cmr_improvement=round(average_improvement, 2), average_reliability=round(reliability, 3)))
+    entries.sort(key=lambda entry: (-entry.quality_score, -entry.completed_games, entry.name.casefold()))
+    badges = {
+        "best_quality": max(entries, key=lambda entry: entry.average_match_quality, default=None),
+        "most_improved": max(entries, key=lambda entry: entry.average_cmr_improvement, default=None),
+        "most_reliable": max(entries, key=lambda entry: entry.average_reliability, default=None),
+        "fastest_growing": max(entries, key=lambda entry: (entry.repeat_play_rate, entry.completed_games), default=None),
+    }
+    for index, entry in enumerate(entries, start=1):
+        entry.rank = index
+        entry.badge = next((badge for badge, candidate in badges.items() if candidate and candidate.community_id == entry.community_id), None)
+    return CommunityLeaderboardResponse(sport=sport, area=area, entries=entries[:20])
+
+
+@app.get("/v1/me/venues", response_model=FacilityListResponse)
+def nearby_facilities(
+    sport: Sport = "pickleball",
+    area: str | None = None,
+    limit: int = Query(default=12, ge=1, le=50),
+    player: Player = Depends(get_current_player),
+) -> FacilityListResponse:
+    """Return curated Bengaluru courts for the selected sport and locality."""
+    requested_area = (area or player.area).strip().casefold()
+    records = [record for record in BENGALURU_FACILITIES if record["sport"] == sport]
+    records.sort(key=lambda record: (0 if requested_area and requested_area in str(record["area"]).casefold() else 1, str(record["name"]).casefold()))
+    facilities = [Facility.model_validate(record) for record in records[:limit]]
+    return FacilityListResponse(sport=sport, area=area or player.area, facilities=facilities)
+
+
 @app.get("/v1/sessions/{session_id}/group", response_model=GroupViewResponse)
 def group_view(session_id: str, player: Player = Depends(get_current_player)) -> GroupViewResponse:
     cache_key = _read_view_cache_key("group", player.id, session_id)
@@ -2177,6 +2355,45 @@ def _validate_chat_match_teams(teams: list[MatchTeam], session: Session) -> None
             seen_team_players.add(player_id)
 
 
+@app.post("/v1/sessions/{session_id}/booking", response_model=Session)
+def update_booking(session_id: str, request: BookingUpdateRequest, player: Player = Depends(get_current_player)) -> Session:
+    session = _member_session(session_id, player)
+    if session.organizer_id != player.id:
+        raise HTTPException(status_code=403, detail="Only the organizer can update court booking details")
+    booking_url = request.booking_url.strip()
+    if urlparse(booking_url).scheme not in {"http", "https"}:
+        raise HTTPException(status_code=422, detail="Booking link must start with http:// or https://")
+    saved = repository.save_session(session.model_copy(update={
+        "external_booking_url": booking_url,
+        "booking_provider": request.provider.strip(),
+        "booking_reference": request.booking_reference.strip() if request.booking_reference else None,
+    }))
+    post = repository.save_chat_post(ChatPost(
+        id=f"booking-{session.id}-{uuid4().hex[:8]}",
+        session_id=session.id,
+        player_id=player.id,
+        player_display_name=player.display_name,
+        message=f"Court booked via {request.provider.strip()}." + (f" Booking reference: {request.booking_reference.strip()}." if request.booking_reference else " Open the booking link for details."),
+        created_at=datetime.now(timezone.utc),
+    ))
+    for participant_id in session.confirmed_player_ids:
+        if participant_id == player.id:
+            continue
+        try:
+            repository.save_notification(AppNotification(
+                id=f"booking-{session.id}-{participant_id}",
+                player_id=participant_id,
+                kind="booking_update",
+                title="Court booking updated",
+                message=f"{player.display_name} added the {request.provider.strip()} booking for {session.group_name}.",
+                session_id=session.id,
+                created_at=datetime.now(timezone.utc),
+            ))
+        except Exception:
+            pass
+    return saved
+
+
 @app.get("/v1/sessions/{session_id}/chat", response_model=ChatResponse)
 def group_chat(session_id: str, player: Player = Depends(get_current_player)) -> ChatResponse:
     session = _member_session(session_id, player)
@@ -2277,14 +2494,21 @@ def complete_session(session_id: str, background_tasks: BackgroundTasks, player:
     if session.status == "completed":
         if session.social_activity_published:
             return session
-        saved = repository.save_session(session.model_copy(update={"social_activity_published": True}))
+        saved = repository.save_session(session.model_copy(update={
+            "social_activity_published": True,
+            "social_activity_published_at": datetime.now(timezone.utc),
+        }))
         _clear_social_feed_cache()
         return saved
     if session.status == "awaiting_feedback":
         # A confirmed player can close the feedback round manually when the
         # group is ready. Submitted ratings are retained and the activity is
         # published even if some players have not responded yet.
-        completed = session.model_copy(update={"status": "completed", "social_activity_published": True})
+        completed = session.model_copy(update={
+            "status": "completed",
+            "social_activity_published": True,
+            "social_activity_published_at": datetime.now(timezone.utc),
+        })
         saved = repository.save_session(completed)
         _clear_social_feed_cache()
         background_tasks.add_task(_refresh_cmr_ratings)
@@ -2323,6 +2547,10 @@ def create_group(background_tasks: BackgroundTasks, request: CreateGroupRequest,
         raise HTTPException(status_code=422, detail="End time must be after start time")
     if proposal.skill_min > proposal.skill_max:
         raise HTTPException(status_code=422, detail="Minimum skill must not exceed maximum skill")
+    if request.game_format == "singles" and request.capacity != 2:
+        raise HTTPException(status_code=422, detail="Singles games must have exactly 2 total players")
+    if request.game_format == "doubles" and request.capacity not in {4, 6, 8}:
+        raise HTTPException(status_code=422, detail="Doubles games must have 4, 6, or 8 total players")
     session = Session(
         id=f"g-{uuid4().hex[:10]}",
         group_name=proposal.group_name,
@@ -2336,8 +2564,9 @@ def create_group(background_tasks: BackgroundTasks, request: CreateGroupRequest,
         skill_min=proposal.skill_min,
         skill_max=proposal.skill_max,
         style=proposal.style,
+        game_format=request.game_format,
         sport=proposal.sport,
-        capacity=proposal.capacity,
+        capacity=request.capacity,
         confirmed_player_ids=[player.id],
         visibility=session_visibility,
     )
@@ -2421,7 +2650,11 @@ def feedback(session_id: str, request: FeedbackRequest, background_tasks: Backgr
             created_at=datetime.now(timezone.utc),
         ))
     if session.status == "awaiting_feedback" and _all_participants_submitted_feedback(session):
-        completed = session.model_copy(update={"status": "completed", "social_activity_published": True})
+        completed = session.model_copy(update={
+            "status": "completed",
+            "social_activity_published": True,
+            "social_activity_published_at": datetime.now(timezone.utc),
+        })
         repository.save_session(completed)
         _clear_social_feed_cache()
         background_tasks.add_task(_index_session_best_effort, completed)

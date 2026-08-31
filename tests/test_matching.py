@@ -155,6 +155,24 @@ class MatchingTests(unittest.TestCase):
         self.assertTrue(results)
         self.assertEqual(results[0].session.id, "s1")
 
+    def test_search_prioritizes_closest_cmr_match_inside_eligible_bands(self):
+        repo = InMemoryRepository()
+        load_repository_fixture(repo)
+        player = repo.get_player("p1")
+        close_band = Session(
+            id="cmr-close", sport="pickleball", group_name="CMR Close Rally", organizer_id="p2", area="Whitefield",
+            latitude=12.9698, longitude=77.7499, session_date=date.today() + timedelta(days=2), start_time=time(8), end_time=time(10),
+            skill_min=3.0, skill_max=3.4, style="casual", capacity=8,
+        )
+        edge_band = Session(
+            id="cmr-edge", sport="pickleball", group_name="CMR Edge Rally", organizer_id="p2", area="Whitefield",
+            latitude=12.9698, longitude=77.7499, session_date=date.today() + timedelta(days=2), start_time=time(8), end_time=time(10),
+            skill_min=3.0, skill_max=3.8, style="casual", capacity=8,
+        )
+        intent = SearchIntent(sport="pickleball", area="Whitefield", date=close_band.session_date)
+        results = search_sessions([edge_band, close_band], intent, repo.list_players(), player)
+        self.assertEqual([item.session.id for item in results], ["cmr-close", "cmr-edge"])
+
     def test_coordinate_radius_filters_out_distant_localities(self):
         repo = InMemoryRepository()
         load_repository_fixture(repo)

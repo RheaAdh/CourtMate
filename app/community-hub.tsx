@@ -1,0 +1,93 @@
+"use client";
+
+import { PointerEvent, useEffect, useMemo, useRef, useState } from "react";
+
+type Sport = "pickleball" | "badminton" | "tennis" | "padel" | "squash" | "table_tennis";
+type CommunitySession = { id: string; organizer_id: string; group_name: string; sport: Sport; area: string; venue_name?: string | null; session_date: string; start_time: string; end_time: string; skill_min: number; skill_max: number; style: string; game_format: "singles" | "doubles"; capacity: number; confirmed_player_ids: string[]; open_slots: number; score: number };
+type CommunityHubProps = { apiUrl: string; authorizedFetch: (input: string, init?: RequestInit) => Promise<Response>; sessions: CommunitySession[]; currentUserId: string; currentCmr?: number; gamesLogged: number; initialLatitude?: number | null; initialLongitude?: number | null; initialArea?: string; loading: boolean; onJoinGame: (session: CommunitySession) => void; onViewGroup: (session: CommunitySession) => void };
+type DensityPoint = { area: string; player_count: number; intensity: "warm" | "hot" | "very_hot"; latitude?: number | null; longitude?: number | null; cmr_min?: number | null; cmr_max?: number | null; distance_km?: number | null };
+type Facility = { id: string; name: string; sport: Sport; area: string; phone?: string | null; booking_method: string; booking_url?: string | null };
+type LeaderboardEntry = { rank: number; community_id: string; name: string; sport: Sport; area: string; quality_score: number; completed_games: number; active_players: number; average_match_quality: number; feedback_completion_rate: number; repeat_play_rate: number; average_cmr_improvement: number; average_reliability: number; badge?: "best_quality" | "most_improved" | "most_reliable" | "fastest_growing" | null };
+
+const labels: Record<Sport, string> = { pickleball: "Pickleball", badminton: "Badminton", tennis: "Tennis", padel: "Padel", squash: "Squash", table_tennis: "Table tennis" };
+const DEFAULT_CENTER = { latitude: 12.9698, longitude: 77.7499 };
+const badgeLabels: Record<NonNullable<LeaderboardEntry["badge"]>, string> = { best_quality: "Best quality", most_improved: "Most improved", most_reliable: "Most reliable", fastest_growing: "Fastest growing" };
+
+function communityName(sport: Sport, area: string) { return `${area} ${labels[sport]} Circle`; }
+
+export function CommunityHub({ apiUrl, authorizedFetch, sessions, currentUserId, currentCmr, gamesLogged, initialLatitude, initialLongitude, initialArea = "Whitefield", loading, onJoinGame, onViewGroup }: CommunityHubProps) {
+  const [joinedCircles, setJoinedCircles] = useState<string[]>([]);
+  const [sportFilter, setSportFilter] = useState<Sport>("tennis");
+  const [radiusKm, setRadiusKm] = useState(20);
+  const [cmrOnly, setCmrOnly] = useState(true);
+  const [densityPoints, setDensityPoints] = useState<DensityPoint[]>([]);
+  const [densityLoading, setDensityLoading] = useState(false);
+  const [densityError, setDensityError] = useState("");
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  const [facilities, setFacilities] = useState<Facility[]>([]);
+  const [facilitiesLoading, setFacilitiesLoading] = useState(false);
+  const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(initialLatitude != null && initialLongitude != null ? { latitude: initialLatitude, longitude: initialLongitude } : null);
+  const [locationState, setLocationState] = useState<"saved" | "detecting" | "fallback">(initialLatitude != null && initialLongitude != null ? "saved" : "detecting");
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [selectedPoint, setSelectedPoint] = useState<DensityPoint | null>(null);
+  const gesture = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+
+  useEffect(() => {
+    if (initialLatitude != null && initialLongitude != null) return;
+    if (!navigator.geolocation) { setLocation(DEFAULT_CENTER); setLocationState("fallback"); return; }
+    navigator.geolocation.getCurrentPosition((position) => { setLocation({ latitude: position.coords.latitude, longitude: position.coords.longitude }); setLocationState("saved"); }, () => { setLocation(DEFAULT_CENTER); setLocationState("fallback"); }, { enableHighAccuracy: false, timeout: 6000, maximumAge: 300000 });
+  }, [initialLatitude, initialLongitude]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDensityLoading(true); setDensityError("");
+    const params = new URLSearchParams({ sport: sportFilter, radius_km: radiusKm.toString() });
+    if (location) { params.set("latitude", location.latitude.toString()); params.set("longitude", location.longitude.toString()); }
+    if (cmrOnly && currentCmr != null) { params.set("cmr_min", Math.max(0, currentCmr - 20).toString()); params.set("cmr_max", Math.min(100, currentCmr + 20).toString()); }
+    void authorizedFetch(`${apiUrl}/v1/me/player-density?${params}`).then(async (response) => { if (!response.ok) throw new Error(); return response.json() as Promise<{ points: DensityPoint[] }>; }).then((payload) => { if (!cancelled) { setDensityPoints(payload.points); setSelectedPoint(payload.points[0] ?? null); } }).catch(() => { if (!cancelled) setDensityError("Player density is unavailable right now"); }).finally(() => { if (!cancelled) setDensityLoading(false); });
+    return () => { cancelled = true; };
+  }, [apiUrl, sportFilter, radiusKm, cmrOnly, currentCmr, location]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLeaderboardLoading(true);
+    void authorizedFetch(`${apiUrl}/v1/me/community-leaderboard?sport=${sportFilter}`).then(async (response) => { if (!response.ok) throw new Error(); return response.json() as Promise<{ entries: LeaderboardEntry[] }>; }).then((payload) => { if (!cancelled) setLeaderboard(payload.entries); }).catch(() => { if (!cancelled) setLeaderboard([]); }).finally(() => { if (!cancelled) setLeaderboardLoading(false); });
+    return () => { cancelled = true; };
+  }, [apiUrl, sportFilter]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setFacilitiesLoading(true);
+    const params = new URLSearchParams({ sport: sportFilter });
+    if (initialArea) params.set("area", initialArea);
+    void authorizedFetch(`${apiUrl}/v1/me/venues?${params}`).then(async (response) => { if (!response.ok) throw new Error(); return response.json() as Promise<{ facilities: Facility[] }>; }).then((payload) => { if (!cancelled) setFacilities(payload.facilities); }).catch(() => { if (!cancelled) setFacilities([]); }).finally(() => { if (!cancelled) setFacilitiesLoading(false); });
+    return () => { cancelled = true; };
+  }, [apiUrl, sportFilter, initialArea]);
+
+  const sportSessions = sessions.filter((session) => session.sport === sportFilter);
+  const communities = useMemo(() => {
+    const grouped = new Map<string, CommunitySession[]>();
+    sportSessions.forEach((session) => { const key = `${session.sport}:${session.area}`; grouped.set(key, [...(grouped.get(key) ?? []), session]); });
+    return [...grouped.entries()].map(([key, circleSessions]) => { const [sport, area] = key.split(":") as [Sport, string]; return { id: key, name: communityName(sport, area), sport, area, sessions: circleSessions.slice(0, 3), density: densityPoints.find((point) => point.area.toLowerCase() === area.toLowerCase()) }; });
+  }, [sportSessions, densityPoints]);
+
+  const center = location ?? DEFAULT_CENTER;
+  const project = (point: DensityPoint) => { if (point.latitude == null || point.longitude == null) return { x: 200, y: 130 }; const xKm = (point.longitude - center.longitude) * 111.32 * Math.cos(center.latitude * Math.PI / 180); const yKm = (center.latitude - point.latitude) * 111.32; return { x: 200 + (xKm / radiusKm) * 100 * zoom + pan.x, y: 130 + (yKm / radiusKm) * 100 * zoom + pan.y }; };
+  const startPan = (event: PointerEvent<SVGSVGElement>) => { gesture.current = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y }; event.currentTarget.setPointerCapture(event.pointerId); };
+  const movePan = (event: PointerEvent<SVGSVGElement>) => { if (!gesture.current) return; setPan({ x: gesture.current.panX + (event.clientX - gesture.current.x) / 2, y: gesture.current.panY + (event.clientY - gesture.current.y) / 2 }); };
+  const selectedCommunity = selectedPoint ? communities.find((community) => community.area.toLowerCase() === selectedPoint.area.toLowerCase()) : null;
+
+  return <section className="page-view community-page" aria-labelledby="community-page-title">
+    <header className="community-header"><span className="kicker">YOUR PEOPLE, YOUR SPORT</span><h1 id="community-page-title">Find your circle</h1><p>Players like you are showing up nearby. Log every game, improve your CMR, and make your next match better.</p></header>
+    <div className="play-log-card"><div><span className="kicker">YOUR PLAY LOG</span><strong>{gamesLogged} game{gamesLogged === 1 ? "" : "s"} logged{currentCmr != null ? ` · ${currentCmr.toFixed(1)} CMR` : ""}</strong><small>Every completed game and private rating makes your next match sharper.</small></div><span className="play-log-mark" aria-hidden="true">↗</span></div>
+    <section className="player-density-card" aria-labelledby="player-density-title"><div className="density-heading"><div><span className="kicker">COMMUNITY SIGNAL</span><h2 id="player-density-title">Players like you nearby</h2><p>{densityPoints.length ? `${densityPoints.reduce((total, point) => total + point.player_count, 0)} ${labels[sportFilter].toLowerCase()} players within ${radiusKm} km` : `Find ${labels[sportFilter].toLowerCase()} players within ${radiusKm} km`}</p></div><div className="density-controls"><select value={sportFilter} onChange={(event) => setSportFilter(event.target.value as Sport)} aria-label="Choose sport">{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={radiusKm} onChange={(event) => setRadiusKm(Number(event.target.value))} aria-label="Choose search radius"><option value="10">10 km</option><option value="20">20 km</option><option value="35">35 km</option><option value="50">50 km</option></select><label className="cmr-filter"><input type="checkbox" checked={cmrOnly && currentCmr != null} disabled={currentCmr == null} onChange={(event) => setCmrOnly(event.target.checked)} /> Near my CMR</label></div></div>
+      {densityLoading ? <div className="density-map-loading">Scanning {radiusKm} km around you...</div> : densityPoints.length ? <><div className="density-map-shell"><div className="density-map-toolbar"><span>{locationState === "fallback" ? `Showing around ${initialArea}` : "Your approximate location"}</span><div><button type="button" onClick={() => setZoom((value) => Math.min(2.4, Number((value + .2).toFixed(1))))} aria-label="Zoom in">+</button><button type="button" onClick={() => setZoom((value) => Math.max(.7, Number((value - .2).toFixed(1))))} aria-label="Zoom out">−</button><button type="button" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} aria-label="Reset map">Reset</button></div></div><svg className="density-map-svg" viewBox="0 0 400 260" role="img" aria-label={`${labels[sportFilter]} player density within ${radiusKm} kilometres`} onPointerDown={startPan} onPointerMove={movePan} onPointerUp={() => { gesture.current = null; }} onPointerCancel={() => { gesture.current = null; }} onWheel={(event) => { event.preventDefault(); setZoom((value) => Math.max(.7, Math.min(2.4, Number((value + (event.deltaY < 0 ? .2 : -.2)).toFixed(1))))); }}><g transform={`translate(${pan.x} ${pan.y})`}><circle className="density-radius-ring outer" cx="200" cy="130" r={100 * zoom} /><circle className="density-radius-ring inner" cx="200" cy="130" r={50 * zoom} /><line className="density-map-crosshair" x1="200" y1="20" x2="200" y2="240" /><line className="density-map-crosshair" x1="90" y1="130" x2="310" y2="130" /><circle className="density-current-location" cx="200" cy="130" r="7" /><circle className="density-current-pulse" cx="200" cy="130" r="13" />{densityPoints.map((point) => { const position = project(point); return <g className={`density-hotspot-svg ${selectedPoint?.area === point.area ? "selected" : ""}`} key={point.area} transform={`translate(${position.x} ${position.y})`} onPointerDown={(event) => event.stopPropagation()} onClick={() => setSelectedPoint(point)} role="button" tabIndex={0} aria-label={`${point.area}, ${point.player_count} players`}><circle className={`density-hotspot-circle ${point.intensity}`} r={point.intensity === "very_hot" ? 27 : point.intensity === "hot" ? 23 : 19} /><text className="density-hotspot-count" y="3">{point.player_count}</text><text className="density-hotspot-area" y="41">{point.area}</text></g>; })}</g><text className="density-radius-label" x="205" y="24">{radiusKm} km radius</text></svg></div>{selectedPoint && <div className="density-detail"><div><strong>{selectedPoint.area}</strong><small>{selectedPoint.player_count} {labels[sportFilter].toLowerCase()} players · {selectedPoint.distance_km != null ? `${selectedPoint.distance_km} km away` : "nearby"}</small>{selectedPoint.cmr_min != null && <small>CMR {selectedPoint.cmr_min.toFixed(0)}–{selectedPoint.cmr_max?.toFixed(0)}</small>}</div><button type="button" onClick={() => selectedCommunity && setJoinedCircles((ids) => ids.includes(selectedCommunity.id) ? ids : [...ids, selectedCommunity.id])}>{selectedCommunity && joinedCircles.includes(selectedCommunity.id) ? "Circle joined" : "Start a circle here"}</button></div>}</> : <div className="density-map-empty">{densityError || `Not enough visible ${labels[sportFilter].toLowerCase()} players in one area yet. Invite your circle to make the signal visible.`}</div>}
+      <p className="density-privacy-note">Only aggregated neighborhoods are shown. Individual player locations are never shared.</p></section>
+    <section className="community-leaderboard" aria-labelledby="community-leaderboard-title"><div className="density-heading"><div><span className="kicker">QUALITY SIGNAL</span><h2 id="community-leaderboard-title">Top {labels[sportFilter]} circles</h2><p>Ranked by game quality, reliability, and players coming back.</p></div></div>{leaderboardLoading ? <div className="leaderboard-loading">Updating community scores...</div> : leaderboard.length ? <div className="leaderboard-list">{leaderboard.slice(0, 5).map((entry) => <article className="leaderboard-row" key={entry.community_id}><span className="leaderboard-rank">{entry.rank}</span><div><strong>{entry.name}</strong><small>{entry.completed_games} games · {Math.round(entry.average_reliability * 100)}% reliable · {Math.round(entry.repeat_play_rate * 100)}% return</small></div><div className="leaderboard-score"><b>{entry.quality_score}</b><small>{entry.badge ? badgeLabels[entry.badge] : "Quality score"}</small></div></article>)}</div> : <div className="leaderboard-empty">Circles appear after 3 completed games and 5 submitted player ratings.</div>}</section>
+    <section className="facility-section" aria-labelledby="facility-title"><div className="density-heading"><div><span className="kicker">COURTS NEAR YOUR CIRCLE</span><h2 id="facility-title">Where to play {labels[sportFilter].toLowerCase()}</h2><p>Curated facilities for {initialArea}. Check the venue for live availability and pricing.</p></div></div>{facilitiesLoading ? <div className="leaderboard-loading">Finding courts...</div> : facilities.length ? <div className="facility-list">{facilities.slice(0, 5).map((facility) => <article className="facility-row" key={facility.id}><div><strong>{facility.name}</strong><small>{facility.area} · {facility.booking_method}</small></div><div className="facility-actions">{facility.phone && <a href={`tel:${facility.phone.replaceAll(" ", "")}`} aria-label={`Call ${facility.name}`}>Call</a>}{facility.booking_url && <a href={facility.booking_url} target="_blank" rel="noreferrer">Book <span>↗</span></a>}</div></article>)}</div> : <div className="leaderboard-empty">No curated {labels[sportFilter].toLowerCase()} courts found yet.</div>}</section>
+    <div className="cmr-loop-strip" role="note"><strong>Find community</strong><span>→</span><strong>Join game</strong><span>→</span><strong>Play & rate</strong><span>→</span><strong>Better CMR matches</strong></div>
+    {loading ? <div className="community-empty"><strong>Finding circles near you...</strong><p>We are matching communities to your sport, location, and CMR.</p></div> : communities.length === 0 ? <div className="community-empty"><strong>No nearby circles yet.</strong><p>Start a game in your area and become the first circle.</p></div> : <div className="community-grid">{communities.map((community) => { const joined = joinedCircles.includes(community.id); return <article className="community-card" key={community.id}><div className="community-card-top"><div><span className="community-sport">{labels[community.sport]}</span><h2>{community.name}</h2><p>{community.density?.player_count ?? community.sessions.reduce((total, session) => total + session.confirmed_player_ids.length, 0)} active players · {community.sessions.length} game{community.sessions.length === 1 ? "" : "s"} coming up</p></div><button type="button" className={`community-join-button${joined ? " joined" : ""}`} onClick={() => setJoinedCircles((ids) => joined ? ids.filter((id) => id !== community.id) : [...ids, community.id])}>{joined ? "Joined" : "Join circle"}</button></div><div className="community-games">{community.sessions.map((session) => { const isPlaying = session.confirmed_player_ids.includes(currentUserId); const fit = currentCmr == null ? Math.round(session.score * 100) : Math.max(0, Math.round(100 - Math.abs(currentCmr - ((session.skill_min + session.skill_max) / 2 - 1) * 100 / 7) * 2)); return <div className="community-game" key={session.id}><div><strong>{session.group_name}</strong><small>{session.session_date} · {session.start_time}–{session.end_time} · {session.open_slots} spot{session.open_slots === 1 ? "" : "s"} open</small><small className="community-fit">{fit}% CMR fit{isPlaying ? " · You are in" : ""}</small></div><div className="community-game-actions"><button type="button" className="community-view-button" onClick={() => onViewGroup(session)}>View</button>{!isPlaying && <button type="button" className="community-game-button" onClick={() => onJoinGame(session)}>Join game</button>}</div></div>; })}</div></article>; })}</div>}
+  </section>;
+}

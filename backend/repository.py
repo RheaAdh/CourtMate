@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 from typing import Protocol
 
-from .models import ActivityProof, AppNotification, ChatPost, Feedback, FollowRecord, JoinRequest, Player, SearchDocument, Session, SocialComment, SocialPost, Tournament, TournamentMatch, TournamentRegistration, VectorSearchResult, normalize_cmr_player
+from .models import ActivityProof, AppNotification, ChatPost, CommunityMembership, Feedback, FollowRecord, JoinRequest, Player, SearchDocument, Session, SocialComment, SocialPost, Tournament, TournamentMatch, TournamentRegistration, VectorSearchResult, normalize_cmr_player
 from .vector_search import cosine_similarity
 
 
@@ -72,6 +72,9 @@ class Repository(Protocol):
     def delete_search_document(self, document_id: str) -> None: ...
     def list_search_documents(self) -> list[SearchDocument]: ...
     def search_search_documents(self, query_vector: list[float], filters: dict[str, str | int | float | bool | None], limit: int) -> list[VectorSearchResult]: ...
+    def save_community_membership(self, membership: CommunityMembership) -> CommunityMembership: ...
+    def get_community_membership(self, community_id: str, player_id: str) -> CommunityMembership | None: ...
+    def list_community_memberships_for_player(self, player_id: str) -> list[CommunityMembership]: ...
 
 
 class InMemoryRepository:
@@ -92,6 +95,7 @@ class InMemoryRepository:
         self.tournament_registrations: dict[str, TournamentRegistration] = {}
         self.tournament_matches: dict[str, TournamentMatch] = {}
         self.search_documents: dict[str, SearchDocument] = {}
+        self.community_memberships: dict[str, CommunityMembership] = {}
 
     def list_sessions(self) -> list[Session]:
         return list(self.sessions.values())
@@ -200,6 +204,16 @@ class InMemoryRepository:
     def save_session(self, session: Session) -> Session:
         self.sessions[session.id] = session
         return session
+
+    def save_community_membership(self, membership: CommunityMembership) -> CommunityMembership:
+        self.community_memberships[membership.id] = membership
+        return membership
+
+    def get_community_membership(self, community_id: str, player_id: str) -> CommunityMembership | None:
+        return next((item for item in self.community_memberships.values() if item.community_id == community_id and item.player_id == player_id), None)
+
+    def list_community_memberships_for_player(self, player_id: str) -> list[CommunityMembership]:
+        return sorted((item for item in self.community_memberships.values() if item.player_id == player_id), key=lambda item: item.joined_at, reverse=True)
 
     def save_notification(self, notification: AppNotification) -> AppNotification:
         self.notifications[notification.id] = notification
@@ -470,6 +484,21 @@ class FirestoreRepository:
         reference = self.client.collection("sessions").document(session.id)
         reference.set(self._write_model(session))
         return session
+
+    def save_community_membership(self, membership: CommunityMembership) -> CommunityMembership:
+        reference = self.client.collection("community_memberships").document(membership.id)
+        reference.set(self._write_model(membership), merge=True)
+        return membership
+
+    def get_community_membership(self, community_id: str, player_id: str) -> CommunityMembership | None:
+        documents = self.client.collection("community_memberships").where("community_id", "==", community_id).where("player_id", "==", player_id).limit(1).stream()
+        document = next(iter(documents), None)
+        return CommunityMembership.model_validate({**(document.to_dict() or {}), "id": document.id}) if document else None
+
+    def list_community_memberships_for_player(self, player_id: str) -> list[CommunityMembership]:
+        documents = self.client.collection("community_memberships").where("player_id", "==", player_id).limit(100).stream()
+        memberships = [CommunityMembership.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
+        return sorted(memberships, key=lambda item: item.joined_at, reverse=True)
 
     def save_notification(self, notification: AppNotification) -> AppNotification:
         reference = self.client.collection("notifications").document(notification.id)

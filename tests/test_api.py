@@ -40,6 +40,41 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(payload["recommendations"][0]["session"]["id"], "s1")
         self.assertEqual(payload["retrieval"]["mode"], "deterministic_fallback")
 
+    def test_player_density_is_aggregated_and_radius_filtered(self):
+        response = self.client.get(
+            "/v1/me/player-density",
+            params={"sport": "tennis", "latitude": 12.9698, "longitude": 77.7499, "radius_km": 20},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["radius_km"], 20.0)
+        self.assertTrue(payload["points"])
+        self.assertGreaterEqual(payload["points"][0]["player_count"], 3)
+        self.assertIn("cmr_min", payload["points"][0])
+        self.assertNotIn("player_ids", payload["points"][0])
+
+    def test_curated_facilities_filter_by_sport_and_area(self):
+        response = self.client.get(
+            "/v1/me/venues",
+            params={"sport": "badminton", "area": "HSR Layout"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        facilities = response.json()["facilities"]
+        self.assertTrue(facilities)
+        self.assertEqual(facilities[0]["area"], "HSR Layout")
+        self.assertTrue(all(item["sport"] == "badminton" for item in facilities))
+
+    def test_community_leaderboard_hides_under_sampled_circles(self):
+        response = self.client.get(
+            "/v1/me/community-leaderboard",
+            params={"sport": "badminton"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["entries"], [])
+
     def test_chat_followup_keeps_previous_game_context(self):
         original = "Find a pickleball game near Whitefield this Sunday morning"
         first = self.client.post("/v1/sessions/search", json={"query": original})

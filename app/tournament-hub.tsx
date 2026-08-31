@@ -141,6 +141,14 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
   const [capacity, setCapacity] = useState("8");
   const [organizerPlays, setOrganizerPlays] = useState(true);
   const [cmrBand, setCmrBand] = useState("all");
+  const [exploreSearchDraft, setExploreSearchDraft] = useState("");
+  const [exploreSearch, setExploreSearch] = useState("");
+  const [exploreSportDraft, setExploreSportDraft] = useState<Sport | "all">("all");
+  const [exploreSport, setExploreSport] = useState<Sport | "all">("all");
+  const [exploreLevelDraft, setExploreLevelDraft] = useState("all");
+  const [exploreLevel, setExploreLevel] = useState("all");
+  const [exploreDateDraft, setExploreDateDraft] = useState<"all" | "week">("all");
+  const [exploreDate, setExploreDate] = useState<"all" | "week">("all");
   const [scores, setScores] = useState<Record<string, ScoreDraft>>({});
   const [fixtureEdits, setFixtureEdits] = useState<Record<string, FixtureEdit>>({});
   const [winnerDrafts, setWinnerDrafts] = useState<Record<string, string>>({});
@@ -455,7 +463,19 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
     return "upcoming";
   };
   const exploreTournaments = tournaments
-    .filter((tournament) => tournament.organizer_id !== currentUserId && tournament.status === "registration" && tournament.tournament_date >= today() && !["pending", "registered", "waitlisted"].includes(tournament.my_registration_status ?? ""))
+    .filter((tournament) => {
+      if (tournament.organizer_id === currentUserId || tournament.status !== "registration" || tournament.tournament_date < today() || ["pending", "registered", "waitlisted"].includes(tournament.my_registration_status ?? "")) return false;
+      const search = exploreSearch.trim().toLowerCase();
+      if (search && !`${tournament.name} ${tournament.area} ${sportLabel(tournament.sport)}`.toLowerCase().includes(search)) return false;
+      if (exploreSport !== "all" && tournament.sport !== exploreSport) return false;
+      if (exploreDate === "week") {
+        const end = new Date(`${today()}T00:00:00`);
+        end.setDate(end.getDate() + 7);
+        if (tournament.tournament_date > end.toISOString().slice(0, 10)) return false;
+      }
+      const level = tournament.cmr_min === 0 && tournament.cmr_max < 35 ? "beginner" : tournament.cmr_min >= 65 ? "advanced" : tournament.cmr_min >= 35 ? "intermediate" : "all";
+      return exploreLevel === "all" || level === exploreLevel;
+    })
     .sort((a, b) => {
       const area = playerArea?.trim().toLowerCase() ?? "";
       const areaScore = (tournament: Tournament) => area && (tournament.area.toLowerCase().includes(area) || area.includes(tournament.area.toLowerCase())) ? 0 : 1;
@@ -603,6 +623,7 @@ export function TournamentHub({ apiUrl, currentUserId, playerArea, authorizedFet
           <div className="tournament-tabs" role="tablist" aria-label="Tournament views">
             {tournamentTabs.map((tab) => <button type="button" role="tab" aria-selected={activeView === tab.value} className={activeView === tab.value ? "active" : ""} onClick={() => setActiveView(tab.value)} key={tab.value}>{tab.label}<span>{tab.value === "explore" ? exploreTournaments.length : tournaments.filter((tournament) => tournamentView(tournament) === tab.value).length}</span></button>)}
           </div>
+          {activeView === "explore" && <div className="explore-filters tournament-explore-filters" aria-label="Filter tournaments"><label className="explore-filter-search"><span>Search tournaments</span><input value={exploreSearchDraft} onChange={(event) => setExploreSearchDraft(event.target.value)} placeholder="Name, sport, or area" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); setExploreSearch(exploreSearchDraft); setExploreSport(exploreSportDraft); setExploreLevel(exploreLevelDraft); setExploreDate(exploreDateDraft); } }} /></label><label><span>Sport</span><select value={exploreSportDraft} onChange={(event) => setExploreSportDraft(event.target.value as Sport | "all")}><option value="all">All sports</option>{sports.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></label><label><span>Level</span><select value={exploreLevelDraft} onChange={(event) => setExploreLevelDraft(event.target.value)}><option value="all">All levels</option><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></label><label><span>When</span><select value={exploreDateDraft} onChange={(event) => setExploreDateDraft(event.target.value as "all" | "week")}><option value="all">Any date</option><option value="week">Next 7 days</option></select></label><button type="button" className="explore-filter-search-button" onClick={() => { setExploreSearch(exploreSearchDraft); setExploreSport(exploreSportDraft); setExploreLevel(exploreLevelDraft); setExploreDate(exploreDateDraft); }}>Search</button><button type="button" className="explore-filter-reset" onClick={() => { setExploreSearchDraft(""); setExploreSearch(""); setExploreSportDraft("all"); setExploreSport("all"); setExploreLevelDraft("all"); setExploreLevel("all"); setExploreDateDraft("all"); setExploreDate("all"); }} disabled={!exploreSearch && exploreSport === "all" && exploreLevel === "all" && exploreDate === "all"}>Reset</button></div>}
           {visibleTournaments.length ? visibleTournaments.map((tournament) => (
             <button className="tournament-card" key={tournament.id} onClick={() => void openTournament(tournament.id)} disabled={busyId === tournament.id}>
               <span className="tournament-card-date"><strong>{new Date(`${tournament.tournament_date}T00:00:00`).toLocaleDateString("en-IN", { day: "2-digit" })}</strong><small>{new Date(`${tournament.tournament_date}T00:00:00`).toLocaleDateString("en-IN", { month: "short" })}</small></span>

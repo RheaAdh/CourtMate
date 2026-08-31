@@ -136,7 +136,7 @@ COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
   python -m backend.seed_synthetic_firestore --reset-synthetic
 ```
 
-The refreshed dataset includes upcoming, pending, waitlisted, awaiting-feedback, and completed games; generated-avatar profiles; group chat; notifications; private feedback and CMR history; Home activity cards with carousel media; and registration, live, and completed knockout tournaments. Demo media uses generated avatars/shapes rather than photographs of real people.
+The refreshed dataset includes upcoming, pending, waitlisted, two awaiting-feedback games (one empty and one one-response-away from completion), completed games, generated-avatar profiles, group chat, notifications, private feedback and multi-sport CMR history, Home activity cards with carousel media, and registration, live, and completed knockout tournaments. Demo media uses generated avatars/shapes rather than photographs of real people.
 
 For a faster social-only reset that skips unrelated requests, notifications, and tournament writes, add `--social-only` to the replacement command.
 
@@ -223,6 +223,6 @@ gcloud run deploy courtmate-api \
 
 The pasted Google Cloud free-tier limits are usage limits, not a spend cap. Set a billing budget alert in Cloud Billing and monitor Firestore reads/writes and Cloud Run requests.
 
-Profile photos and session photos upload directly from an authenticated browser to Firebase Storage, then the app saves the generated download URL through the API. Profile files use `profile-images/{firebase_uid}/...` and are limited to JPG, PNG, or WebP files under 5 MB; game-post photos use `social-posts/{firebase_uid}/...` and are limited to 8 MB. Deploy the included `storage.rules` before enabling uploads in a deployed environment.
+Profile photos upload through the authenticated API to Firebase Storage, which avoids browser Storage CORS and signed-URL setup; the API saves a tokenized download URL on the player. Profile files use `profiles/{firebase_uid}/...` and are limited to JPG, PNG, or WebP files under 5 MB. Game-post photos use `social-posts/{firebase_uid}/...` and are limited to 8 MB. Set `COURTMATE_PROFILE_BUCKET` when using a dedicated bucket, or the API falls back to `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` and then `{GOOGLE_CLOUD_PROJECT}.firebasestorage.app`. Deploy the included `storage.rules` before enabling browser-based Storage features in a deployed environment.
 
 If the traceback shows `/opt/homebrew/anaconda3/site-packages`, Uvicorn was started outside the project environment. Activate `.venv` first or run it explicitly with `.venv/bin/python -m uvicorn`.
