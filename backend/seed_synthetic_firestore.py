@@ -320,6 +320,32 @@ def seed_additional_sessions(repository: FirestoreRepository, players: list[Play
     return seeded
 
 
+def make_leaderboard_sessions(players: list[Player], today: date) -> list[Session]:
+    """Create enough completed sport-area history for the leaderboard demo."""
+    areas = ["Whitefield", "Brookefield", "Varthur", "Indiranagar", "Koramangala", "HSR Layout"]
+    sports = ["tennis", "padel", "pickleball", "badminton", "squash", "table_tennis"]
+    sessions: list[Session] = []
+    for area_index, area in enumerate(areas):
+        for sport_index, sport in enumerate(sports):
+            eligible = [player for player in players if sport in player.cmr_ratings and player.area == area]
+            eligible += [player for player in players if sport in player.cmr_ratings and player not in eligible]
+            if len(eligible) < 4:
+                continue
+            slug = re.sub(r"[^a-z0-9]+", "-", area.lower()).strip("-")
+            for game_index in range(3):
+                confirmed = [eligible[(game_index + offset) % len(eligible)].id for offset in range(4)]
+                sessions.append(make_session(
+                    f"demo-leaderboard-{slug}-{sport}-{game_index + 1}",
+                    f"{area} {sport.replace('_', ' ').title()} Circle {game_index + 1}",
+                    confirmed[0], sport, area,
+                    today - timedelta(days=8 + area_index * 2 + game_index * 11),
+                    time(7 + (sport_index % 3) * 5), time(9 + (sport_index % 3) * 5),
+                    2.5 + (sport_index % 3) * 0.2, 4.2 + (area_index % 2) * 0.3,
+                    "social" if game_index % 2 else "casual", confirmed, status="completed",
+                ))
+    return sessions
+
+
 def make_notification(notification_id: str, player_id: str, kind: str, title: str, message: str, session_id: str, now: datetime, request_id: str | None = None, actor_id: str | None = None, read: bool = False) -> AppNotification:
     return AppNotification(
         id=notification_id,
@@ -412,6 +438,7 @@ def seed(replace_social: bool = False, social_only: bool = False, reset_syntheti
     ]
     private_session = make_session("demo-private-apartment-game", "Apartment Friends Only", rhea_id, "tennis", "Whitefield", today + timedelta(days=2), time(20), time(22), 3.0, 4.5, "social", [rhea_id, "demo-neil"])
     sessions.append(private_session.model_copy(update={"visibility": "private"}))
+    sessions.extend(make_leaderboard_sessions(players, today))
     for session in sessions:
         repository.save_session(session)
     for player in players:

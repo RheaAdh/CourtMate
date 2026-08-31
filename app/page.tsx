@@ -511,8 +511,8 @@ function ChatIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-4.5 3v-3H5a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z" /><path d="M7 10h10M7 13.5h6" /></svg>;
 }
 
-function PeopleIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3" /><path d="M3.5 19c.4-3.2 2.2-5 5.5-5s5.1 1.8 5.5 5" /><path d="M15 6.5a2.7 2.7 0 0 1 0 5.2M16 14c2.8.3 4.2 1.9 4.5 4.5" /></svg>;
+function MapIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 5 6-2 6 2 6-2v16l-6 2-6-2-6 2V5Z" /><path d="M9 3v16M15 5v16" /></svg>;
 }
 
 function CopyIcon() {
@@ -757,6 +757,7 @@ export default function Home() {
   const activityLoadVersionRef = useRef(0);
   const groupSpaceCacheRef = useRef(new Map<string, GroupSpaceCacheEntry>());
   const groupSpaceRequestRef = useRef(0);
+  const sharedGameHandledRef = useRef("");
 
   useEffect(() => {
     const savedTheme = window.localStorage.getItem("courtmate-theme");
@@ -832,12 +833,10 @@ export default function Home() {
       setUser(nextUser);
       setAuthReady(true);
       if (nextUser) {
-        const sharedGameId = new URLSearchParams(window.location.search).get("group-space") ?? new URLSearchParams(window.location.search).get("game");
-        setActiveTab(sharedGameId ? "games" : "social");
+        setActiveTab("social");
         void loadProfile(nextUser);
         void loadNotifications(nextUser);
         void loadGamesActivity(nextUser, false, false);
-        if (sharedGameId) void openSharedGame(sharedGameId, nextUser);
       } else {
         setActiveTab("home");
         setSettingsOpen(false);
@@ -849,6 +848,18 @@ export default function Home() {
       }
     });
   }, []);
+
+  useEffect(() => {
+    if (!authReady) return;
+    const searchParams = new URLSearchParams(window.location.search);
+    const sharedGameId = searchParams.get("rally-circle");
+    if (!sharedGameId) return;
+    const handledKey = `${sharedGameId}:${user?.uid ?? "guest"}`;
+    if (sharedGameHandledRef.current === handledKey) return;
+    sharedGameHandledRef.current = handledKey;
+    setActiveTab("games");
+    void openSharedGame(sharedGameId, user);
+  }, [authReady, user]);
 
   useEffect(() => {
     if (!user) return;
@@ -880,7 +891,7 @@ export default function Home() {
   }, [workspaceGroup, viewedGroup, viewedProfile]);
 
   useEffect(() => {
-    if (viewedProfile || window.location.hash.startsWith("#player-profile-")) return;
+    if (viewedProfile || window.location.hash.startsWith("#player-profile-") || new URLSearchParams(window.location.search).has("rally-circle")) return;
     setActiveTab(profileReturnTab);
   }, [viewedProfile, profileReturnTab]);
 
@@ -2578,7 +2589,7 @@ export default function Home() {
       ? "https://court-mate-blr.vercel.app"
       : window.location.origin);
     const shareUrl = new URL("/", publicOrigin);
-    shareUrl.searchParams.set("group-space", game.id);
+    shareUrl.searchParams.set("rally-circle", game.id);
     return shareUrl.toString();
   }
 
@@ -2831,7 +2842,7 @@ export default function Home() {
       {user && <nav className="app-tabs" aria-label="CourtMate sections">
         <button className={activeTab === "social" ? "active" : ""} onClick={() => { setSocialFeedEntry("all"); selectTab("social"); }} title="Home"><span className="app-tab-icon"><HomeIcon /></span><span>Home</span></button>
         <button className={activeTab === "games" ? "active" : ""} onClick={() => selectTab("games")} title="Your games"><span className="app-tab-icon"><PickleballPaddleIcon /></span><span>Games</span></button>
-        <button className={activeTab === "communities" ? "active" : ""} onClick={() => { selectTab("communities"); void loadExploreGames(); }} title="Communities"><span className="app-tab-icon"><PeopleIcon /></span><span>Communities</span></button>
+        <button className={activeTab === "communities" ? "active" : ""} onClick={() => { selectTab("communities"); void loadExploreGames(); }} title="Community"><span className="app-tab-icon"><MapIcon /></span><span>Community</span></button>
         <button className={activeTab === "home" ? "active" : ""} onClick={() => selectTab("home")} title="Assistant"><span className="app-tab-icon"><ChatIcon /></span><span>Assistant</span></button>
       </nav>}
       {activeTab === "home" && !user && <section className="guest-home" aria-label="CourtMate introduction">
@@ -2878,7 +2889,7 @@ export default function Home() {
         {myGroups.length > 0 && <div className="organizer-page-card"><div><span className="kicker">ORGANIZER</span><h2>Your groups</h2><p>Manage requests, chat, and feedback for groups you created.</p></div>{myGroups.map((group) => <div className="organizer-page-row" key={group.id}><div><strong>{group.group_name}</strong><small>{sportLabel(group.sport)} · {group.session_date} · {group.confirmed_player_ids.length}/{group.capacity} players</small></div><div className="organizer-page-actions"><button className="manage-group-button" onClick={() => void openGroupSpace(group)}>Group space</button><button className="manage-group-button" onClick={() => { setManagedGroupId(group.id); void loadJoinRequests(group.id); }}>Requests</button></div></div>)}{managedGroupId && <div className="request-card page-request-card"><p>Requests for <strong>{myGroups.find((group) => group.id === managedGroupId)?.group_name ?? "your group"}</strong>. Approve a player before they join.</p>{requestsLoading ? <p className="request-empty">Loading requests...</p> : joinRequests.length ? <div className="request-list">{joinRequests.map((request) => <div className="request-row" key={request.id}><div><strong>{request.player_display_name ?? request.player_id.slice(0, 10)}</strong><small className={`status-badge ${request.status}`}>{request.status}</small></div>{request.status === "pending" && <div className="request-actions"><button onClick={() => void decideJoinRequest(request.id, "approved")}>Approve</button><button onClick={() => void decideJoinRequest(request.id, "declined")}>Decline</button></div>}</div>)}</div> : <p className="request-empty">No requests waiting for approval.</p>}</div>}</div>}
       </section>}
 
-      {activeTab === "communities" && user && <CommunityHub apiUrl={apiUrl} authorizedFetch={authorizedFetch} currentCmr={profile?.cmr_ratings?.[selectedSport]} gamesLogged={profile?.cmr_game_counts?.[selectedSport] ?? 0} initialLatitude={profile?.latitude} initialLongitude={profile?.longitude} initialArea={profile?.area} />}
+      {activeTab === "communities" && user && <CommunityHub apiUrl={apiUrl} authorizedFetch={authorizedFetch} currentCmr={profile?.cmr_ratings?.[selectedSport]} gamesLogged={profile?.cmr_game_counts?.[selectedSport] ?? 0} requestedSessionIds={myRequests.filter(({ request }) => request.status === "pending" || request.status === "waitlisted").map(({ request }) => request.session_id)} joinedSessionIds={Array.from(new Set([...approvedGames, ...myGroups].map((game) => game.id)))} onOpenExistingGame={(_, status) => { setActiveTab("games"); setGamesViewTab(status === "joined" ? "confirmed" : "pending"); }} initialLatitude={profile?.latitude} initialLongitude={profile?.longitude} initialArea={profile?.area} />}
 
       {activeTab === "profile" && !viewedProfile && <section className="page-view profile-page">
         {user && profile && <section className="player-profile-hero">

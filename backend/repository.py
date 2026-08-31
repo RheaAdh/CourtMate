@@ -276,9 +276,11 @@ class FirestoreRepository:
     def __init__(self, project: str | None = None) -> None:
         try:
             from google.cloud import firestore
+            from google.cloud.firestore_v1.base_query import FieldFilter
         except ImportError as error:
             raise RuntimeError("Install google-cloud-firestore to use the Firestore datastore") from error
         self.client = firestore.Client(project=project or os.getenv("GOOGLE_CLOUD_PROJECT"))
+        self._FieldFilter = FieldFilter
         self.max_session_reads = int(os.getenv("COURTMATE_MAX_SESSION_READS", "100"))
         self.max_player_reads = int(os.getenv("COURTMATE_MAX_PLAYER_READS", "500"))
 
@@ -336,7 +338,7 @@ class FirestoreRepository:
 
     def list_feedback(self, session_id: str | None = None) -> list[Feedback]:
         collection = self.client.collection("feedback")
-        documents = collection.where("session_id", "==", session_id).limit(1000).stream() if session_id else collection.limit(1000).stream()
+        documents = collection.where(filter=self._FieldFilter("session_id", "==", session_id)).limit(1000).stream() if session_id else collection.limit(1000).stream()
         return _latest_feedback_by_submission([Feedback.model_validate(document.to_dict() or {}) for document in documents])
 
     def save_activity_proof(self, proof: ActivityProof) -> ActivityProof:
@@ -347,9 +349,9 @@ class FirestoreRepository:
     def list_activity_proofs(self, session_id: str | None = None, player_id: str | None = None) -> list[ActivityProof]:
         collection = self.client.collection("activity_proofs")
         if session_id:
-            documents = collection.where("session_id", "==", session_id).limit(100).stream()
+            documents = collection.where(filter=self._FieldFilter("session_id", "==", session_id)).limit(100).stream()
         elif player_id:
-            documents = collection.where("player_id", "==", player_id).limit(100).stream()
+            documents = collection.where(filter=self._FieldFilter("player_id", "==", player_id)).limit(100).stream()
         else:
             documents = collection.limit(100).stream()
         proofs = [ActivityProof.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
@@ -361,7 +363,7 @@ class FirestoreRepository:
         return post
 
     def list_chat_posts(self, session_id: str) -> list[ChatPost]:
-        documents = self.client.collection("chat_posts").where("session_id", "==", session_id).limit(100).stream()
+        documents = self.client.collection("chat_posts").where(filter=self._FieldFilter("session_id", "==", session_id)).limit(100).stream()
         posts = [ChatPost.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
         return sorted(posts, key=lambda post: post.created_at)
 
@@ -404,7 +406,7 @@ class FirestoreRepository:
         return comment
 
     def list_social_comments(self, post_id: str) -> list[SocialComment]:
-        documents = self.client.collection("social_comments").where("post_id", "==", post_id).limit(100).stream()
+        documents = self.client.collection("social_comments").where(filter=self._FieldFilter("post_id", "==", post_id)).limit(100).stream()
         comments = [SocialComment.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
         return sorted(comments, key=lambda comment: comment.created_at)
 
@@ -424,19 +426,19 @@ class FirestoreRepository:
         return join_request
 
     def list_join_requests(self, session_id: str) -> list[JoinRequest]:
-        documents = self.client.collection("join_requests").where("session_id", "==", session_id).limit(100).stream()
+        documents = self.client.collection("join_requests").where(filter=self._FieldFilter("session_id", "==", session_id)).limit(100).stream()
         return [JoinRequest.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
 
     def list_join_requests_for_player(self, player_id: str) -> list[JoinRequest]:
-        documents = self.client.collection("join_requests").where("player_id", "==", player_id).limit(100).stream()
+        documents = self.client.collection("join_requests").where(filter=self._FieldFilter("player_id", "==", player_id)).limit(100).stream()
         return [JoinRequest.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
 
     def list_sessions_by_organizer(self, organizer_id: str) -> list[Session]:
-        documents = self.client.collection("sessions").where("organizer_id", "==", organizer_id).limit(self.max_session_reads).stream()
+        documents = self.client.collection("sessions").where(filter=self._FieldFilter("organizer_id", "==", organizer_id)).limit(self.max_session_reads).stream()
         return [self._as_session(document) for document in documents]
 
     def list_sessions_for_player(self, player_id: str) -> list[Session]:
-        documents = self.client.collection("sessions").where("confirmed_player_ids", "array_contains", player_id).limit(self.max_session_reads).stream()
+        documents = self.client.collection("sessions").where(filter=self._FieldFilter("confirmed_player_ids", "array_contains", player_id)).limit(self.max_session_reads).stream()
         return [self._as_session(document) for document in documents]
 
     def save_session(self, session: Session) -> Session:
@@ -450,12 +452,12 @@ class FirestoreRepository:
         return membership
 
     def get_community_membership(self, community_id: str, player_id: str) -> CommunityMembership | None:
-        documents = self.client.collection("community_memberships").where("community_id", "==", community_id).where("player_id", "==", player_id).limit(1).stream()
+        documents = self.client.collection("community_memberships").where(filter=self._FieldFilter("community_id", "==", community_id)).where(filter=self._FieldFilter("player_id", "==", player_id)).limit(1).stream()
         document = next(iter(documents), None)
         return CommunityMembership.model_validate({**(document.to_dict() or {}), "id": document.id}) if document else None
 
     def list_community_memberships_for_player(self, player_id: str) -> list[CommunityMembership]:
-        documents = self.client.collection("community_memberships").where("player_id", "==", player_id).limit(100).stream()
+        documents = self.client.collection("community_memberships").where(filter=self._FieldFilter("player_id", "==", player_id)).limit(100).stream()
         memberships = [CommunityMembership.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
         return sorted(memberships, key=lambda item: item.joined_at, reverse=True)
 
@@ -518,11 +520,11 @@ class FirestoreRepository:
         return document.exists and (document.to_dict() or {}).get("status", "accepted") == "pending"
 
     def list_followers(self, player_id: str) -> list[FollowRecord]:
-        documents = self.client.collection("follows").where("following_id", "==", player_id).limit(self.max_player_reads).stream()
+        documents = self.client.collection("follows").where(filter=self._FieldFilter("following_id", "==", player_id)).limit(self.max_player_reads).stream()
         return [FollowRecord.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents if (document.to_dict() or {}).get("status", "accepted") == "accepted"]
 
     def list_following(self, player_id: str) -> list[FollowRecord]:
-        documents = self.client.collection("follows").where("follower_id", "==", player_id).limit(self.max_player_reads).stream()
+        documents = self.client.collection("follows").where(filter=self._FieldFilter("follower_id", "==", player_id)).limit(self.max_player_reads).stream()
         return [FollowRecord.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents if (document.to_dict() or {}).get("status", "accepted") == "accepted"]
 
     def save_search_document(self, document: SearchDocument) -> SearchDocument:
@@ -549,7 +551,7 @@ class FirestoreRepository:
         query = self.client.collection("search_documents")
         for field, value in filters.items():
             if value is not None:
-                query = query.where(field, "==", value)
+                query = query.where(filter=self._FieldFilter(field, "==", value))
         vector_query = query.find_nearest(
             vector_field="embedding",
             query_vector=Vector(query_vector),
