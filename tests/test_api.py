@@ -1086,7 +1086,7 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(session["skill_max"], 4.0)
         self.assertEqual(session["style"], "competitive")
 
-    def test_group_and_tournament_creation_reject_invalid_schedule(self):
+    def test_group_creation_rejects_invalid_schedule(self):
         past_group = self.client.post(
             "/v1/groups",
             json={

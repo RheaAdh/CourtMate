@@ -3,10 +3,10 @@ from datetime import date, datetime, time, timedelta, timezone
 
 from backend.gemini import GeminiIntentParser
 from backend.matching import search_sessions, suggest_replacements
-from backend.models import Player, SearchIntent, Session, Tournament, cmr_from_legacy_rating, normalize_cmr_player, rating_for_sport
+from backend.models import Player, SearchIntent, Session, cmr_from_legacy_rating, normalize_cmr_player, rating_for_sport
 from backend.repository import InMemoryRepository
 from tests.fixtures import load_repository_fixture
-from backend.vector_search import VectorIndexer, VectorRetriever, session_to_document, tournament_to_document
+from backend.vector_search import VectorIndexer, VectorRetriever, session_to_document
 
 
 class FakeEmbeddingProvider:
@@ -52,21 +52,6 @@ class MatchingTests(unittest.TestCase):
         load_repository_fixture(repo)
         VectorIndexer(repo, provider).rebuild()
         self.assertNotIn("session__stale", {item.id for item in repo.list_search_documents()})
-
-    def test_tournament_document_uses_supported_tournament_fields(self):
-        document = tournament_to_document(Tournament(
-            id="tournament-1",
-            name="Whitefield Rally Cup",
-            sport="pickleball",
-            organizer_id="p1",
-            area="Whitefield",
-            tournament_date=date(2026, 9, 5),
-            capacity=8,
-            registration_ids=["p1", "p2"],
-            created_at=datetime(2026, 8, 30, tzinfo=timezone.utc),
-        ))
-        self.assertIn("2 registered players", document.content)
-        self.assertIn("best of 1", document.content)
 
     def test_scope_guard_accepts_court_discovery_language(self):
         parser = GeminiIntentParser()
