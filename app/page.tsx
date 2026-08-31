@@ -11,7 +11,6 @@ import { CommunityHub } from "./community-hub";
 import { PostGameFeedbackPanel } from "./post-game-feedback";
 import { SocialFeed } from "./social-feed";
 import { TennisBallLoader } from "./tennis-ball-loader";
-import { TournamentHub } from "./tournament-hub";
 
 type Sport = "pickleball" | "badminton" | "tennis" | "padel" | "squash" | "table_tennis";
 type Gender = "woman" | "man" | "non_binary" | "prefer_not_to_say";
@@ -181,22 +180,8 @@ type SearchResponse = {
   action: "join_existing" | "create_group";
   message: string;
   recommendations: { session: Session; score: number; reasons: { explanation: string } }[];
-  tournaments?: ChatTournament[];
   group_proposal?: GroupProposal;
   scope?: "court_discovery" | "sports_general" | "out_of_scope";
-};
-
-type ChatTournament = {
-  id: string;
-  name: string;
-  sport: Sport;
-  area: string;
-  venue_name?: string | null;
-  tournament_date: string;
-  capacity: number;
-  status: "registration" | "in_progress" | "completed" | "cancelled";
-  registration_ids: string[];
-  my_registration_status?: "pending" | "registered" | "waitlisted" | "declined" | "withdrawn" | null;
 };
 
 type PlayerProfile = {
@@ -340,12 +325,11 @@ type ChatPost = {
 
 type AppNotification = {
   id: string;
-  kind: "game_match" | "game_reminder" | "game_completed" | "join_request" | "request_update" | "tournament_request" | "tournament_update" | "follow";
+  kind: "game_match" | "game_reminder" | "game_completed" | "join_request" | "request_update" | "follow";
   title: string;
   message: string;
   session_id: string;
   request_id?: string | null;
-  tournament_id?: string | null;
   actor_id?: string | null;
   read: boolean;
   created_at: string;
@@ -376,7 +360,7 @@ type CMRHistoryPoint = {
   delta?: number | null;
 };
 
-type AppTab = "home" | "social" | "games" | "profile" | "tournaments" | "communities";
+type AppTab = "home" | "social" | "games" | "profile" | "communities";
 type GamesViewTab = "explore" | "pending" | "upcoming" | "awaiting_feedback" | "history" | "requested" | "confirmed" | "past" | "incoming";
 type ConnectionsTab = "following" | "followers";
 
@@ -464,6 +448,11 @@ function localDateInput(): string {
   return new Date(now.getTime() - offset).toISOString().slice(0, 10);
 }
 
+function localTimeInput(): string {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+}
+
 function isPerformanceQuery(query: string): boolean {
   const normalized = query.toLowerCase().replace(/\s+/g, " ").trim();
   if (!normalized) return false;
@@ -499,10 +488,6 @@ function HomeIcon() {
 
 function PickleballPaddleIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.2 3.2h2.3a5 5 0 0 1 5 5v2.7a5 5 0 1 1-10 0V8.2a5 5 0 0 1 2.7-5Z" transform="rotate(-35 9.8 9.5)" /><path d="M13.5 14.6 20 21M17.7 18.8l-1.8 1.8M19.2 20.3l-1.8 1.8M8.3 7.5h.01M11.1 8.5h.01M8.8 10.6h.01M11.7 11.5h.01" /></svg>;
-}
-
-function TournamentIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h12v4a6 6 0 0 1-12 0V4ZM4 4h2v3a4 4 0 0 1-4-4v-1h4M20 4h2v-2h-4M12 14v5M8 21h8" /><path d="M18 5a4 4 0 0 0 4-4" /></svg>;
 }
 
 function SocialIcon() {
@@ -603,15 +588,31 @@ function SportyAvatarStudio({ profileImageUrl, apiUrl, authorizedFetch, onUseAva
   }
 
   async function chooseAvatar(dataUrl: string) {
-    const [header, encoded] = dataUrl.split(",");
-    const mimeType = header.match(/data:(.*?);/)?.[1] ?? "image/png";
-    const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
-    onUseAvatar(new File([bytes], `courtmate-${sport}-avatar.png`, { type: mimeType }));
-    setOpen(false);
+    try {
+      const image = new Image();
+      image.src = dataUrl;
+      await new Promise<void>((resolve, reject) => {
+        image.onload = () => resolve();
+        image.onerror = () => reject(new Error("Could not prepare this avatar"));
+      });
+      const canvas = document.createElement("canvas");
+      canvas.width = 800;
+      canvas.height = 800;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Could not prepare this avatar");
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const pngDataUrl = canvas.toDataURL("image/png");
+      const encoded = pngDataUrl.split(",")[1];
+      const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+      onUseAvatar(new File([bytes], `courtmate-${sport}-avatar.png`, { type: "image/png" }));
+      setOpen(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not use this avatar");
+    }
   }
 
   return <div className="sporty-avatar-studio">
-    <button type="button" className="profile-edit-bio-button" onClick={() => { setOpen((current) => !current); setError(""); }} disabled={!profileImageUrl}>{open ? "Close avatar studio" : "Create sporty avatar"}</button>
+    <button type="button" className="profile-edit-bio-button" onClick={() => { setOpen((current) => !current); setError(""); }}>{open ? "Close avatar studio" : "Create sporty avatar"}</button>
     {open && <div className="sporty-avatar-panel"><div><strong>Make your player card yours</strong><small>Gemini will keep your face and create sport-themed options.</small></div><div className="sporty-avatar-controls"><select value={sport} onChange={(event) => setSport(event.target.value as Sport)} aria-label="Choose avatar sport">{sportOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select><button type="button" className="dark-button" onClick={() => void createOptions()} disabled={loading}>{loading ? "Creating..." : "Create options"}</button></div>{error && <p className="sporty-avatar-error">{error}</p>}{options.length > 0 && <div className="sporty-avatar-options">{options.map((option, index) => <button type="button" key={`${option.slice(0, 20)}-${index}`} onClick={() => void chooseAvatar(option)}><img src={option} alt={`${sportLabel(sport)} avatar option ${index + 1}`} /><span>Use option {index + 1}</span></button>)}</div>}</div>}
   </div>;
 }
@@ -624,7 +625,6 @@ export default function Home() {
   const [searchScope, setSearchScope] = useState<"court_discovery" | "sports_general" | "out_of_scope" | "performance">("court_discovery");
   const [selectedSport, setSelectedSport] = useState<Sport>("pickleball");
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [tournamentResults, setTournamentResults] = useState<ChatTournament[]>([]);
   const [joiningSessionId, setJoiningSessionId] = useState<string | null>(null);
   const [lastChatRequest, setLastChatRequest] = useState<{ name: string; status: JoinRequest["status"] } | null>(null);
   const [isListening, setIsListening] = useState(false);
@@ -725,7 +725,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!authReady) return;
-    if (user && pathname === "/") router.replace("/home");
+    if (user && pathname === "/") router.replace(`/home${window.location.search}`);
     if (!user && pathname === "/home") router.replace("/");
   }, [authReady, pathname, router, user]);
 
@@ -774,7 +774,6 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("tournament")) setActiveTab("tournaments");
     if ("serviceWorker" in navigator) {
       if (process.env.NODE_ENV === "production") {
         void navigator.serviceWorker.register("/sw.js").catch(() => undefined);
@@ -791,8 +790,7 @@ export default function Home() {
       setAuthReady(true);
       if (nextUser) {
         const sharedGameId = new URLSearchParams(window.location.search).get("group-space") ?? new URLSearchParams(window.location.search).get("game");
-        const hasTournamentLink = Boolean(new URLSearchParams(window.location.search).get("tournament"));
-        setActiveTab(sharedGameId ? "games" : hasTournamentLink ? "tournaments" : "social");
+        setActiveTab(sharedGameId ? "games" : "social");
         void loadProfile(nextUser);
         void loadNotifications(nextUser);
         void loadGamesActivity(nextUser, false, false);
@@ -1154,10 +1152,6 @@ export default function Home() {
       void loadGamesActivity();
       return;
     }
-    if (notification.kind === "tournament_request" || notification.kind === "tournament_update") {
-      setActiveTab("tournaments");
-      return;
-    }
     if (notification.kind === "follow" && notification.actor_id) {
       void viewPlayerProfile(notification.actor_id);
       return;
@@ -1344,7 +1338,6 @@ export default function Home() {
     }
     setShowCreateGame(false);
     setShowCraftedGame(false);
-    setTournamentResults([]);
     setLoading(true);
     setLoadingMessage(isPerformanceQuery(requestQuery) ? "Reading your CourtMate history..." : "Finding your best match...");
     const loadingTimer = window.setTimeout(() => setLoadingMessage(isPerformanceQuery(requestQuery) ? "Comparing your recent form..." : "Finding your best match..."), 420);
@@ -1358,7 +1351,6 @@ export default function Home() {
         const payload = await response.json().catch(() => ({})) as { answer?: string; detail?: string };
         if (!response.ok) throw new Error(payload.detail ?? "Performance coach is unavailable");
         setSessions([]);
-        setTournamentResults([]);
         setGroupProposal(null);
         setSearchScope("performance");
         setChatMessages((messages) => [...messages.slice(-8), { id: `${requestTimestamp}-assistant`, role: "assistant", text: payload.answer ?? "I could not read that performance question." }]);
@@ -1377,7 +1369,6 @@ export default function Home() {
       const payload = await response.json().catch(() => ({})) as SearchResponse & { detail?: string };
       if (!response.ok) throw new Error(payload.detail ?? "The game search is temporarily unavailable");
       const isInScope = payload.scope !== "out_of_scope";
-      setTournamentResults(payload.tournaments ?? []);
       setSessions(payload.recommendations.map((item: { session: Session; score: number; reasons: { explanation: string } }) => ({
         ...item.session,
         open_slots: item.session.capacity - item.session.confirmed_player_ids.length,
@@ -1387,7 +1378,7 @@ export default function Home() {
       setSearchScope(payload.scope ?? "court_discovery");
       setGroupProposal(isInScope ? payload.group_proposal ?? null : null);
       setGroupNameDraft(payload.group_proposal?.group_name ?? "");
-      const shouldStartCreation = isInScope && !payload.tournaments?.length && payload.recommendations.length === 0 && Boolean(payload.group_proposal);
+      const shouldStartCreation = isInScope && payload.recommendations.length === 0 && Boolean(payload.group_proposal);
       const needsSport = shouldStartCreation && !sportFromText(requestQuery);
       setShowCraftedGame(false);
       if (shouldStartCreation) setCreationStep(needsSport ? "sport" : "time");
@@ -1459,7 +1450,6 @@ export default function Home() {
     };
     setSelectedSport(requestSport);
     setSessions([]);
-    setTournamentResults([]);
     setGroupProposal(nextProposal);
     setGroupNameDraft(nextProposal.group_name);
     setShowCraftedGame(false);
@@ -1697,7 +1687,6 @@ export default function Home() {
     setChatMessages([]);
     setSearchScope("court_discovery");
     setSessions([]);
-    setTournamentResults([]);
     setGroupProposal(null);
     setShowCreateGame(false);
     setShowCraftedGame(false);
@@ -1733,7 +1722,6 @@ export default function Home() {
 
   function startScoreEntry() {
     setSessions([]);
-    setTournamentResults([]);
     setGroupProposal(null);
     setShowCreateGame(false);
     setShowCraftedGame(false);
@@ -1756,7 +1744,6 @@ export default function Home() {
 
   function startFeedbackEntry() {
     setSessions([]);
-    setTournamentResults([]);
     setGroupProposal(null);
     setShowCreateGame(false);
     setShowCraftedGame(false);
@@ -1833,13 +1820,6 @@ export default function Home() {
     }
   }
 
-  function openTournamentFromChat(tournamentId: string) {
-    const url = new URL(window.location.href);
-    url.searchParams.set("tournament", tournamentId);
-    window.history.pushState({ courtMatePage: "tournament" }, "", `${url.pathname}${url.search}`);
-    setTournamentResults([]);
-    setActiveTab("tournaments");
-  }
 
   async function postHomeScore(message: string) {
     if (!scoreSessionId || !message.trim()) return;
@@ -1970,11 +1950,20 @@ export default function Home() {
       setToast("Sign in with Google before creating a group");
       return;
     }
+    const today = localDateInput();
+    if (!createGroupDraft.session_date || createGroupDraft.session_date < today) {
+      setToast("Choose today or a future game date");
+      return;
+    }
+    if (!createGroupDraft.start_time || !createGroupDraft.end_time) {
+      setToast("Choose a start and end time");
+      return;
+    }
     if (createGroupDraft.end_time <= createGroupDraft.start_time) {
       setToast("Game end time must be after its start time");
       return;
     }
-    if (createGroupDraft.session_date === localDateInput() && createGroupDraft.start_time <= new Date().toTimeString().slice(0, 5)) {
+    if (createGroupDraft.session_date === today && createGroupDraft.start_time <= localTimeInput()) {
       setToast("Game start time must be in the future");
       return;
     }
@@ -2562,8 +2551,9 @@ export default function Home() {
     const dateLabel = new Date(`${game.session_date}T12:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short" });
     const location = game.venue_name ? `${game.venue_name}, ${game.area}` : game.area;
     const groupSpaceUrl = getGroupSpaceUrl(game);
-    const title = `Join me for ${game.group_name}`;
-    const message = `${sportLabel(game.sport)} · ${dateLabel} · ${game.start_time}–${game.end_time}\n${location}\n\nOpen the CourtMate Group Space: ${groupSpaceUrl}`;
+    const sportEmoji: Record<Sport, string> = { pickleball: "🏓", badminton: "🏸", tennis: "🎾", padel: "🎾", squash: "🎾", table_tennis: "🏓" };
+    const title = `${sportEmoji[game.sport]} Join me for ${game.group_name}`;
+    const message = `${sportEmoji[game.sport]} ${sportLabel(game.sport)} · 📅 ${dateLabel} · ⏰ ${game.start_time}–${game.end_time}\n📍 ${location}\n\n🔗 Open the CourtMate Group Space: ${groupSpaceUrl}`;
     try {
       if (navigator.share) {
         await navigator.share({ title, text: message });
@@ -2773,7 +2763,6 @@ export default function Home() {
           {chatMessages.map((message) => <div className={`chat-message ${message.role}-message`} key={message.id}><span className="chat-message-mark">{message.role === "assistant" ? "CM" : initials(user?.displayName ?? "You")}</span><div>{message.imageUrl && <img className="chat-attachment-preview" src={message.imageUrl} alt="Attached wearable screenshot" />}{message.role === "assistant" ? <AssistantReply text={message.text} /> : <p>{message.text}</p>}</div></div>)}
           {loading && <TennisBallLoader label="Finding your best match" detail={loadingMessage} />}
           {!loading && searchScope === "court_discovery" && sessions.length > 0 && <div className="chat-message assistant-message result-message"><span className="chat-message-mark">CM</span><div className="result-message-body"><p>{`I found ${sessions.length} option${sessions.length === 1 ? "" : "s"}. Pick one to see the group, request a spot, or skip it.`}</p><div className="chat-choice-list">{sessions.map((session, index) => <article className={`session-card chat-choice-card ${index === 0 ? "featured" : ""}`} key={session.id}><div className="card-top"><span className="date-badge"><strong>{new Date(session.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><small>{new Date(session.session_date).getDate()}</small></span><div className="session-meta"><div className="session-title-row"><h3>{session.group_name}</h3><span className="fit-score">{Math.round(session.score * 100)}% fit</span></div><p>{sportLabel(session.sport)} · {session.start_time} – {session.end_time} · {session.area}</p></div></div><div className="tags"><span className="tag rating">{sportLabel(session.sport)} skill {session.skill_min.toFixed(1)}–{session.skill_max.toFixed(1)}</span><span className="tag">{session.style}</span><span className="tag open">{session.open_slots} spots open</span></div><div className="chat-choice-actions"><button className="join-button secondary-button" onClick={() => void viewGroup(session.id)} disabled={loadingGroupId === session.id}>{loadingGroupId === session.id ? "Loading" : "View group"}</button>{session.organizer_id === user?.uid ? <span className="status-badge approved">Your group</span> : <><button className="join-button chat-join-action" onClick={() => void joinSession(session.id, session.group_name, session.organizer_id)} disabled={joiningSessionId !== null}>{joiningSessionId === session.id ? "Requesting..." : session.open_slots > 0 ? "Request to join" : "Join waitlist"}<span>↗</span></button><button className="chat-skip-action" type="button" onClick={() => skipSession(session.id)}>Not for me</button></>}</div></article>)}</div></div></div>}
-        {!loading && tournamentResults.length > 0 && <div className="chat-message assistant-message result-message"><span className="chat-message-mark">CM</span><div className="result-message-body"><p>I found {tournamentResults.length} tournament{tournamentResults.length === 1 ? "" : "s"}. Choose one to see the draw, register, or share it.</p><div className="chat-tournament-list">{tournamentResults.map((tournament) => { const registeredCount = tournament.registration_ids.length; const registrationLabel = tournament.my_registration_status === "pending" ? "Request pending" : tournament.my_registration_status === "registered" ? "Registered" : tournament.my_registration_status === "waitlisted" ? "Waitlisted" : `${Math.max(tournament.capacity - registeredCount, 0)} spots`; return <article className="chat-tournament-card" key={tournament.id}><div className="chat-tournament-date"><strong>{new Date(`${tournament.tournament_date}T00:00:00`).toLocaleDateString("en-IN", { weekday: "short" })}</strong><span>{new Date(`${tournament.tournament_date}T00:00:00`).getDate()}</span></div><div className="chat-tournament-copy"><strong>{tournament.name}</strong><small>{sportLabel(tournament.sport)} · {tournament.area}{tournament.venue_name ? ` · ${tournament.venue_name}` : ""}</small><span>{registrationLabel} · {tournament.status.replace("_", " ")}</span></div><button type="button" className="chat-tournament-open" onClick={() => openTournamentFromChat(tournament.id)}>View &amp; register <span>→</span></button></article>; })}</div></div></div>}
           {!loading && lastChatRequest && <div className="chat-request-confirmation" role="status"><div><strong>{lastChatRequest.status === "waitlisted" ? "You are on the waitlist" : "Request sent"}</strong><span>{lastChatRequest.name}</span></div><button type="button" onClick={() => { setGamesViewTab(lastChatRequest.status === "approved" ? "upcoming" : "pending"); selectTab("games"); }}>{lastChatRequest.status === "approved" ? "View My games" : "Check Pending requests"} <span>→</span></button></div>}
           {!loading && showCraftedGame && groupProposal && <div className="chat-message assistant-message crafted-game-message"><span className="chat-message-mark">CM</span><div className="crafted-game-card"><span className="eyebrow">GAME PLAN</span><p className="create-guide-question">{creationQuestion()}</p><strong>{groupNameDraft}</strong><p>{creationPlanLabel()}</p><div className="tags"><span className="tag rating">CMR {createCmrMin}–{createCmrMax}</span><span className="tag">{createGroupDraft.style}</span></div><div className="crafted-game-actions"><button className="join-button create-button" type="button" onClick={() => void createGroup()} disabled={createGroupLoading}>{createGroupLoading ? "Creating..." : "Create game"}<span>↗</span></button></div></div></div>}
           {!loading && <div className="chat-quick-replies" aria-label="Suggested replies">{quickPrompts().map((prompt) => <button type="button" key={prompt} onClick={() => prompt === "Create this game" ? openCreateGame() : sendQuickPrompt(prompt)}>{prompt}</button>)}</div>}
@@ -2806,7 +2795,6 @@ export default function Home() {
       </section>}
 
       {activeTab === "communities" && user && <CommunityHub apiUrl={apiUrl} authorizedFetch={authorizedFetch} sessions={exploreGames} currentUserId={user.uid} currentCmr={profile?.cmr_ratings?.[selectedSport]} gamesLogged={profile?.cmr_game_counts?.[selectedSport] ?? 0} initialLatitude={profile?.latitude} initialLongitude={profile?.longitude} initialArea={profile?.area} loading={exploreLoading} onJoinGame={(game) => void joinSession(game.id, game.group_name, game.organizer_id)} onViewGroup={(game) => void viewGroup(game.id)} />}
-      {activeTab === "tournaments" && <TournamentHub apiUrl={apiUrl} currentUserId={user?.uid} playerArea={profile?.area} authorizedFetch={authorizedFetch} onToast={setToast} onSignIn={() => void signIn()} />}
 
       {activeTab === "profile" && !viewedProfile && <section className="page-view profile-page">
         {user && profile && <section className="player-profile-hero">

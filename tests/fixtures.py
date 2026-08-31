@@ -94,7 +94,4 @@ def load_repository_fixture(repository: InMemoryRepository) -> None:
     repository.join_requests.clear()
     repository.notifications.clear()
     repository.follows.clear()
-    repository.tournaments.clear()
-    repository.tournament_registrations.clear()
-    repository.tournament_matches.clear()
     repository.community_memberships.clear()

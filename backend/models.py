@@ -246,128 +246,6 @@ class Session(BaseModel):
         return max(self.capacity - len(self.confirmed_player_ids), 0)
 
 
-class TournamentRules(BaseModel):
-    score_label: str = "Points"
-    point_target: int = Field(ge=1, le=999, default=11)
-    win_by: int = Field(ge=1, le=99, default=2)
-    best_of: int = Field(ge=1, le=7, default=1)
-
-
-class Tournament(BaseModel):
-    id: str
-    name: str = Field(min_length=2, max_length=80)
-    sport: Sport = "pickleball"
-    organizer_id: str
-    organizer_plays: bool = True
-    area: str
-    venue_name: str | None = None
-    tournament_date: date_type
-    start_time: time = time(19)
-    end_time: time = time(21)
-    format: Literal["knockout", "round_robin"] = "knockout"
-    capacity: int = Field(ge=2, le=16)
-    cmr_min: float = Field(default=0, ge=0, le=100)
-    cmr_max: float = Field(default=100, ge=0, le=100)
-    status: Literal["registration", "in_progress", "completed", "cancelled"] = "registration"
-    registration_ids: list[str] = Field(default_factory=list)
-    created_at: datetime
-    rules: TournamentRules = Field(default_factory=TournamentRules)
-
-
-class TournamentListItem(Tournament):
-    my_registration_status: Literal["pending", "registered", "waitlisted", "declined", "withdrawn"] | None = None
-
-
-class TournamentRegistration(BaseModel):
-    id: str
-    tournament_id: str
-    player_id: str
-    display_name: str
-    status: Literal["pending", "registered", "waitlisted", "declined", "withdrawn"] = "pending"
-    cmr_rating: float | None = Field(default=None, ge=0, le=100)
-    created_at: datetime
-
-
-class TournamentMatch(BaseModel):
-    id: str
-    tournament_id: str
-    round_number: int = Field(ge=1)
-    match_number: int = Field(ge=1)
-    player_a_id: str | None = None
-    player_b_id: str | None = None
-    status: Literal["scheduled", "pending_confirmation", "completed", "bye"] = "scheduled"
-    score_a: int | None = Field(default=None, ge=0, le=999)
-    score_b: int | None = Field(default=None, ge=0, le=999)
-    set_scores_a: list[int] = Field(default_factory=list, max_length=7)
-    set_scores_b: list[int] = Field(default_factory=list, max_length=7)
-    winner_id: str | None = None
-    score_entered_by: str | None = None
-    confirmed_by: str | None = None
-
-
-class TournamentStanding(BaseModel):
-    rank: int
-    player_id: str
-    display_name: str
-    cmr_rating: float | None = Field(default=None, ge=0, le=100)
-    played: int = 0
-    wins: int = 0
-    losses: int = 0
-    draws: int = 0
-    points_for: int = 0
-    points_against: int = 0
-    table_points: int = 0
-
-
-class TournamentDetailsResponse(BaseModel):
-    tournament: Tournament
-    registrations: list[TournamentRegistration] = Field(default_factory=list)
-    matches: list[TournamentMatch] = Field(default_factory=list)
-    standings: list[TournamentStanding] = Field(default_factory=list)
-
-
-class TournamentListResponse(BaseModel):
-    tournaments: list[TournamentListItem]
-
-
-class CreateTournamentRequest(BaseModel):
-    name: str = Field(min_length=2, max_length=80)
-    sport: Sport = "pickleball"
-    area: str = Field(min_length=2, max_length=80)
-    venue_name: str | None = Field(default=None, max_length=120)
-    tournament_date: date_type
-    start_time: time = time(19)
-    end_time: time = time(21)
-    capacity: int = Field(ge=2, le=16, default=8)
-    format: Literal["knockout", "round_robin"] = "knockout"
-    organizer_plays: bool = True
-    cmr_min: float = Field(default=0, ge=0, le=100)
-    cmr_max: float = Field(default=100, ge=0, le=100)
-
-
-class TournamentScoreRequest(BaseModel):
-    score_a: int = Field(ge=0, le=999)
-    score_b: int = Field(ge=0, le=999)
-    set_scores_a: list[int] = Field(default_factory=list, max_length=7)
-    set_scores_b: list[int] = Field(default_factory=list, max_length=7)
-    confirm: bool = False
-
-
-class TournamentWinnerRequest(BaseModel):
-    winner_id: str = Field(min_length=1, max_length=120)
-
-
-class TournamentRegistrationDecisionRequest(BaseModel):
-    status: Literal["approved", "declined"]
-
-
-class TournamentFixtureUpdateRequest(BaseModel):
-    round_number: int = Field(ge=1)
-    match_number: int = Field(ge=1)
-    player_a_id: str = Field(min_length=1, max_length=120)
-    player_b_id: str = Field(min_length=1, max_length=120)
-
-
 class RecommendationReason(BaseModel):
     skill_fit: float
     availability_fit: float
@@ -500,7 +378,6 @@ class PlayerRecommendation(BaseModel):
 class SearchResponse(BaseModel):
     intent: SearchIntent
     recommendations: list[SessionRecommendation]
-    tournaments: list[TournamentListItem] = Field(default_factory=list)
     action: Literal["join_existing", "create_group"] = "join_existing"
     message: str = ""
     group_proposal: GroupProposal | None = None
@@ -512,7 +389,7 @@ class SearchDocument(BaseModel):
     """A sanitized, searchable projection of an operational record."""
 
     id: str
-    source_type: Literal["session", "tournament", "player", "venue", "faq"]
+    source_type: Literal["session", "player", "venue", "faq"]
     source_id: str
     content: str
     embedding: list[float] = Field(default_factory=list)
@@ -570,12 +447,11 @@ class JoinRequest(BaseModel):
 class AppNotification(BaseModel):
     id: str
     player_id: str
-    kind: Literal["game_match", "game_reminder", "game_completed", "join_request", "request_update", "tournament_request", "tournament_update", "follow"] = "game_match"
+    kind: Literal["game_match", "game_reminder", "game_completed", "join_request", "request_update", "follow"] = "game_match"
     title: str
     message: str
     session_id: str
     request_id: str | None = None
-    tournament_id: str | None = None
     actor_id: str | None = None
     read: bool = False
     created_at: datetime

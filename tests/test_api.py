@@ -237,33 +237,6 @@ class ApiFlowTests(unittest.TestCase):
         self.assertIsNone(payload["group_proposal"])
         self.assertIn("find racket-sport", payload["message"])
 
-    def test_chat_search_returns_tournaments_without_creating_a_game(self):
-        created = self.client.post(
-            "/v1/tournaments",
-            json={
-                "name": "Whitefield Tennis Ladder",
-                "sport": "tennis",
-                "area": "Whitefield",
-                "tournament_date": str(date.today() + timedelta(days=7)),
-                "capacity": 8,
-                "format": "round_robin",
-            },
-            headers={"X-CourtMate-Player-ID": "p1"},
-        )
-        self.assertEqual(created.status_code, 200)
-
-        response = self.client.post(
-            "/v1/sessions/search",
-            json={"query": "Find tennis tournaments near Whitefield"},
-            headers={"X-CourtMate-Player-ID": "p1"},
-        )
-        payload = response.json()
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(payload["scope"], "court_discovery")
-        self.assertEqual(payload["recommendations"], [])
-        self.assertEqual(payload["group_proposal"], None)
-        self.assertEqual(payload["tournaments"][0]["name"], "Whitefield Tennis Ladder")
-
     def test_general_question_is_redirected_without_random_session_results(self):
         response = self.client.post("/v1/sessions/search", json={"query": "What is the capital of France?", "player_id": "p1"})
         payload = response.json()
@@ -278,7 +251,6 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(payload["scope"], "sports_general")
         self.assertEqual(payload["recommendations"], [])
-        self.assertEqual(payload["tournaments"], [])
         self.assertIn("racket", payload["message"])
 
     def test_venue_information_question_uses_general_assistant(self):
@@ -290,7 +262,6 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(payload["scope"], "sports_general")
         self.assertEqual(payload["recommendations"], [])
-        self.assertEqual(payload["tournaments"], [])
         self.assertIn("live availability", payload["message"])
 
     def test_where_to_play_question_uses_general_assistant(self):
@@ -1115,259 +1086,34 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(session["skill_max"], 4.0)
         self.assertEqual(session["style"], "competitive")
 
-    def test_tournament_registration_fixtures_scores_and_standings(self):
-        created = self.client.post(
-            "/v1/tournaments",
+    def test_group_and_tournament_creation_reject_invalid_schedule(self):
+        past_group = self.client.post(
+            "/v1/groups",
             json={
-                "name": "Whitefield Racket Rally",
-                "sport": "pickleball",
-                "area": "Whitefield",
-                "venue_name": "East Court",
-                "tournament_date": str(date.today() + timedelta(days=7)),
-                "capacity": 4,
-                "format": "round_robin",
-            },
-            headers={"X-CourtMate-Player-ID": "p1"},
-        )
-        self.assertEqual(created.status_code, 200)
-        tournament_id = created.json()["tournament"]["id"]
-
-        for player_id in ("p2", "p3"):
-            requested = self.client.post(
-                f"/v1/tournaments/{tournament_id}/register",
-                headers={"X-CourtMate-Player-ID": player_id},
-            )
-            self.assertEqual(requested.status_code, 200)
-            self.assertEqual(requested.json()["status"], "pending")
-            organizer_notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": "p1"})
-            self.assertEqual(organizer_notifications.status_code, 200)
-            self.assertTrue(any(item["kind"] == "tournament_request" and item["tournament_id"] == tournament_id for item in organizer_notifications.json()["notifications"]))
-            approved = self.client.post(
-                f"/v1/tournaments/{tournament_id}/registrations/{requested.json()['id']}/decision",
-                json={"status": "approved"},
-                headers={"X-CourtMate-Player-ID": "p1"},
-            )
-            self.assertEqual(approved.status_code, 200)
-            self.assertEqual(approved.json()["status"], "registered")
-            player_notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": player_id})
-            self.assertEqual(player_notifications.status_code, 200)
-            self.assertTrue(any(item["kind"] == "tournament_update" and item["tournament_id"] == tournament_id for item in player_notifications.json()["notifications"]))
-
-        fixtures = self.client.post(
-            f"/v1/tournaments/{tournament_id}/fixtures",
-            headers={"X-CourtMate-Player-ID": "p1"},
-        )
-        self.assertEqual(fixtures.status_code, 200)
-        fixture_payload = fixtures.json()
-        self.assertEqual(fixture_payload["tournament"]["status"], "in_progress")
-        self.assertEqual(len(fixture_payload["matches"]), 3)
-        pairs = {frozenset((match["player_a_id"], match["player_b_id"])) for match in fixture_payload["matches"]}
-        self.assertEqual(pairs, {frozenset(("p1", "p2")), frozenset(("p1", "p3")), frozenset(("p2", "p3"))})
-
-        player_match = next(match for match in fixture_payload["matches"] if {match["player_a_id"], match["player_b_id"]} == {"p2", "p3"})
-        submitted = self.client.post(
-            f"/v1/tournaments/{tournament_id}/matches/{player_match['id']}/score",
-            json={"score_a": 11, "score_b": 8},
-            headers={"X-CourtMate-Player-ID": player_match["player_a_id"]},
-        )
-        self.assertEqual(submitted.status_code, 200)
-        self.assertEqual(submitted.json()["status"], "pending_confirmation")
-
-        confirmed = self.client.post(
-            f"/v1/tournaments/{tournament_id}/matches/{player_match['id']}/score",
-            json={"score_a": 11, "score_b": 8},
-            headers={"X-CourtMate-Player-ID": player_match["player_b_id"]},
-        )
-        self.assertEqual(confirmed.status_code, 200)
-        self.assertEqual(confirmed.json()["status"], "completed")
-
-        corrected = self.client.post(
-            f"/v1/tournaments/{tournament_id}/matches/{player_match['id']}/score",
-            json={"score_a": 9, "score_b": 11, "confirm": True},
-            headers={"X-CourtMate-Player-ID": "p1"},
-        )
-        self.assertEqual(corrected.status_code, 200)
-        self.assertEqual(corrected.json()["status"], "completed")
-        self.assertEqual(corrected.json()["score_a"], 9)
-        self.assertEqual(corrected.json()["score_b"], 11)
-
-        details = self.client.get(
-            f"/v1/tournaments/{tournament_id}",
-            headers={"X-CourtMate-Player-ID": "p1"},
-        )
-        self.assertEqual(details.status_code, 200)
-        standings = details.json()["standings"]
-        winner = next(entry for entry in standings if entry["player_id"] == player_match["player_b_id"])
-        self.assertEqual(winner["wins"], 1)
-        self.assertEqual(winner["table_points"], 3)
-
-    def test_non_playing_tournament_organizer_is_excluded_from_the_draw(self):
-        created = self.client.post(
-            "/v1/tournaments",
-            json={
-                "name": "Organiser Only Cup",
+                "query": "Create a game near Whitefield",
                 "sport": "tennis",
                 "area": "Whitefield",
-                "tournament_date": str(date.today() + timedelta(days=7)),
-                "capacity": 2,
-                "organizer_plays": False,
+                "session_date": str(date.today() - timedelta(days=1)),
+                "start_time": "19:00",
+                "end_time": "21:00",
             },
             headers={"X-CourtMate-Player-ID": "p1"},
         )
-        self.assertEqual(created.status_code, 200)
-        details = created.json()
-        tournament_id = details["tournament"]["id"]
-        self.assertFalse(details["tournament"]["organizer_plays"])
-        self.assertEqual(details["registrations"], [])
+        self.assertEqual(past_group.status_code, 422)
 
-        organizer_registration = self.client.post(
-            f"/v1/tournaments/{tournament_id}/register",
-            headers={"X-CourtMate-Player-ID": "p1"},
-        )
-        self.assertEqual(organizer_registration.status_code, 409)
-
-        for player_id in ("p2", "p3"):
-            requested = self.client.post(f"/v1/tournaments/{tournament_id}/register", headers={"X-CourtMate-Player-ID": player_id})
-            self.assertEqual(requested.status_code, 200)
-            approved = self.client.post(
-                f"/v1/tournaments/{tournament_id}/registrations/{requested.json()['id']}/decision",
-                json={"status": "approved"},
-                headers={"X-CourtMate-Player-ID": "p1"},
-            )
-            self.assertEqual(approved.status_code, 200)
-
-        fixtures = self.client.post(f"/v1/tournaments/{tournament_id}/fixtures", headers={"X-CourtMate-Player-ID": "p1"})
-        self.assertEqual(fixtures.status_code, 200)
-        match = fixtures.json()["matches"][0]
-        self.assertEqual({match["player_a_id"], match["player_b_id"]}, {"p2", "p3"})
-
-    def test_tournament_organizer_can_edit_fixture_pairing(self):
-        created = self.client.post(
-            "/v1/tournaments",
+        invalid_group = self.client.post(
+            "/v1/groups",
             json={
-                "name": "Local Fixture Test",
-                "sport": "badminton",
+                "query": "Create a game near Whitefield",
+                "sport": "tennis",
                 "area": "Whitefield",
-                "tournament_date": str(date.today() + timedelta(days=7)),
-                "capacity": 4,
-                "format": "round_robin",
+                "session_date": str(date.today() + timedelta(days=1)),
+                "start_time": "21:00",
+                "end_time": "19:00",
             },
             headers={"X-CourtMate-Player-ID": "p1"},
         )
-        tournament_id = created.json()["tournament"]["id"]
-        for player_id in ("p2", "p3"):
-            requested = self.client.post(f"/v1/tournaments/{tournament_id}/register", headers={"X-CourtMate-Player-ID": player_id})
-            self.assertEqual(requested.status_code, 200)
-            approved = self.client.post(
-                f"/v1/tournaments/{tournament_id}/registrations/{requested.json()['id']}/decision",
-                json={"status": "approved"},
-                headers={"X-CourtMate-Player-ID": "p1"},
-            )
-            self.assertEqual(approved.status_code, 200)
-            self.assertEqual(approved.json()["status"], "registered")
-        fixtures = self.client.post(f"/v1/tournaments/{tournament_id}/fixtures", headers={"X-CourtMate-Player-ID": "p1"})
-        match = fixtures.json()["matches"][0]
-
-        denied = self.client.put(
-            f"/v1/tournaments/{tournament_id}/matches/{match['id']}",
-            json={"round_number": 4, "match_number": 1, "player_a_id": "p1", "player_b_id": "p2"},
-            headers={"X-CourtMate-Player-ID": "p2"},
-        )
-        self.assertEqual(denied.status_code, 403)
-
-        updated = self.client.put(
-            f"/v1/tournaments/{tournament_id}/matches/{match['id']}",
-            json={"round_number": 4, "match_number": 1, "player_a_id": "p1", "player_b_id": "p2"},
-            headers={"X-CourtMate-Player-ID": "p1"},
-        )
-        self.assertEqual(updated.status_code, 200)
-        self.assertEqual(updated.json()["round_number"], 4)
-        self.assertEqual(updated.json()["player_a_id"], "p1")
-        self.assertEqual(updated.json()["status"], "scheduled")
-
-    def test_knockout_fixture_advances_selected_winners(self):
-        created = self.client.post(
-            "/v1/tournaments",
-            json={
-                "name": "Whitefield Knockout Cup",
-                "sport": "pickleball",
-                "area": "Whitefield",
-                "tournament_date": str(date.today() + timedelta(days=7)),
-                "capacity": 4,
-            },
-            headers={"X-CourtMate-Player-ID": "p1"},
-        )
-        self.assertEqual(created.status_code, 200)
-        tournament_id = created.json()["tournament"]["id"]
-        for player_id in ("p2", "p3", "p4"):
-            requested = self.client.post(f"/v1/tournaments/{tournament_id}/register", headers={"X-CourtMate-Player-ID": player_id})
-            self.assertEqual(requested.status_code, 200)
-            approved = self.client.post(
-                f"/v1/tournaments/{tournament_id}/registrations/{requested.json()['id']}/decision",
-                json={"status": "approved"},
-                headers={"X-CourtMate-Player-ID": "p1"},
-            )
-            self.assertEqual(approved.status_code, 200)
-
-        fixtures = self.client.post(f"/v1/tournaments/{tournament_id}/fixtures", headers={"X-CourtMate-Player-ID": "p1"})
-        self.assertEqual(fixtures.status_code, 200)
-        payload = fixtures.json()
-        self.assertEqual(payload["tournament"]["format"], "knockout")
-        self.assertEqual(len(payload["matches"]), 3)
-        first_round = [match for match in payload["matches"] if match["round_number"] == 1]
-        self.assertEqual(len(first_round), 2)
-        self.assertTrue(all(match["player_a_id"] and match["player_b_id"] for match in first_round))
-        final = next(match for match in payload["matches"] if match["round_number"] == 2)
-        self.assertIsNone(final["player_a_id"])
-        self.assertIsNone(final["player_b_id"])
-
-        future_round_edit = self.client.put(
-            f"/v1/tournaments/{tournament_id}/matches/{final['id']}",
-            json={"round_number": 2, "match_number": 1, "player_a_id": "p1", "player_b_id": "p2"},
-            headers={"X-CourtMate-Player-ID": "p1"},
-        )
-        self.assertEqual(future_round_edit.status_code, 409)
-
-        first_winner = first_round[0]["player_a_id"]
-        second_winner = first_round[1]["player_b_id"]
-        first_result = self.client.post(
-            f"/v1/tournaments/{tournament_id}/matches/{first_round[0]['id']}/winner",
-            json={"winner_id": first_winner},
-            headers={"X-CourtMate-Player-ID": first_winner},
-        )
-        self.assertEqual(first_result.status_code, 200)
-        locked_winner = self.client.post(
-            f"/v1/tournaments/{tournament_id}/matches/{first_round[0]['id']}/winner",
-            json={"winner_id": first_round[0]["player_b_id"]},
-            headers={"X-CourtMate-Player-ID": "p1"},
-        )
-        self.assertEqual(locked_winner.status_code, 409)
-        second_result = self.client.post(
-            f"/v1/tournaments/{tournament_id}/matches/{first_round[1]['id']}/winner",
-            json={"winner_id": second_winner},
-            headers={"X-CourtMate-Player-ID": "p1"},
-        )
-        self.assertEqual(second_result.status_code, 200)
-
-        advanced = self.client.get(f"/v1/tournaments/{tournament_id}", headers={"X-CourtMate-Player-ID": "p1"})
-        self.assertEqual(advanced.status_code, 200)
-        final = next(match for match in advanced.json()["matches"] if match["round_number"] == 2)
-        self.assertEqual({final["player_a_id"], final["player_b_id"]}, {first_winner, second_winner})
-
-        final_result = self.client.post(
-            f"/v1/tournaments/{tournament_id}/matches/{final['id']}/winner",
-            json={"winner_id": first_winner},
-            headers={"X-CourtMate-Player-ID": "p1"},
-        )
-        self.assertEqual(final_result.status_code, 200)
-        self.assertEqual(final_result.json()["winner_id"], first_winner)
-        self.assertEqual(final_result.json()["status"], "completed")
-        self.assertEqual(final_result.json()["score_a"], None)
-
-        completed = self.client.get(f"/v1/tournaments/{tournament_id}", headers={"X-CourtMate-Player-ID": "p1"})
-        self.assertEqual(completed.json()["tournament"]["status"], "completed")
-        winner = next(entry for entry in completed.json()["standings"] if entry["player_id"] == first_winner)
-        self.assertEqual(winner["wins"], 2)
+        self.assertEqual(invalid_group.status_code, 422)
 
 
 if __name__ == "__main__":

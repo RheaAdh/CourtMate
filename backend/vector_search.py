@@ -12,7 +12,7 @@ import os
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Protocol
 
-from .models import Player, SearchDocument, SearchIntent, Session, Tournament, VectorSearchResult
+from .models import Player, SearchDocument, SearchIntent, Session, VectorSearchResult
 
 if TYPE_CHECKING:
     from .repository import Repository
@@ -131,26 +131,6 @@ def session_to_document(session: Session) -> SearchDocument:
     })
 
 
-def tournament_to_document(tournament: Tournament) -> SearchDocument:
-    content = (
-        f"{tournament.sport.replace('_', ' ')} tournament named {tournament.name}. "
-        f"{tournament.format.replace('_', ' ')} format in {tournament.area}. "
-        f"Tournament date {tournament.tournament_date.strftime('%A %d %B')}. "
-        f"{tournament.capacity} player capacity. "
-        f"Status: {tournament.status.replace('_', ' ')}. "
-        f"{len(tournament.registration_ids)} registered players. "
-        f"{'Venue: ' + tournament.venue_name + '. ' if tournament.venue_name else ''}"
-        f"Rules: best of {tournament.rules.best_of}, first to {tournament.rules.point_target}, win by {tournament.rules.win_by}."
-    )
-    return _base_document("tournament", tournament.id, content, {
-        "sport": tournament.sport,
-        "area": tournament.area.lower(),
-        "status": tournament.status,
-        "visibility": "public",
-        "event_date": _safe_date(tournament.tournament_date),
-    })
-
-
 def player_to_document(player: Player) -> SearchDocument:
     rated_sports = []
     for sport, rating in sorted(player.cmr_ratings.items()):
@@ -177,7 +157,7 @@ def venue_to_document(venue: dict[str, object]) -> SearchDocument:
 
 def faq_documents() -> list[SearchDocument]:
     return [
-        _base_document("faq", "court-mate-scope", "CourtMate helps people find racket-sport games, groups, players, venues, tournaments, and game coordination. It does not replace external court-booking platforms.", {"visibility": "public"}),
+        _base_document("faq", "court-mate-scope", "CourtMate helps people find racket-sport games, groups, players, venues, and game coordination. It does not replace external court-booking platforms.", {"visibility": "public"}),
         _base_document("faq", "court-mate-ratings", "CourtMate Rating, or CMR, is a sport-specific score calculated from confirmed game outcomes and player feedback. It is a community signal, not an official DUPR rating.", {"visibility": "public"}),
     ]
 
@@ -199,15 +179,11 @@ class VectorIndexer:
     def upsert_session(self, session: Session) -> SearchDocument:
         return self.upsert(session_to_document(session))
 
-    def upsert_tournament(self, tournament: Tournament) -> SearchDocument:
-        return self.upsert(tournament_to_document(tournament))
-
     def rebuild(self) -> int:
         if not self.provider.available:
             raise RuntimeError("Vector search is not configured")
         documents = [
             *(session_to_document(session) for session in self.repository.list_sessions() if session.status not in {"completed", "cancelled"}),
-            *(tournament_to_document(tournament) for tournament in self.repository.list_tournaments() if tournament.status not in {"completed", "cancelled"}),
             *(player_to_document(player) for player in self.repository.list_players()),
             *faq_documents(),
         ]
@@ -237,10 +213,10 @@ class VectorRetriever:
             "source_type": source_type,
             "visibility": "public",
         }
-        if source_type in {"session", "tournament"}:
+        if source_type == "session":
             if filter_sport:
                 filters["sport"] = intent.sport
-            filters["status"] = "open" if source_type == "session" else "registration"
+            filters["status"] = "open"
         vector = self.provider.embed_query(query)
         return self.repository.search_search_documents(vector, filters=filters, limit=result_limit)
 

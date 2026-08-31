@@ -19,7 +19,7 @@ class GeminiIntentParser:
     )
     _DISCOVERY_TERMS = (
         "court", "venue", "club", "group", "game", "match", "session", "player",
-        "partner", "teammate", "opponent", "tournament", "people to play", "open spot", "skill", "level",
+        "partner", "teammate", "opponent", "people to play", "open spot", "skill", "level",
         "waitlist", "play with", "looking to play", "want to play",
     )
     _DISCOVERY_ACTIONS = (
@@ -156,7 +156,7 @@ class GeminiIntentParser:
         has_question_signal = "?" in query or any(term in current for term in cls._GENERAL_SPORT_QUESTION_TERMS)
         has_session_discovery_request = bool(
             re.search(r"\b(find|search|show|join|invite|create|book|nearby|around|available)\b", current)
-            and re.search(r"\b(game|games|group|groups|session|sessions|player|players|people|match|matches|tournament|tournaments)\b", current)
+            and re.search(r"\b(game|games|group|groups|session|sessions|player|players|people|match|matches)\b", current)
         )
         return (has_sport or has_court_topic) and has_question_signal and not has_session_discovery_request
 
@@ -210,16 +210,13 @@ Current request: """ + query + "\nPrevious request context: " + (context or "non
             })
         return fallback
 
-    def grounded_search_answer(self, query: str, intent: SearchIntent, recommendations: list[SessionRecommendation], tournaments: list[object]) -> str:
+    def grounded_search_answer(self, query: str, intent: SearchIntent, recommendations: list[SessionRecommendation]) -> str:
         """Explain only records that survived retrieval and Python validation."""
         if recommendations:
             lead = recommendations[0].session
             fallback = f"I found {len(recommendations)} {intent.sport.replace('_', ' ')} game{'s' if len(recommendations) != 1 else ''}. Best fit: {lead.group_name} in {lead.area} with {lead.open_slots} spot{'s' if lead.open_slots != 1 else ''} open."
-        elif tournaments:
-            lead = tournaments[0]
-            fallback = f"I found {len(tournaments)} tournament{'s' if len(tournaments) != 1 else ''}. Best match: {lead.name} on {lead.tournament_date.strftime('%a %d %b')} in {lead.area}."
         else:
-            fallback = f"I could not find a {intent.sport.replace('_', ' ')} game or tournament matching those details."
+            fallback = f"I could not find a {intent.sport.replace('_', ' ')} game matching those details."
         # The deterministic sentence above is already built from validated
         # records. Keep search to one model hop by default; opt into a second
         # prose-generation request only when the product needs it.
@@ -240,16 +237,6 @@ Current request: """ + query + "\nPrevious request context: " + (context or "non
                 "skill_max": item.session.skill_max,
             }
             for item in recommendations
-        ] + [
-            {
-                "id": item.id,
-                "type": "tournament",
-                "name": item.name,
-                "sport": item.sport,
-                "area": item.area,
-                "date": item.tournament_date.isoformat(),
-            }
-            for item in tournaments
         ]
         prompt = f"""You are CourtMate's grounded search concierge. Answer in one concise sentence using only the verified records below. Never invent a venue, date, time, player, rating, availability, or result. If records is empty, say no matching record was found. Do not answer unrelated questions and do not mention embeddings or internal IDs.
 User request: {query}
@@ -307,7 +294,7 @@ Verified records: {records}
             if "table tennis" in lowered or "ping pong" in lowered:
                 return "Table tennis is played across a table with a small racket and lightweight ball. Spin, placement, and quick transitions matter more than simply hitting hard, especially on the serve and return."
             return fallback
-        prompt = f"""You are CourtMate's friendly general sports assistant. Answer the user's informational question using your general sports knowledge, even when the sport or topic is not present in CourtMate's database. Cover rules, technique, tactics, training, equipment, venues, and comparisons when relevant. Do not invent live scores, current fixtures, athlete news, or CourtMate games, players, venues, or tournaments. If the question depends on current information, say that it needs a live source. Avoid medical diagnosis and recommend a qualified professional for injuries. Keep the answer concise, clear, practical, and polite. Use readable Markdown: a short opening sentence, then a brief `###` heading and 2-5 bullet points or numbered steps only when they improve clarity. Do not use horizontal rules, decorative emoji headings, or repeated bold markers.
+        prompt = f"""You are CourtMate's friendly general sports assistant. Answer the user's informational question using your general sports knowledge, even when the sport or topic is not present in CourtMate's database. Cover rules, technique, tactics, training, equipment, venues, and comparisons when relevant. Do not invent live scores, current fixtures, athlete news, or CourtMate games, players, or venues. If the question depends on current information, say that it needs a live source. Avoid medical diagnosis and recommend a qualified professional for injuries. Keep the answer concise, clear, practical, and polite. Use readable Markdown: a short opening sentence, then a brief `###` heading and 2-5 bullet points or numbered steps only when they improve clarity. Do not use horizontal rules, decorative emoji headings, or repeated bold markers.
 
 User question: {query}
 """
@@ -389,7 +376,7 @@ Stored player context: {context}
     def generate_sporty_avatar(self, image_bytes: bytes, mime_type: str, sport: Sport) -> list[str]:
         """Create a few sport-themed avatar options while preserving identity."""
         if not self._client:
-            raise RuntimeError("Gemini image generation is not configured")
+            return self._fallback_sporty_avatar_options(image_bytes, mime_type, sport)
         from google import genai
 
         prompt = (
@@ -398,23 +385,49 @@ Stored player context: {context}
             "sport-specific clothing or equipment, a bold simple background, and no text, logos, or watermark. Return one avatar image."
         )
         options: list[str] = []
-        for _ in range(3):
-            response = self._client.models.generate_content(
-                model=os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.0-flash-preview-image-generation"),
-                contents=[prompt, genai.types.Part.from_bytes(data=image_bytes, mime_type=mime_type)],
-                config={"response_modalities": ["TEXT", "IMAGE"]},
-            )
-            for candidate in response.candidates or []:
-                for part in candidate.content.parts if candidate.content else []:
-                    if part.inline_data and part.inline_data.data:
-                        encoded = base64.b64encode(part.inline_data.data).decode("ascii")
-                        options.append(f"data:{part.inline_data.mime_type or 'image/png'};base64,{encoded}")
+        try:
+            for _ in range(3):
+                response = self._client.models.generate_content(
+                    model=os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.0-flash-preview-image-generation"),
+                    contents=[prompt, genai.types.Part.from_bytes(data=image_bytes, mime_type=mime_type)],
+                    config={"response_modalities": ["TEXT", "IMAGE"]},
+                )
+                for candidate in response.candidates or []:
+                    for part in candidate.content.parts if candidate.content else []:
+                        if part.inline_data and part.inline_data.data:
+                            image_data = part.inline_data.data
+                            if isinstance(image_data, str):
+                                image_data = base64.b64decode(image_data)
+                            encoded = base64.b64encode(image_data).decode("ascii")
+                            options.append(f"data:{part.inline_data.mime_type or 'image/png'};base64,{encoded}")
+                            break
+                    if options:
                         break
-                if options:
-                    break
+        except Exception as error:
+            logger.warning("Gemini avatar generation failed; using local avatar renderer: %s", error)
+            return self._fallback_sporty_avatar_options(image_bytes, mime_type, sport)
         if not options:
-            raise RuntimeError("Gemini did not return avatar images")
+            return self._fallback_sporty_avatar_options(image_bytes, mime_type, sport)
         return options[:3]
+
+    @staticmethod
+    def _fallback_sporty_avatar_options(image_bytes: bytes, mime_type: str, sport: Sport) -> list[str]:
+        """Create useful local previews when Gemini is not configured or unavailable."""
+        photo = base64.b64encode(image_bytes).decode("ascii")
+        sport_name = sport.replace("_", " ").title()
+        palettes = (("#d7ff22", "#10231d"), ("#b8e84b", "#173b2c"), ("#f0d36b", "#14201d"))
+        options: list[str] = []
+        for index, (accent, ink) in enumerate(palettes):
+            svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">
+<defs><clipPath id="portrait"><circle cx="400" cy="360" r="250"/></clipPath><linearGradient id="wash" x1="0" y1="0" x2="1" y2="1"><stop stop-color="{accent}"/><stop offset="1" stop-color="{ink}"/></linearGradient></defs>
+<rect width="800" height="800" rx="120" fill="url(#wash)"/><circle cx="400" cy="360" r="278" fill="none" stroke="{accent}" stroke-width="16" opacity=".85"/>
+<image href="data:{mime_type};base64,{photo}" x="150" y="110" width="500" height="500" preserveAspectRatio="xMidYMid slice" clip-path="url(#portrait)"/>
+<circle cx="400" cy="360" r="250" fill="none" stroke="#fff" stroke-width="14" opacity=".88"/>
+<path d="M95 650h610" stroke="#fff" stroke-width="8" opacity=".55"/><text x="100" y="718" fill="#fff" font-family="sans-serif" font-size="44" font-weight="700">{sport_name}</text><circle cx="690" cy="690" r="26" fill="{accent}"/><text x="683" y="704" fill="{ink}" font-family="sans-serif" font-size="30" font-weight="700">{index + 1}</text>
+</svg>'''
+            encoded_svg = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+            options.append(f"data:image/svg+xml;base64,{encoded_svg}")
+        return options
 
     @staticmethod
     def _fallback_parse(query: str) -> SearchIntent:

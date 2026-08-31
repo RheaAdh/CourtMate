@@ -27,12 +27,9 @@ from .models import (
     Session,
     SocialComment,
     SocialPost,
-    Tournament,
-    TournamentRegistration,
     cmr_from_legacy_rating,
 )
 from .repository import FirestoreRepository
-from .tournaments import generate_knockout_matches, rules_for_sport
 
 
 COORDINATES = {
@@ -142,7 +139,7 @@ def delete_firestore_collection(repository: FirestoreRepository, collection_name
 
 SYNTHETIC_COLLECTIONS = (
     "players", "sessions", "join_requests", "chat_posts", "feedback", "notifications",
-    "follows", "tournaments", "tournament_registrations", "tournament_matches",
+    "follows",
     "social_posts", "social_comments", "activity_proofs", "search_documents",
 )
 
@@ -163,7 +160,7 @@ def delete_synthetic_data(repository: FirestoreRepository, rhea_id: str, batch_s
             elif collection_name == "search_documents":
                 is_synthetic = str(data.get("source_id", "")).startswith("demo-") or str(data.get("session_id", "")).startswith("demo-")
             else:
-                is_synthetic = document_id.startswith("demo-") or "demo-" in document_id or str(data.get("session_id", "")).startswith("demo-") or str(data.get("tournament_id", "")).startswith("demo-")
+                is_synthetic = document_id.startswith("demo-") or "demo-" in document_id or str(data.get("session_id", "")).startswith("demo-")
             if is_synthetic:
                 candidates.append(document)
         count = 0
@@ -336,182 +333,6 @@ def make_notification(notification_id: str, player_id: str, kind: str, title: st
     )
 
 
-def seed_tournaments(repository: FirestoreRepository, players: list[Player], organizer_id: str, today: date, now: datetime) -> int:
-    """Create registration, live, and completed events across racket sports."""
-    players_by_id = {player.id: player for player in players}
-    events = [
-        Tournament(
-            id="demo-tournament-registration",
-            name="Whitefield Rally Cup",
-            sport="pickleball",
-            organizer_id=organizer_id,
-            area="Whitefield",
-            venue_name="Demo Whitefield Courts",
-            tournament_date=today + timedelta(days=10),
-            capacity=8,
-            status="registration",
-            created_at=now - timedelta(days=2),
-            rules=rules_for_sport("pickleball"),
-        ),
-        Tournament(
-            id="demo-tournament-live",
-            name="East Bengaluru Paddle League",
-            sport="pickleball",
-            organizer_id="demo-meera",
-            area="Brookefield",
-            venue_name="Demo Brookefield Courts",
-            tournament_date=today - timedelta(days=1),
-            capacity=6,
-            status="in_progress",
-            created_at=now - timedelta(days=12),
-            rules=rules_for_sport("pickleball"),
-        ),
-        Tournament(
-            id="demo-tournament-tennis",
-            name="Whitefield Tennis Social Draw",
-            sport="tennis",
-            organizer_id="demo-neil",
-            area="Whitefield",
-            venue_name="Demo Whitefield Courts",
-            tournament_date=today - timedelta(days=15),
-            capacity=4,
-            status="completed",
-            created_at=now - timedelta(days=24),
-            rules=rules_for_sport("tennis"),
-        ),
-        Tournament(
-            id="demo-tournament-badminton",
-            name="HSR Shuttle Cup",
-            sport="badminton",
-            organizer_id="demo-rohit",
-            area="HSR Layout",
-            venue_name="Demo HSR Courts",
-            tournament_date=today + timedelta(days=14),
-            capacity=8,
-            status="registration",
-            created_at=now - timedelta(days=1),
-            rules=rules_for_sport("badminton"),
-        ),
-        Tournament(
-            id="demo-tournament-padel",
-            name="Bellandur Padel Pairs",
-            sport="padel",
-            organizer_id="demo-vikram",
-            area="Bellandur",
-            venue_name="Demo Bellandur Courts",
-            tournament_date=today + timedelta(days=9),
-            capacity=6,
-            status="registration",
-            created_at=now - timedelta(days=3),
-            rules=rules_for_sport("padel"),
-        ),
-        Tournament(
-            id="demo-tournament-squash",
-            name="Koramangala Squash Ladder",
-            sport="squash",
-            organizer_id="demo-meera",
-            area="Koramangala",
-            venue_name="Demo Koramangala Courts",
-            tournament_date=today + timedelta(days=18),
-            capacity=8,
-            status="registration",
-            created_at=now - timedelta(days=4),
-            rules=rules_for_sport("squash"),
-        ),
-        Tournament(
-            id="demo-tournament-table-tennis",
-            name="Indiranagar Table Tennis Open",
-            sport="table_tennis",
-            organizer_id="demo-neil",
-            area="Indiranagar",
-            venue_name="Demo Indiranagar Courts",
-            tournament_date=today + timedelta(days=11),
-            capacity=8,
-            status="registration",
-            created_at=now - timedelta(days=2),
-            rules=rules_for_sport("table_tennis"),
-        ),
-    ]
-    registration_specs = {
-        "demo-tournament-registration": [organizer_id, "demo-kavya", "demo-rohit", "demo-sana", "demo-pooja", "demo-meera"],
-        "demo-tournament-live": ["demo-meera", "demo-vikram", organizer_id, "demo-kavya", "demo-rohit", "demo-sana"],
-        "demo-tournament-tennis": ["demo-neil", organizer_id, "demo-vikram", "demo-meera"],
-        "demo-tournament-badminton": ["demo-rohit", "demo-sana", "demo-pooja", "demo-isha", "demo-kavya"],
-        "demo-tournament-padel": ["demo-vikram", "demo-meera", "demo-neil", "demo-isha"],
-        "demo-tournament-squash": ["demo-meera", "demo-vikram", "demo-isha", "demo-arjun"],
-        "demo-tournament-table-tennis": ["demo-neil", "demo-isha", "demo-arjun", "demo-pooja"],
-    }
-
-    for event in events:
-        registration_ids: list[str] = []
-        registrations: list[TournamentRegistration] = []
-        for index, player_id in enumerate(registration_specs[event.id]):
-            player = players_by_id[player_id]
-            registration = TournamentRegistration(
-                id=f"{event.id}_{player_id}",
-                tournament_id=event.id,
-                player_id=player_id,
-                display_name=player.display_name,
-                status="registered",
-                cmr_rating=player.cmr_ratings.get(event.sport),
-                created_at=event.created_at + timedelta(minutes=index * 7),
-            )
-            registrations.append(registration)
-            registration_ids.append(registration.id)
-            repository.save_tournament_registration(registration)
-        event.registration_ids = registration_ids
-        repository.save_tournament(event)
-
-        if event.status == "registration":
-            continue
-
-        repository.delete_tournament_matches(event.id)
-        matches = generate_knockout_matches(event.id, registrations)
-        playable_match_index = 0
-        for index, match in enumerate(matches):
-            if event.id == "demo-tournament-live" and match.round_number == 1 and match.status == "scheduled" and match.player_a_id and match.player_b_id:
-                match.score_a = 11 if playable_match_index % 2 == 0 else 8
-                match.score_b = 8 if playable_match_index % 2 == 0 else 11
-                match.winner_id = match.player_a_id if match.score_a > match.score_b else match.player_b_id
-                match.status = "completed" if playable_match_index % 2 == 0 else "pending_confirmation"
-                match.score_entered_by = organizer_id if playable_match_index % 2 else match.player_a_id
-                match.confirmed_by = organizer_id if playable_match_index % 2 == 0 else None
-                playable_match_index += 1
-            elif event.id == "demo-tournament-tennis" and match.round_number == 1:
-                match.score_a = 2 if index % 2 == 0 else 1
-                match.score_b = 1 if index % 2 == 0 else 2
-                match.winner_id = match.player_a_id if match.score_a > match.score_b else match.player_b_id
-                match.status = "completed"
-                match.score_entered_by = event.organizer_id
-                match.confirmed_by = event.organizer_id
-            elif event.id == "demo-tournament-tennis" and match.round_number == 2:
-                semifinal_winners = [
-                    item.winner_id for item in matches
-                    if item.round_number == 1 and item.winner_id
-                ]
-                if len(semifinal_winners) == 2:
-                    match.player_a_id, match.player_b_id = semifinal_winners
-                    match.score_a = 2
-                    match.score_b = 1
-                    match.winner_id = match.player_a_id
-                    match.status = "completed"
-                    match.score_entered_by = event.organizer_id
-                    match.confirmed_by = event.organizer_id
-            elif match.status != "bye":
-                match.status = "scheduled"
-        for match in matches:
-            if match.round_number == 1 and match.status in {"bye", "completed"} and match.winner_id:
-                next_match = next((item for item in matches if item.round_number == 2 and item.match_number == (match.match_number + 1) // 2), None)
-                if next_match:
-                    if match.match_number % 2:
-                        next_match.player_a_id = match.winner_id
-                    else:
-                        next_match.player_b_id = match.winner_id
-        for match in matches:
-            repository.save_tournament_match(match)
-    return len(events)
-
-
 def seed(replace_social: bool = False, social_only: bool = False, reset_synthetic: bool = False) -> None:
     project = os.getenv("GOOGLE_CLOUD_PROJECT", "mttn-portal")
     rhea_id = os.getenv("COURTMATE_DEMO_RHEA_UID", "demo-rhea-adhikari").strip() or "demo-rhea-adhikari"
@@ -662,11 +483,9 @@ def seed(replace_social: bool = False, social_only: bool = False, reset_syntheti
     for notification in notifications:
         repository.save_notification(notification)
 
-    tournament_count = seed_tournaments(repository, players, rhea_id, today, now)
-
     replacement = f" Replaced {deleted_social_posts} social posts and {deleted_social_comments} social comments." if replace_social else ""
     reset_summary = f" Reset {sum(deleted_synthetic.values())} synthetic documents." if reset_synthetic else ""
-    print(f"Seeded synthetic CourtMate data into {project}: {len(players)} players, {len(sessions) + generated_sessions} sessions, {len(requests)} requests, {len(posts)} chat posts, {social_post_count} session activity engagement records, {social_comment_count} social comments, {len(feedback)} feedback records, {len(follows)} follows, {len(notifications)} notifications, {tournament_count} tournaments.{replacement}{reset_summary}")
+    print(f"Seeded synthetic CourtMate data into {project}: {len(players)} players, {len(sessions) + generated_sessions} sessions, {len(requests)} requests, {len(posts)} chat posts, {social_post_count} session activity engagement records, {social_comment_count} social comments, {len(feedback)} feedback records, {len(follows)} follows, {len(notifications)} notifications.{replacement}{reset_summary}")
 
 
 if __name__ == "__main__":
