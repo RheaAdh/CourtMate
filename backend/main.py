@@ -17,7 +17,7 @@ from .auth import AuthIdentity, get_current_identity
 from .facilities import BENGALURU_FACILITIES
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, BookingUpdateRequest, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CommunityJoinRequest, CommunityLeaderboardEntry, CommunityLeaderboardResponse, CommunityMembership, CommunityMembershipResponse, CreateGroupRequest, CreatedGroupResponse, ExploreSessionsResponse, Facility, FacilityListResponse, Feedback, FeedbackRequest, FollowRecord, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MatchTeam, MyActivityResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, PlayerDensityPoint, PlayerDensityResponse, PlayerRating, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, SportyAvatarRequest, SportyAvatarResponse, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, BookingUpdateRequest, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CommunityActivityPoint, CommunityJoinRequest, CommunityLeaderboardEntry, CommunityLeaderboardResponse, CommunityMapResponse, CommunityMembership, CommunityMembershipResponse, CreateGroupRequest, CreatedGroupResponse, ExploreSessionsResponse, Facility, FacilityListResponse, Feedback, FeedbackRequest, FollowRecord, GameCluster, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MapNearbyGame, MatchTeam, MyActivityResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, PlayerDensityPoint, PlayerDensityResponse, PlayerRating, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, SportyAvatarRequest, SportyAvatarResponse, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
 from .vector_search import VectorIndexer, VectorRetriever
 
@@ -1168,6 +1168,7 @@ def _ensure_upcoming_game_reminders() -> None:
     now = datetime.now(local_timezone)
     reminder_horizon = now + timedelta(hours=24)
     affected_players: set[str] = set()
+    existing_notification_ids = {item.id for item in repository.list_notifications()}
 
     for session in repository.list_sessions():
         if session.status in {"completed", "cancelled"} or not session.confirmed_player_ids:
@@ -1178,7 +1179,7 @@ def _ensure_upcoming_game_reminders() -> None:
 
         for player_id in set(session.confirmed_player_ids):
             notification_id = f"game-reminder-{session.id}-{player_id}"
-            if any(item.id == notification_id for item in repository.list_notifications_for_player(player_id)):
+            if notification_id in existing_notification_ids:
                 continue
             try:
                 repository.save_notification(AppNotification(
@@ -1186,10 +1187,11 @@ def _ensure_upcoming_game_reminders() -> None:
                     player_id=player_id,
                     kind="game_reminder",
                     title="Game starts soon",
-                    message=f"{session.group_name} starts soon. Book the court and coordinate final details in Group Space.",
+                    message=f"{session.group_name} starts soon. Book the court separately and coordinate final details in your Rally Circle.",
                     session_id=session.id,
                     created_at=datetime.now(timezone.utc),
                 ))
+                existing_notification_ids.add(notification_id)
                 affected_players.add(player_id)
             except Exception:
                 # A reminder must never make the notification endpoint fail.
@@ -1740,6 +1742,160 @@ def player_density(
         points.append(PlayerDensityPoint(area=area, player_count=count, latitude=latitude_average, longitude=longitude_average, cmr_min=round(min(cmrs), 1) if cmrs else None, cmr_max=round(max(cmrs), 1) if cmrs else None, distance_km=round(point_distance, 1) if point_distance is not None else None, intensity=intensity))
     points.sort(key=lambda point: (point.distance_km if point.distance_km is not None else 9999, -point.player_count))
     return PlayerDensityResponse(sport=sport, radius_km=radius_km, points=points[:20])
+
+
+def _map_time_matches(session: Session, time_of_day: str | None) -> bool:
+    if not time_of_day:
+        return True
+    ranges = {"morning": (0, 9), "day": (9, 16), "evening": (16, 21), "night": (21, 24)}
+    window = ranges.get(time_of_day.casefold())
+    return window is None or window[0] <= session.start_time.hour < window[1]
+
+
+def _map_coordinates(session: Session) -> tuple[float | None, float | None]:
+    if session.latitude is not None and session.longitude is not None:
+        return session.latitude, session.longitude
+    coordinates = _geocode_area(session.area)
+    return coordinates if coordinates is not None else (None, None)
+
+
+@app.get("/v1/me/community-map", response_model=CommunityMapResponse)
+def community_map(
+    sport: Sport = "pickleball",
+    latitude: float | None = Query(default=None, ge=-90, le=90),
+    longitude: float | None = Query(default=None, ge=-180, le=180),
+    radius_km: float = Query(default=5, ge=1, le=100),
+    cmr_min: float | None = Query(default=None, ge=0, le=100),
+    cmr_max: float | None = Query(default=None, ge=0, le=100),
+    date: date | None = Query(default=None),
+    time_of_day: str | None = Query(default=None),
+    activity_type: str = Query(default="all"),
+    player: Player = Depends(get_current_player),
+) -> CommunityMapResponse:
+    """Return one privacy-safe read model for all Communities map overlays."""
+    if cmr_min is not None and cmr_max is not None and cmr_min > cmr_max:
+        raise HTTPException(status_code=422, detail="CMR minimum must not exceed maximum")
+    normalized_activity = activity_type.casefold()
+    if normalized_activity not in {"all", "players", "communities", "games"}:
+        raise HTTPException(status_code=422, detail="Activity type must be all, players, communities, or games")
+    origin_latitude = latitude if latitude is not None else player.latitude
+    origin_longitude = longitude if longitude is not None else player.longitude
+    cache_key = _read_view_cache_key(
+        "community-map", player.id, sport, f"{(origin_latitude or 0):.2f}", f"{(origin_longitude or 0):.2f}",
+        str(radius_km), str(cmr_min), str(cmr_max), str(date), (time_of_day or "").casefold(), normalized_activity,
+    )
+    cached = _get_cached_read_view(cache_key)
+    if cached:
+        return cached
+
+    today = _local_today()
+    all_sessions = repository.list_sessions()
+    public_upcoming = [
+        session for session in all_sessions
+        if session.sport == sport and session.visibility == "public"
+        and session.status in {"open", "full", "in_progress"} and session.session_date >= today
+        and (date is None or session.session_date == date) and _map_time_matches(session, time_of_day)
+    ]
+    player_rating = rating_for_sport(player, sport)
+    player_cmr = None
+    if player_rating is not None:
+        player_cmr = player_rating if player.cmr_scale == 100 else cmr_from_legacy_rating(player_rating)
+    if player_cmr is not None and ((cmr_min is not None and player_cmr < cmr_min) or (cmr_max is not None and player_cmr > cmr_max)):
+        public_upcoming = []
+
+    nearby_games: list[MapNearbyGame] = []
+    for session in public_upcoming:
+        session_latitude, session_longitude = _map_coordinates(session)
+        if session_latitude is None or session_longitude is None:
+            continue
+        distance = None
+        if origin_latitude is not None and origin_longitude is not None and session_latitude is not None and session_longitude is not None:
+            distance = distance_km(origin_latitude, origin_longitude, session_latitude, session_longitude)
+            if distance > radius_km:
+                continue
+        skill_fit = 50.0
+        if player_cmr is not None:
+            session_min = cmr_from_legacy_rating(session.skill_min)
+            session_max = cmr_from_legacy_rating(session.skill_max)
+            if session_min <= player_cmr <= session_max:
+                skill_fit = 100.0
+            else:
+                gap = min(abs(player_cmr - session_min), abs(player_cmr - session_max))
+                skill_fit = max(0.0, 100.0 - gap * 2.0)
+        distance_fit = max(0.0, 100.0 - (distance / radius_km * 100.0)) if distance is not None else 50.0
+        nearby_games.append(MapNearbyGame(
+            id=session.id, group_name=session.group_name, sport=session.sport, area=session.area,
+            venue_name=session.venue_name, latitude=session_latitude, longitude=session_longitude,
+            session_date=session.session_date, start_time=session.start_time, end_time=session.end_time,
+            open_slots=session.open_slots, skill_min=cmr_from_legacy_rating(session.skill_min),
+            skill_max=cmr_from_legacy_rating(session.skill_max), distance_km=round(distance, 1) if distance is not None else None,
+            match_score=round(skill_fit * 0.65 + distance_fit * 0.35, 1),
+        ))
+    nearby_games.sort(key=lambda game: (-game.match_score, game.distance_km if game.distance_km is not None else 9999, game.session_date, game.start_time))
+
+    cluster_buckets: dict[str, list[MapNearbyGame]] = {}
+    for game in nearby_games:
+        cluster_buckets.setdefault(f"{game.area.casefold()}::{(game.venue_name or game.area).casefold()}", []).append(game)
+    game_clusters = []
+    for cluster_key, games in cluster_buckets.items():
+        coordinates = [(game.latitude, game.longitude) for game in games if game.latitude is not None and game.longitude is not None]
+        cluster_latitude = round(sum(item[0] for item in coordinates) / len(coordinates), 5) if coordinates else None
+        cluster_longitude = round(sum(item[1] for item in coordinates) / len(coordinates), 5) if coordinates else None
+        game_clusters.append(GameCluster(
+            cluster_id=f"game-cluster:{sport}:{cluster_key}", area=games[0].area, latitude=cluster_latitude,
+            longitude=cluster_longitude, game_count=len(games), open_slot_count=sum(game.open_slots for game in games),
+            game_ids=[game.id for game in games],
+        ))
+    game_clusters.sort(key=lambda cluster: (-cluster.game_count, cluster.area.casefold()))
+
+    memberships = repository.list_community_memberships()
+    membership_groups: dict[str, set[str]] = {}
+    for membership in memberships:
+        if membership.sport == sport:
+            membership_groups.setdefault(membership.area.casefold(), set()).add(membership.player_id)
+    public_sessions = [session for session in all_sessions if session.sport == sport and session.visibility == "public"]
+    area_sessions: dict[str, list[Session]] = {}
+    for session in public_sessions:
+        area_sessions.setdefault(session.area.casefold(), []).append(session)
+    community_activity: list[CommunityActivityPoint] = []
+    for area_key, area_items in area_sessions.items():
+        area = area_items[0].area
+        upcoming = [session for session in area_items if session.status in {"open", "full", "in_progress"} and session.session_date >= today]
+        recent_completed = [session for session in area_items if session.status == "completed" and (today - session.session_date).days <= 30]
+        active_players = set(membership_groups.get(area_key, set())) | {player_id for session in upcoming for player_id in session.confirmed_player_ids}
+        recent_joins = [membership for membership in memberships if membership.sport == sport and membership.area.casefold() == area_key and (datetime.now(timezone.utc) - membership.joined_at).days <= 30]
+        recency_signal = max((1 - min((datetime.now(timezone.utc) - item.joined_at).days, 30) / 30 for item in recent_joins), default=0.0)
+        activity_score = round(min(100.0, len(active_players) * 6 + len(upcoming) * 18 + len(recent_completed) * 8 + recency_signal * 10), 1)
+        coordinates = [_map_coordinates(session) for session in area_items]
+        valid_coordinates = [(lat, lng) for lat, lng in coordinates if lat is not None and lng is not None]
+        area_latitude = round(sum(item[0] for item in valid_coordinates) / len(valid_coordinates), 5) if valid_coordinates else None
+        area_longitude = round(sum(item[1] for item in valid_coordinates) / len(valid_coordinates), 5) if valid_coordinates else None
+        area_distance = distance_km(origin_latitude, origin_longitude, area_latitude, area_longitude) if origin_latitude is not None and origin_longitude is not None and area_latitude is not None and area_longitude is not None else None
+        if area_distance is not None and area_distance > radius_km:
+            continue
+        community_activity.append(CommunityActivityPoint(
+            community_id=f"community:{sport}:{area_key.replace(' ', '-')}", name=_community_name(sport, area), sport=sport, area=area,
+            latitude=area_latitude, longitude=area_longitude, active_player_count=len(active_players), upcoming_game_count=len(upcoming),
+            activity_score=activity_score, quality_score=round(min(100.0, activity_score * 0.45 + len(recent_completed) * 8), 1),
+        ))
+    community_activity.sort(key=lambda item: (-item.activity_score, item.name.casefold()))
+
+    density_response = player_density(sport=sport, latitude=latitude, longitude=longitude, radius_km=radius_km, cmr_min=cmr_min, cmr_max=cmr_max, player=player)
+    activity_by_area = {item.area.casefold(): item for item in community_activity}
+    density_points = [point.model_copy(update={
+        "active_game_count": sum(1 for game in nearby_games if game.area.casefold() == point.area.casefold()),
+        "community_count": 1 if point.area.casefold() in activity_by_area else 0,
+        "activity_score": activity_by_area[point.area.casefold()].activity_score if point.area.casefold() in activity_by_area else 0,
+    }) for point in density_response.points]
+    response = CommunityMapResponse(
+        sport=sport, center_latitude=origin_latitude, center_longitude=origin_longitude, radius_km=radius_km,
+        player_density=density_points if normalized_activity in {"all", "players"} else [],
+        community_activity=community_activity if normalized_activity in {"all", "communities"} else [],
+        game_clusters=game_clusters if normalized_activity in {"all", "games"} else [],
+        nearby_games=nearby_games if normalized_activity in {"all", "games"} else [],
+        generated_at=datetime.now(timezone.utc),
+    )
+    return _cache_read_view(cache_key, response)
 
 
 @app.get("/v1/me/community-leaderboard", response_model=CommunityLeaderboardResponse)

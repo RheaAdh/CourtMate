@@ -42,15 +42,15 @@ Games also provides a structured create-game modal. The form validates that the 
 - casual, social, or competitive style;
 - visibility: discoverable on Explore, followers can discover, or private link only.
 
-### Games and Group Space
+### Games and Rally Circles
 
 Games uses compact tabs for **Explore**, **My games**, **Pending**, and **Feedback**. Explore shows all eligible public games, ranked by fit and location, and supports text search, sport, CMR skill band, date, and time-of-day availability filters. Filters are applied with an explicit **See results** action.
 
-Every confirmed game has a Group Space for the lineup, CMR, chat, waitlist, and completion. A confirmed player can mark the game complete. The game then moves to Feedback, where players rate every other player, submit match quality and satisfaction feedback, and upload session photos. After the feedback round, CMR is updated and the completed rally is published to Home with the leaderboard and photo carousel.
+Every confirmed game has a Rally Circle for the lineup, CMR, chat, waitlist, and completion. A confirmed player can mark the game complete. The game then moves to Feedback, where players rate every other player, submit match quality and satisfaction feedback, and upload session photos. After the feedback round, CMR is updated and the completed rally is published to Home with the leaderboard and photo carousel.
 
 ### Private games
 
-Private games are designed for apartment groups, friends, and small communities. They do not appear in Explore and do not send nearby-player discovery notifications. The organizer can copy or share the Group Space link immediately. A friend opening the link can view the preview and request to join; the organizer approves the request in My games. Once confirmed, the friend participates in the same chat, completion, feedback, CMR, and Home-publishing flow as any other game.
+Private games are designed for apartment groups, friends, and small communities. They do not appear in Explore and do not send nearby-player discovery notifications. The organizer can copy or share the Rally Circle link immediately. A friend opening the link can view the preview and request to join; the organizer approves the request in My games. Once confirmed, the friend participates in the same chat, completion, feedback, CMR, and Home-publishing flow as any other game.
 
 The share link is the access path, but authorization, capacity, approval, lifecycle, and membership checks remain server-enforced.
 
@@ -81,4 +81,4 @@ Firebase authentication, authorized API calls, session visibility, private profi
 
 The app keeps light mode as the default and maintains readable dark mode. Mobile pages use responsive spacing, centered bold tabs, sticky navigation where appropriate, scrollable modals, and no accidental desktop margins. Loading states are contextual and should not wait indefinitely for unrelated APIs.
 
-The primary success loop is: discover or create a game, share or request access, confirm the lineup, coordinate in Group Space, play, complete, collect feedback, update CMR, publish the rally, and return for a better match.
+The primary success loop is: discover or create a game, share or request access, confirm the lineup, coordinate in a Rally Circle, play, complete, collect feedback, update CMR, publish the rally, and return for a better match.

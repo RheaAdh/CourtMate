@@ -54,6 +54,57 @@ class ApiFlowTests(unittest.TestCase):
         self.assertIn("cmr_min", payload["points"][0])
         self.assertNotIn("player_ids", payload["points"][0])
 
+    def test_community_map_returns_public_games_clusters_and_no_private_games(self):
+        private_game = repository.get_session("s1").model_copy(update={
+            "id": "demo-private-map-game",
+            "group_name": "Private Apartment Game",
+            "visibility": "private",
+        })
+        repository.save_session(private_game)
+        response = self.client.get(
+            "/v1/me/community-map",
+            params={"sport": "pickleball", "latitude": 12.9698, "longitude": 77.7499, "radius_km": 20, "activity_type": "all"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        game_ids = {game["id"] for game in payload["nearby_games"]}
+        self.assertIn("s1", game_ids)
+        self.assertNotIn("demo-private-map-game", game_ids)
+        self.assertTrue(payload["game_clusters"])
+        self.assertTrue(payload["player_density"])
+        self.assertNotIn("player_ids", payload["player_density"][0])
+        self.assertNotIn("display_name", payload["player_density"][0])
+
+    def test_community_map_filters_games_by_time_and_activity_type(self):
+        response = self.client.get(
+            "/v1/me/community-map",
+            params={"sport": "pickleball", "latitude": 12.9698, "longitude": 77.7499, "radius_km": 20, "time_of_day": "night", "activity_type": "games"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["player_density"], [])
+        self.assertEqual(payload["community_activity"], [])
+        self.assertEqual(payload["nearby_games"], [])
+        self.assertEqual(payload["game_clusters"], [])
+
+    def test_community_map_ignores_games_without_geocodable_coordinates(self):
+        session = repository.get_session("s1").model_copy(update={
+            "id": "unmapped-map-game",
+            "area": "Unknown Locality",
+            "latitude": None,
+            "longitude": None,
+        })
+        repository.save_session(session)
+        response = self.client.get(
+            "/v1/me/community-map",
+            params={"sport": "pickleball", "latitude": 12.9698, "longitude": 77.7499, "radius_km": 20},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("unmapped-map-game", {game["id"] for game in response.json()["nearby_games"]})
+
     def test_explore_keeps_visible_games_that_are_not_a_hard_location_or_cmr_match(self):
         far_game = repository.get_session("s1").model_copy(update={
             "id": "far-game",

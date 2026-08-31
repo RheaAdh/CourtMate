@@ -2,6 +2,7 @@ import hashlib
 import os
 from datetime import datetime
 from typing import Protocol
+from pydantic import ValidationError
 
 from .models import ActivityProof, AppNotification, ChatPost, CommunityMembership, Feedback, FollowRecord, JoinRequest, Player, SearchDocument, Session, SocialComment, SocialPost, VectorSearchResult, normalize_cmr_player
 from .vector_search import cosine_similarity
@@ -51,6 +52,7 @@ class Repository(Protocol):
     def save_session(self, session: Session) -> Session: ...
     def save_notification(self, notification: AppNotification) -> AppNotification: ...
     def list_notifications_for_player(self, player_id: str) -> list[AppNotification]: ...
+    def list_notifications(self) -> list[AppNotification]: ...
     def mark_notification_read(self, notification_id: str, player_id: str) -> AppNotification | None: ...
     def save_follow(self, follow: FollowRecord) -> FollowRecord: ...
     def delete_follow(self, follower_id: str, following_id: str) -> None: ...
@@ -65,6 +67,7 @@ class Repository(Protocol):
     def save_community_membership(self, membership: CommunityMembership) -> CommunityMembership: ...
     def get_community_membership(self, community_id: str, player_id: str) -> CommunityMembership | None: ...
     def list_community_memberships_for_player(self, player_id: str) -> list[CommunityMembership]: ...
+    def list_community_memberships(self) -> list[CommunityMembership]: ...
 
 
 class InMemoryRepository:
@@ -202,12 +205,18 @@ class InMemoryRepository:
     def list_community_memberships_for_player(self, player_id: str) -> list[CommunityMembership]:
         return sorted((item for item in self.community_memberships.values() if item.player_id == player_id), key=lambda item: item.joined_at, reverse=True)
 
+    def list_community_memberships(self) -> list[CommunityMembership]:
+        return list(self.community_memberships.values())
+
     def save_notification(self, notification: AppNotification) -> AppNotification:
         self.notifications[notification.id] = notification
         return notification
 
     def list_notifications_for_player(self, player_id: str) -> list[AppNotification]:
         return sorted((item for item in self.notifications.values() if item.player_id == player_id), key=lambda item: item.created_at, reverse=True)
+
+    def list_notifications(self) -> list[AppNotification]:
+        return list(self.notifications.values())
 
     def mark_notification_read(self, notification_id: str, player_id: str) -> AppNotification | None:
         notification = self.notifications.get(notification_id)
@@ -450,22 +459,42 @@ class FirestoreRepository:
         memberships = [CommunityMembership.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
         return sorted(memberships, key=lambda item: item.joined_at, reverse=True)
 
+    def list_community_memberships(self) -> list[CommunityMembership]:
+        documents = self.client.collection("community_memberships").limit(5000).stream()
+        return [CommunityMembership.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
+
     def save_notification(self, notification: AppNotification) -> AppNotification:
         reference = self.client.collection("notifications").document(notification.id)
         reference.set(self._write_model(notification), merge=True)
         return notification
 
+    @staticmethod
+    def _as_notification(document) -> AppNotification | None:
+        """Ignore obsolete notification kinds left by removed features."""
+        try:
+            return AppNotification.model_validate({**(document.to_dict() or {}), "id": document.id})
+        except ValidationError:
+            return None
+
     def list_notifications_for_player(self, player_id: str) -> list[AppNotification]:
-        documents = self.client.collection("notifications").where("player_id", "==", player_id).limit(100).stream()
-        notifications = [AppNotification.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
+        from google.cloud.firestore_v1.base_query import FieldFilter
+
+        documents = self.client.collection("notifications").where(filter=FieldFilter("player_id", "==", player_id)).limit(100).stream()
+        notifications = [notification for document in documents if (notification := self._as_notification(document)) is not None]
         return sorted(notifications, key=lambda item: item.created_at, reverse=True)
+
+    def list_notifications(self) -> list[AppNotification]:
+        documents = self.client.collection("notifications").limit(1000).stream()
+        return [notification for document in documents if (notification := self._as_notification(document)) is not None]
 
     def mark_notification_read(self, notification_id: str, player_id: str) -> AppNotification | None:
         reference = self.client.collection("notifications").document(notification_id)
         document = reference.get()
         if not document.exists:
             return None
-        notification = AppNotification.model_validate({**(document.to_dict() or {}), "id": document.id})
+        notification = self._as_notification(document)
+        if notification is None:
+            return None
         if notification.player_id != player_id:
             return None
         updated = notification.model_copy(update={"read": True})

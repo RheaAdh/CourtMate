@@ -276,12 +276,68 @@ class PlayerDensityPoint(BaseModel):
     cmr_max: float | None = Field(default=None, ge=0, le=100)
     distance_km: float | None = Field(default=None, ge=0)
     intensity: Literal["warm", "hot", "very_hot"]
+    activity_score: float = Field(default=0, ge=0, le=100)
+    active_game_count: int = Field(default=0, ge=0)
+    community_count: int = Field(default=0, ge=0)
 
 
 class PlayerDensityResponse(BaseModel):
     sport: Sport
     radius_km: float
     points: list[PlayerDensityPoint] = Field(default_factory=list)
+
+
+class CommunityActivityPoint(BaseModel):
+    community_id: str
+    name: str
+    sport: Sport
+    area: str
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    active_player_count: int = Field(ge=0)
+    upcoming_game_count: int = Field(ge=0)
+    activity_score: float = Field(ge=0, le=100)
+    quality_score: float = Field(ge=0, le=100)
+
+
+class MapNearbyGame(BaseModel):
+    id: str
+    group_name: str
+    sport: Sport
+    area: str
+    venue_name: str | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    session_date: date_type
+    start_time: time
+    end_time: time
+    open_slots: int = Field(ge=0)
+    skill_min: float = Field(ge=0, le=100)
+    skill_max: float = Field(ge=0, le=100)
+    distance_km: float | None = Field(default=None, ge=0)
+    match_score: float = Field(default=0, ge=0, le=100)
+
+
+class GameCluster(BaseModel):
+    cluster_id: str
+    area: str
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    game_count: int = Field(ge=1)
+    open_slot_count: int = Field(ge=0)
+    game_ids: list[str] = Field(default_factory=list, max_length=50)
+
+
+class CommunityMapResponse(BaseModel):
+    sport: Sport
+    center_latitude: float | None = Field(default=None, ge=-90, le=90)
+    center_longitude: float | None = Field(default=None, ge=-180, le=180)
+    radius_km: float
+    player_density: list[PlayerDensityPoint] = Field(default_factory=list)
+    community_activity: list[CommunityActivityPoint] = Field(default_factory=list)
+    game_clusters: list[GameCluster] = Field(default_factory=list)
+    nearby_games: list[MapNearbyGame] = Field(default_factory=list)
+    generated_at: datetime
 
 
 class CommunityLeaderboardEntry(BaseModel):

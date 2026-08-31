@@ -19,6 +19,7 @@ from .models import (
     AppNotification,
     CMRHistoryPoint,
     ChatPost,
+    CommunityMembership,
     Feedback,
     FollowRecord,
     JoinRequest,
@@ -140,6 +141,7 @@ def delete_firestore_collection(repository: FirestoreRepository, collection_name
 SYNTHETIC_COLLECTIONS = (
     "players", "sessions", "join_requests", "chat_posts", "feedback", "notifications",
     "follows",
+    "community_memberships",
     "social_posts", "social_comments", "activity_proofs", "search_documents",
 )
 
@@ -365,6 +367,20 @@ def seed(replace_social: bool = False, social_only: bool = False, reset_syntheti
         make_player("demo-tara", "Demo Tara", "Indiranagar", {"badminton": 2.7, "tennis": 3.0, "squash": 2.8}, "casual", 0.81, avatar_number=29, age=30, gender="woman"),
         make_player("demo-dev", "Demo Dev", "Kadubeesanahalli", {"pickleball": 3.7, "badminton": 4.0, "padel": 3.8, "table_tennis": 4.1}, "social", 0.90, avatar_number=31, age=37, gender="man"),
     ]
+    extra_specs = [
+        ("Aarav", "Whitefield", {"tennis": 3.6, "padel": 3.4}), ("Diya", "Whitefield", {"tennis": 3.9, "badminton": 3.5}),
+        ("Mihir", "Whitefield", {"tennis": 4.2, "squash": 3.8}), ("Anika", "Brookefield", {"pickleball": 3.4, "padel": 3.1}),
+        ("Rohan", "Brookefield", {"pickleball": 3.0, "badminton": 3.7}), ("Leena", "Brookefield", {"badminton": 3.2, "table_tennis": 3.5}),
+        ("Aditi", "Varthur", {"pickleball": 3.7, "padel": 3.5}), ("Karan", "Varthur", {"pickleball": 4.1, "tennis": 3.9}),
+        ("Nandini", "Marathahalli", {"tennis": 3.3, "badminton": 3.8}), ("Yash", "Marathahalli", {"padel": 3.9, "squash": 4.0}),
+        ("Ira", "Indiranagar", {"badminton": 3.4, "squash": 3.1}), ("Manav", "Indiranagar", {"tennis": 4.0, "table_tennis": 3.8}),
+        ("Riya", "Koramangala", {"tennis": 3.7, "squash": 3.6}), ("Adil", "Koramangala", {"padel": 4.1, "table_tennis": 4.0}),
+        ("Sia", "HSR Layout", {"badminton": 3.9, "padel": 3.7}), ("Om", "HSR Layout", {"squash": 4.2, "table_tennis": 3.4}),
+        ("Veda", "Bellandur", {"pickleball": 3.6, "padel": 4.0}), ("Samir", "Bellandur", {"tennis": 4.3, "badminton": 3.9}),
+        ("Kiara", "Sarjapur", {"tennis": 3.2}), ("Nikhil", "Kadubeesanahalli", {"pickleball": 3.8, "badminton": 4.1}),
+    ]
+    for index, (name, area, ratings) in enumerate(extra_specs, start=1):
+        players.append(make_player(f"demo-player-{index:02d}", f"Demo {name}", area, ratings, "social" if index % 2 else "casual", .80 + (index % 16) / 100, avatar_number=100 + index, history_games=3 + index % 4))
     for player in players:
         repository.save_player(player)
 
@@ -394,8 +410,21 @@ def seed(replace_social: bool = False, social_only: bool = False, reset_syntheti
         make_session("demo-badminton-awaiting-feedback", "Whitefield Feedback Rally", rhea_id, "badminton", "Whitefield", today - timedelta(days=1), time(18), time(20), 2.8, 4.2, "social", [rhea_id, "demo-sana", "demo-isha", "demo-dev"], status="awaiting_feedback"),
         make_session("demo-tennis-awaiting-feedback", "Whitefield Tennis Review", rhea_id, "tennis", "Whitefield", today - timedelta(days=2), time(19), time(21), 3.0, 4.6, "casual", [rhea_id, "demo-neil"], status="awaiting_feedback"),
     ]
+    private_session = make_session("demo-private-apartment-game", "Apartment Friends Only", rhea_id, "tennis", "Whitefield", today + timedelta(days=2), time(20), time(22), 3.0, 4.5, "social", [rhea_id, "demo-neil"])
+    sessions.append(private_session.model_copy(update={"visibility": "private"}))
     for session in sessions:
         repository.save_session(session)
+    for player in players:
+        for sport in player.cmr_ratings:
+            membership_id = f"demo-membership-{sport}-{player.area.lower().replace(' ', '-')}-{player.id}"
+            repository.save_community_membership(CommunityMembership(
+                id=membership_id,
+                community_id=f"community:{sport}:{player.area.lower().replace(' ', '-')}",
+                player_id=player.id,
+                sport=sport,
+                area=player.area,
+                joined_at=now - timedelta(days=(len(player.id) + len(sport)) % 28),
+            ))
     generated_sessions = seed_additional_sessions(repository, players, today)
     seed_activity_history(repository, players, sessions)
     social_post_count, social_comment_count = seed_social_content(repository, players, sessions, rhea_id, now)

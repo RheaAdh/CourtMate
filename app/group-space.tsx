@@ -147,10 +147,10 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
     }
   }
 
-  return <section className={`group-space-page group-space-v2 ${feedbackPhase ? "group-feedback-phase" : ""}`} aria-label={`${group.group_name} group space`}>
+  return <section className={`group-space-page group-space-v2 ${feedbackPhase ? "group-feedback-phase" : ""}`} aria-label={`${group.group_name} Rally Circle`}>
       <header className="group-space-v2-header">
         <button className="group-space-back-button" type="button" onClick={onClose} aria-label="Back to games">← <span>Games</span></button>
-        <div className="group-space-title"><span className="kicker">GROUP SPACE · {group.sport.replaceAll("_", " ").toUpperCase()}</span><h1>{group.group_name}</h1><p>{group.session_date} · {group.start_time}–{group.end_time} · {group.area}</p></div>
+        <div className="group-space-title"><span className="kicker">RALLY CIRCLE · {group.sport.replaceAll("_", " ").toUpperCase()}</span><h1>{group.group_name}</h1><p>{group.session_date} · {group.start_time}–{group.end_time} · {group.area}</p></div>
         <div className="group-space-header-actions"><span className={`status-badge ${feedbackPhase ? "awaiting_feedback" : group.status}`}>{feedbackPhase ? "Awaiting feedback" : group.status === "completed" ? "Game done" : group.status === "in_progress" ? "Playing now" : "Upcoming"}</span>{canComplete && <button className="group-space-mark-done-button" type="button" onClick={() => void markDone()} disabled={markingDone}>{markingDone ? "Completing..." : feedbackPhase ? "Finish & publish" : "Complete game"}</button>}</div>
       </header>
       <div className="group-space-v2-grid">
