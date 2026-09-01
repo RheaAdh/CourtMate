@@ -1,0 +1,221 @@
+{"kind":"deck","id":"pr/bthsst","name":"Deck"}
+{"kind":"layout","layoutId":"8987c5c5-0dc3-4515-a56e-46f8d3362f78","name":"Master","type":"master"}
+{"kind":"layout","layoutId":"aaf43da3-9192-4da1-ac7f-8e221b94bcaa","name":"Title Slide","type":"title"}
+{"kind":"slide","id":"sl/nuq9sg","slide":1,"title":"COURTMATE","textShapes":4}
+{"kind":"shape","id":"sh/1gbyt8z6","slide":1,"bbox":[930,74,220,220]}
+{"kind":"shape","id":"sh/ed0fyd0f","slide":1,"bbox":[1000,144,80,80]}
+{"kind":"textbox","id":"sh/fetgrih0","slide":1,"text":"COURTMATE","textPreview":"COURTMATE","textChars":9,"textLines":1,"bbox":[72,78,430,32]}
+{"kind":"textbox","id":"sh/sbixw3ip","slide":1,"text":"The missing layer\nbetween finding a court\nand building a community.","textPreview":"The missing layer | between finding a court | and building a community.","textChars":67,"textLines":3,"bbox":[72,174,780,220]}
+{"kind":"textbox","id":"sh/tcryp8za","slide":1,"text":"A racket-sports network for better-fit games, trusted play, and circles that grow stronger every time people show up.","textPreview":"A racket-sports network for better-fit games, trusted play, and circles that grow stronger every time people show up.","textChars":117,"textLines":1,"bbox":[76,432,610,72]}
+{"kind":"textbox","id":"sh/690fut0j","slide":1,"text":"BENGALURU · HACKATHON MVP · 2026","textPreview":"BENGALURU · HACKATHON MVP · 2026","textChars":32,"textLines":1,"bbox":[76,626,500,22]}
+{"kind":"notes","id":"nt/nuq9sg","slide":1,"text":"[Sources]\n- CourtMate PRD and Technical Design in the repository; product claims describe the current MVP direction.\n[/Sources]"}
+{"kind":"slide","id":"sl/o1w3x8","slide":2,"title":"THE PROBLEM","textShapes":14}
+{"kind":"textbox","id":"sh/gby187ix","slide":2,"text":"THE PROBLEM","textPreview":"THE PROBLEM","textChars":11,"textLines":1,"bbox":[62,38,260,22]}
+{"kind":"textbox","id":"sh/vap0f2hc","slide":2,"text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[1160,38,58,22]}
+{"kind":"shape","id":"sh/u9wj6x0r","slide":2,"bbox":[62,674,1156,1]}
+{"kind":"textbox","id":"sh/5g72lcze","slide":2,"text":"A FRAGMENTED HABIT","textPreview":"A FRAGMENTED HABIT","textChars":18,"textLines":1,"bbox":[72,82,500,24]}
+{"kind":"textbox","id":"sh/4fy1c7it","slide":2,"text":"The game exists. The connective tissue does not.","textPreview":"The game exists. The connective tissue does not.","textChars":48,"textLines":1,"bbox":[72,116,920,92]}
+{"kind":"textbox","id":"sh/3epkjmh8","slide":2,"text":"Players are already looking for games. The experience is scattered across chats, spreadsheets, labels, and memory.","textPreview":"Players are already looking for games. The experience is scattered across chats, spreadsheets, labels, and memory.","textChars":114,"textLines":1,"bbox":[74,224,720,58]}
+{"kind":"textbox","id":"sh/idgjah03","slide":2,"text":"01","textPreview":"01","textChars":2,"textLines":1,"bbox":[76,356,56,28]}
+{"kind":"shape","id":"sh/d4r2pwzq","slide":2,"bbox":[76,398,300,1]}
+{"kind":"textbox","id":"sh/sji1gri5","slide":2,"text":"Discovery is noisy","textPreview":"Discovery is noisy","textChars":18,"textLines":1,"bbox":[76,424,300,36]}
+{"kind":"textbox","id":"sh/el8r25w7","slide":2,"text":"Nearby games are buried in WhatsApp groups and one-off posts.","textPreview":"Nearby games are buried in WhatsApp groups and one-off posts.","textChars":61,"textLines":1,"bbox":[76,474,294,70]}
+{"kind":"textbox","id":"sh/zmhsbads","slide":2,"text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[458,356,56,28]}
+{"kind":"shape","id":"sh/0nq94fed","slide":2,"bbox":[458,398,300,1]}
+{"kind":"textbox","id":"sh/1ozadkvy","slide":2,"text":"Skill is ambiguous","textPreview":"Skill is ambiguous","textChars":18,"textLines":1,"bbox":[458,424,300,36]}
+{"kind":"textbox","id":"sh/m9sr6pwj","slide":2,"text":"Beginner, intermediate, and advanced mean something different everywhere.","textPreview":"Beginner, intermediate, and advanced mean something different everywhere.","textChars":73,"textLines":1,"bbox":[458,474,294,70]}
+{"kind":"textbox","id":"sh/na1sfud4","slide":2,"text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[840,356,56,28]}
+{"kind":"shape","id":"sh/obat8ze9","slide":2,"bbox":[840,398,300,1]}
+{"kind":"textbox","id":"sh/9cjahkvu","slide":2,"text":"Trust resets","textPreview":"Trust resets","textChars":12,"textLines":1,"bbox":[840,424,300,36]}
+{"kind":"textbox","id":"sh/2dorulwz","slide":2,"text":"After the final point, the record, feedback, and context disappear.","textPreview":"After the final point, the record, feedback, and context disappear.","textChars":67,"textLines":1,"bbox":[840,474,294,70]}
+{"kind":"notes","id":"nt/o1w3x8","slide":2,"text":"[Sources]\n- CourtMate PRD and Technical Design in the repository; product claims describe the current MVP direction.\n[/Sources]"}
+{"kind":"slide","id":"sl/asnfdr","slide":3,"title":"THE PRODUCT","textShapes":18}
+{"kind":"textbox","id":"sh/czadony1","slide":3,"text":"THE PRODUCT","textPreview":"THE PRODUCT","textChars":11,"textLines":1,"bbox":[62,38,260,22]}
+{"kind":"textbox","id":"sh/ry1cfixg","slide":3,"text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[1160,38,58,22]}
+{"kind":"shape","id":"sh/qxsvmdgv","slide":3,"bbox":[62,674,1156,1]}
+{"kind":"textbox","id":"sh/143elcfy","slide":3,"text":"ONE LOOP, NOT FIVE DISCONNECTED TOOLS","textPreview":"ONE LOOP, NOT FIVE DISCONNECTED TOOLS","textChars":37,"textLines":1,"bbox":[72,82,500,24]}
+{"kind":"textbox","id":"sh/03uds7yd","slide":3,"text":"CourtMate turns a search into a repeatable playing habit.","textPreview":"CourtMate turns a search into a repeatable playing habit.","textChars":57,"textLines":1,"bbox":[72,116,920,92]}
+{"kind":"textbox","id":"sh/z2lcj2xs","slide":3,"text":"The product owns the fit, the coordination, the record, and the reason to come back.","textPreview":"The product owns the fit, the coordination, the record, and the reason to come back.","textChars":84,"textLines":1,"bbox":[74,224,720,58]}
+{"kind":"shape","id":"sh/e1cvqxg7","slide":3,"bbox":[84,354,62,62]}
+{"kind":"textbox","id":"sh/9snepcfu","slide":3,"text":"1","textPreview":"1","textChars":1,"textLines":1,"bbox":[84,370,62,24]}
+{"kind":"textbox","id":"sh/oredw7y9","slide":3,"text":"Discover","textPreview":"Discover","textChars":8,"textLines":1,"bbox":[66,442,100,28]}
+{"kind":"shape","id":"sh/69wvmls3","slide":3,"bbox":[149,385,120,1]}
+{"kind":"shape","id":"sh/7apcfqt8","slide":3,"bbox":[272,354,62,62]}
+{"kind":"textbox","id":"sh/sbydobat","slide":3,"text":"2","textPreview":"2","textChars":1,"textLines":1,"bbox":[272,370,62,24]}
+{"kind":"textbox","id":"sh/tc7ehgbe","slide":3,"text":"Join","textPreview":"Join","textChars":4,"textLines":1,"bbox":[254,442,100,28]}
+{"kind":"shape","id":"sh/udgvqlsz","slide":3,"bbox":[337,385,120,1]}
+{"kind":"shape","id":"sh/fepwjqtk","slide":3,"bbox":[460,354,62,62]}
+{"kind":"textbox","id":"sh/gfydsva5","slide":3,"text":"3","textPreview":"3","textChars":1,"textLines":1,"bbox":[460,370,62,24]}
+{"kind":"textbox","id":"sh/hg7el0bq","slide":3,"text":"Play","textPreview":"Play","textChars":4,"textLines":1,"bbox":[442,442,100,28]}
+{"kind":"shape","id":"sh/ahcve1sv","slide":3,"bbox":[525,385,120,1]}
+{"kind":"shape","id":"sh/vilc7mtg","slide":3,"bbox":[648,354,62,62]}
+{"kind":"textbox","id":"sh/zm1sf298","slide":3,"text":"4","textPreview":"4","textChars":1,"textLines":1,"bbox":[648,370,62,24]}
+{"kind":"textbox","id":"sh/ylsr6x8n","slide":3,"text":"Rate","textPreview":"Rate","textChars":4,"textLines":1,"bbox":[630,442,100,28]}
+{"kind":"shape","id":"sh/lojahsry","slide":3,"bbox":[713,385,120,1]}
+{"kind":"shape","id":"sh/0na98nqd","slide":3,"bbox":[836,354,62,62]}
+{"kind":"textbox","id":"sh/bihsbi9w","slide":3,"text":"5","textPreview":"5","textChars":1,"textLines":1,"bbox":[836,370,62,24]}
+{"kind":"textbox","id":"sh/qh8r2dsb","slide":3,"text":"Improve","textPreview":"Improve","textChars":7,"textLines":1,"bbox":[818,442,100,28]}
+{"kind":"shape","id":"sh/dkjadsr2","slide":3,"bbox":[901,385,120,1]}
+{"kind":"shape","id":"sh/cjq94nqh","slide":3,"bbox":[1024,354,62,62]}
+{"kind":"textbox","id":"sh/velsnm90","slide":3,"text":"6","textPreview":"6","textChars":1,"textLines":1,"bbox":[1024,370,62,24]}
+{"kind":"textbox","id":"sh/adcbeh8v","slide":3,"text":"Return","textPreview":"Return","textChars":6,"textLines":1,"bbox":[1006,442,100,28]}
+{"kind":"textbox","id":"sh/szmp8jqd","slide":3,"text":"Every completed game makes the next match more useful.","textPreview":"Every completed game makes the next match more useful.","textChars":54,"textLines":1,"bbox":[312,560,660,40]}
+{"kind":"notes","id":"nt/asnfdr","slide":3,"text":"[Sources]\n- CourtMate PRD and Technical Design in the repository; product claims describe the current MVP direction.\n[/Sources]"}
+{"kind":"slide","id":"sl/ib6o68","slide":4,"title":"THE USP","textShapes":14}
+{"kind":"textbox","id":"sh/0vmh0nyx","slide":4,"text":"THE USP","textPreview":"THE USP","textChars":7,"textLines":1,"bbox":[62,38,260,22]}
+{"kind":"textbox","id":"sh/zudg72hc","slide":4,"text":"04","textPreview":"04","textChars":2,"textLines":1,"bbox":[1160,38,58,22]}
+{"kind":"shape","id":"sh/yt4zyx07","slide":4,"bbox":[62,674,1156,1]}
+{"kind":"textbox","id":"sh/90fydczu","slide":4,"text":"GAMES EXPLORE IS A LIVING LOCAL RADAR","textPreview":"GAMES EXPLORE IS A LIVING LOCAL RADAR","textChars":37,"textLines":1,"bbox":[72,82,500,24]}
+{"kind":"textbox","id":"sh/8z6h47y9","slide":4,"text":"The map makes the network visible.","textPreview":"The map makes the network visible.","textChars":34,"textLines":1,"bbox":[72,116,920,92]}
+{"kind":"textbox","id":"sh/nydgb2ho","slide":4,"text":"Start with all nearby games around the player's approximate location. Filter only when intent becomes clear.","textPreview":"Start with all nearby games around the player's approximate location. Filter only when intent becomes clear.","textChars":108,"textLines":1,"bbox":[74,224,720,58]}
+{"kind":"shape","id":"sh/mx4z2xg3","slide":4,"bbox":[730,92,460,500]}
+{"kind":"shape","id":"sh/xofyhczq","slide":4,"bbox":[750,152,420,1]}
+{"kind":"shape","id":"sh/wn6h87y5","slide":4,"bbox":[750,207,420,1]}
+{"kind":"shape","id":"sh/apk3atw7","slide":4,"bbox":[750,262,420,1]}
+{"kind":"shape","id":"sh/vadk3yxs","slide":4,"bbox":[750,317,420,1]}
+{"kind":"shape","id":"sh/wbmlcjed","slide":4,"bbox":[750,372,420,1]}
+{"kind":"shape","id":"sh/xcv25ovy","slide":4,"bbox":[750,427,420,1]}
+{"kind":"shape","id":"sh/id43etw3","slide":4,"bbox":[750,482,420,1]}
+{"kind":"shape","id":"sh/jedk7ydo","slide":4,"bbox":[780,112,380,1]}
+{"kind":"shape","id":"sh/kfmlg3e9","slide":4,"bbox":[847,112,380,1]}
+{"kind":"shape","id":"sh/5gvm98vu","slide":4,"bbox":[914,112,380,1]}
+{"kind":"shape","id":"sh/yh0329wz","slide":4,"bbox":[981,112,380,1]}
+{"kind":"shape","id":"sh/zitkvexk","slide":4,"bbox":[1048,112,380,1]}
+{"kind":"shape","id":"sh/3mp03adc","slide":4,"bbox":[1115,112,380,1]}
+{"kind":"shape","id":"sh/2lgza5cr","slide":4,"bbox":[930,304,20,20]}
+{"kind":"shape","id":"sh/po7i50vi","slide":4,"bbox":[810,210,42,42]}
+{"kind":"textbox","id":"sh/onyhcvux","slide":4,"text":"3","textPreview":"3","textChars":1,"textLines":1,"bbox":[810,221,42,20]}
+{"kind":"shape","id":"sh/fy50zqd0","slide":4,"bbox":[1030,182,52,52]}
+{"kind":"textbox","id":"sh/exwz6lcv","slide":4,"text":"5","textPreview":"5","textChars":1,"textLines":1,"bbox":[1030,198,52,20]}
+{"kind":"shape","id":"sh/1k7i10v6","slide":4,"bbox":[870,430,36,36]}
+{"kind":"textbox","id":"sh/gzyh8vul","slide":4,"text":"2","textPreview":"2","textChars":1,"textLines":1,"bbox":[870,438,36,20]}
+{"kind":"shape","id":"sh/zu90butk","slide":4,"bbox":[1080,410,42,42]}
+{"kind":"textbox","id":"sh/yt0jipcz","slide":4,"text":"4","textPreview":"4","textChars":1,"textLines":1,"bbox":[1080,421,42,20]}
+{"kind":"shape","id":"sh/wzaxwrah","slide":4,"bbox":[1010,520,32,32]}
+{"kind":"textbox","id":"sh/x03e5cb2","slide":4,"text":"1","textPreview":"1","textChars":1,"textLines":1,"bbox":[1010,526,32,20]}
+{"kind":"textbox","id":"sh/axsfuhsb","slide":4,"text":"ALL SPORTS","textPreview":"ALL SPORTS","textChars":10,"textLines":1,"bbox":[764,112,140,20]}
+{"kind":"textbox","id":"sh/vy1w3mtw","slide":4,"text":"5 KM","textPreview":"5 KM","textChars":4,"textLines":1,"bbox":[1084,112,80,20]}
+{"kind":"textbox","id":"sh/k3ux0rad","slide":4,"text":"Tap a point → see the games there → choose a Rally Circle.","textPreview":"Tap a point → see the games there → choose a Rally Circle.","textChars":58,"textLines":1,"bbox":[76,366,560,82]}
+{"kind":"textbox","id":"sh/543e9wby","slide":4,"text":"No individual player pins. No dead-end lists. Just an understandable picture of where play is happening now.","textPreview":"No individual player pins. No dead-end lists. Just an understandable picture of where play is happening now.","textChars":108,"textLines":1,"bbox":[78,480,540,72]}
+{"kind":"notes","id":"nt/ib6o68","slide":4,"text":"[Sources]\n- CourtMate PRD and Technical Design in the repository; product claims describe the current MVP direction.\n[/Sources]"}
+{"kind":"slide","id":"sl/1ntyyc","slide":5,"title":"TRUSTED CMR","textShapes":16}
+{"kind":"textbox","id":"sh/apcbq5on","slide":5,"text":"TRUSTED CMR","textPreview":"TRUSTED CMR","textChars":11,"textLines":1,"bbox":[62,38,260,22]}
+{"kind":"textbox","id":"sh/xs3a10ne","slide":5,"text":"05","textPreview":"05","textChars":2,"textLines":1,"bbox":[1160,38,58,22]}
+{"kind":"shape","id":"sh/wrutsv6t","slide":5,"bbox":[62,674,1156,1]}
+{"kind":"textbox","id":"sh/juls3a54","slide":5,"text":"SIMPLE INPUT. SOPHISTICATED EVIDENCE.","textPreview":"SIMPLE INPUT. SOPHISTICATED EVIDENCE.","textChars":37,"textLines":1,"bbox":[72,82,500,24]}
+{"kind":"textbox","id":"sh/itcbu5oj","slide":5,"text":"CMR starts human-friendly and earns its authority.","textPreview":"CMR starts human-friendly and earns its authority.","textChars":50,"textLines":1,"bbox":[72,116,920,92]}
+{"kind":"textbox","id":"sh/5gna5kna","slide":5,"text":"A player can tell us where they think they belong. The profile is honest about what has and has not been proven yet.","textPreview":"A player can tell us where they think they belong. The profile is honest about what has and has not been proven yet.","textChars":116,"textLines":1,"bbox":[74,224,720,58]}
+{"kind":"shape","id":"sh/kvetwf6p","slide":5,"bbox":[80,342,290,190]}
+{"kind":"textbox","id":"sh/7i5s7a5g","slide":5,"text":"ONBOARDING","textPreview":"ONBOARDING","textChars":10,"textLines":1,"bbox":[106,370,170,20]}
+{"kind":"textbox","id":"sh/6hwbypov","slide":5,"text":"Level 5","textPreview":"Level 5","textChars":7,"textLines":1,"bbox":[106,410,210,54]}
+{"kind":"textbox","id":"sh/ob2toryh","slide":5,"text":"self-reported starting estimate","textPreview":"self-reported starting estimate","textChars":31,"textLines":1,"bbox":[108,480,220,28]}
+{"kind":"shape","id":"sh/pcbaxwz2","slide":5,"bbox":[398,438,112,1]}
+{"kind":"textbox","id":"sh/290bmh0b","slide":5,"text":"→","textPreview":"→","textChars":1,"textLines":1,"bbox":[445,416,45,40]}
+{"kind":"shape","id":"sh/natsvmhw","slide":5,"bbox":[560,342,560,190]}
+{"kind":"textbox","id":"sh/cz2tsryd","slide":5,"text":"EVIDENCE BUILDS","textPreview":"EVIDENCE BUILDS","textChars":15,"textLines":1,"bbox":[594,370,220,20]}
+{"kind":"textbox","id":"sh/x0ba1wzy","slide":5,"text":"5.00 → 5.28 → 5.43","textPreview":"5.00 → 5.28 → 5.43","textChars":18,"textLines":1,"bbox":[594,410,450,52]}
+{"kind":"textbox","id":"sh/adkbqhgn","slide":5,"text":"confirmed competitive results · partner strength · score margin · confidence","textPreview":"confirmed competitive results · partner strength · score margin · confidence","textChars":76,"textLines":1,"bbox":[596,480,460,28]}
+{"kind":"textbox","id":"sh/bytszmhs","slide":5,"text":"0 games","textPreview":"0 games","textChars":7,"textLines":1,"bbox":[120,594,160,26]}
+{"kind":"textbox","id":"sh/k3mtwbyp","slide":5,"text":"Starting level","textPreview":"Starting level","textChars":14,"textLines":1,"bbox":[90,624,220,24]}
+{"kind":"textbox","id":"sh/l4va5gza","slide":5,"text":"3+ games","textPreview":"3+ games","textChars":8,"textLines":1,"bbox":[850,594,160,26]}
+{"kind":"textbox","id":"sh/tkrapwre","slide":5,"text":"Verified CMR","textPreview":"Verified CMR","textChars":12,"textLines":1,"bbox":[820,624,220,24]}
+{"kind":"notes","id":"nt/1ntyyc","slide":5,"text":"[Sources]\n- CourtMate PRD and Technical Design in the repository; product claims describe the current MVP direction.\n[/Sources]"}
+{"kind":"slide","id":"sl/wullnj","slide":6,"title":"RALLY CIRCLES","textShapes":15}
+{"kind":"textbox","id":"sh/apovadkj","slide":6,"text":"RALLY CIRCLES","textPreview":"RALLY CIRCLES","textChars":13,"textLines":1,"bbox":[62,38,260,22]}
+{"kind":"textbox","id":"sh/xszels3a","slide":6,"text":"06","textPreview":"06","textChars":2,"textLines":1,"bbox":[1160,38,58,22]}
+{"kind":"shape","id":"sh/wr6dcn2p","slide":6,"bbox":[62,674,1156,1]}
+{"kind":"textbox","id":"sh/juhwn2l0","slide":6,"text":"THE GAME DOES NOT END AT ‘JOIN’","textPreview":"THE GAME DOES NOT END AT ‘JOIN’","textChars":31,"textLines":1,"bbox":[72,82,500,24]}
+{"kind":"textbox","id":"sh/it8vexkv","slide":6,"text":"Rally Circle keeps the social logistics together.","textPreview":"Rally Circle keeps the social logistics together.","textChars":49,"textLines":1,"bbox":[72,116,920,92]}
+{"kind":"textbox","id":"sh/5wzeps36","slide":6,"text":"A shared space for the lineup, requests, chat, time polls, completion, feedback, and the next story.","textPreview":"A shared space for the lineup, requests, chat, time polls, completion, feedback, and the next story.","textChars":100,"textLines":1,"bbox":[74,224,720,58]}
+{"kind":"textbox","id":"sh/kvqdgn2l","slide":6,"text":"01","textPreview":"01","textChars":2,"textLines":1,"bbox":[90,340,60,22]}
+{"kind":"textbox","id":"sh/zydcbylw","slide":6,"text":"Preview","textPreview":"Preview","textChars":7,"textLines":1,"bbox":[174,336,260,34]}
+{"kind":"textbox","id":"sh/yx4v2tkb","slide":6,"text":"See the people, time, CMR band, and vibe.","textPreview":"See the people, time, CMR band, and vibe.","textChars":41,"textLines":1,"bbox":[470,340,590,32]}
+{"kind":"shape","id":"sh/gvyd8bu5","slide":6,"bbox":[174,395,890,1]}
+{"kind":"textbox","id":"sh/hw7ehgvq","slide":6,"text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[90,444,60,22]}
+{"kind":"textbox","id":"sh/utgv61cf","slide":6,"text":"Coordinate","textPreview":"Coordinate","textChars":10,"textLines":1,"bbox":[174,440,260,34]}
+{"kind":"textbox","id":"sh/vupcf6dk","slide":6,"text":"Chat, vote on a time window, and settle logistics.","textPreview":"Chat, vote on a time window, and settle logistics.","textChars":50,"textLines":1,"bbox":[470,444,590,32]}
+{"kind":"shape","id":"sh/4zydcbuh","slide":6,"bbox":[174,499,890,1]}
+{"kind":"textbox","id":"sh/pkrelgv2","slide":6,"text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[90,548,60,22]}
+{"kind":"textbox","id":"sh/ixgvalcb","slide":6,"text":"Close the loop","textPreview":"Close the loop","textChars":14,"textLines":1,"bbox":[174,544,260,34]}
+{"kind":"textbox","id":"sh/3ypwj6dw","slide":6,"text":"Confirm the result, rate privately, and publish the rally.","textPreview":"Confirm the result, rate privately, and publish the rally.","textChars":58,"textLines":1,"bbox":[470,548,590,32]}
+{"kind":"shape","id":"sh/k3ed0rux","slide":6,"bbox":[174,603,890,1]}
+{"kind":"shape","id":"sh/lonu9wvi","slide":6,"bbox":[1070,336,110,284]}
+{"kind":"textbox","id":"sh/lkfad8nm","slide":6,"text":"SHOW\nUP\n\nPLAY\nAGAIN","textPreview":"SHOW | UP |  | PLAY | AGAIN","textChars":19,"textLines":5,"bbox":[1090,382,70,160]}
+{"kind":"notes","id":"nt/wullnj","slide":6,"text":"[Sources]\n- CourtMate PRD and Technical Design in the repository; product claims describe the current MVP direction.\n[/Sources]"}
+{"kind":"slide","id":"sl/rbt0kl","slide":7,"title":"THE NETWORK","textShapes":13}
+{"kind":"textbox","id":"sh/j6hgn2ts","slide":7,"text":"THE NETWORK","textPreview":"THE NETWORK","textChars":11,"textLines":1,"bbox":[62,38,260,22]}
+{"kind":"textbox","id":"sh/k7qhw7ud","slide":7,"text":"07","textPreview":"07","textChars":2,"textLines":1,"bbox":[1160,38,58,22]}
+{"kind":"shape","id":"sh/l8zypcby","slide":7,"bbox":[62,674,1156,1]}
+{"kind":"textbox","id":"sh/698zyhcj","slide":7,"text":"EACH GAME COMPOUNDS THE LOCAL NETWORK","textPreview":"EACH GAME COMPOUNDS THE LOCAL NETWORK","textChars":37,"textLines":1,"bbox":[72,82,500,24]}
+{"kind":"textbox","id":"sh/7ahgrmt4","slide":7,"text":"Quality is the growth loop.","textPreview":"Quality is the growth loop.","textChars":27,"textLines":1,"bbox":[72,116,920,92]}
+{"kind":"textbox","id":"sh/8bqh07up","slide":7,"text":"More games create more evidence. More evidence creates better matches. Better matches make people return and invite their circle.","textPreview":"More games create more evidence. More evidence creates better matches. Better matches make people return and invite their circle.","textChars":129,"textLines":1,"bbox":[74,224,720,58]}
+{"kind":"shape","id":"sh/tczytcbu","slide":7,"bbox":[250,408,260,1]}
+{"kind":"shape","id":"sh/udsz2hcf","slide":7,"bbox":[582,310,270,1]}
+{"kind":"shape","id":"sh/ve1gvmt0","slide":7,"bbox":[580,430,270,1]}
+{"kind":"shape","id":"sh/va9ovmxk","slide":7,"bbox":[520,500,0,1]}
+{"kind":"shape","id":"sh/u90nmhwz","slide":7,"bbox":[190,380,120,120]}
+{"kind":"textbox","id":"sh/hcr6xwfa","slide":7,"text":"PLAYERS","textPreview":"PLAYERS","textChars":7,"textLines":1,"bbox":[180,428,140,22]}
+{"kind":"shape","id":"sh/gbi5ore5","slide":7,"bbox":[520,280,120,120]}
+{"kind":"textbox","id":"sh/76p4rmx8","slide":7,"text":"GAMES","textPreview":"GAMES","textChars":5,"textLines":1,"bbox":[510,328,140,22]}
+{"kind":"shape","id":"sh/m5gnihwn","slide":7,"bbox":[850,380,120,120]}
+{"kind":"textbox","id":"sh/98r6tcfe","slide":7,"text":"EVIDENCE","textPreview":"EVIDENCE","textChars":8,"textLines":1,"bbox":[840,428,140,22]}
+{"kind":"shape","id":"sh/87y5k7et","slide":7,"bbox":[520,520,120,120]}
+{"kind":"textbox","id":"sh/r2to36xs","slide":7,"text":"RETURN","textPreview":"RETURN","textChars":6,"textLines":1,"bbox":[510,568,140,22]}
+{"kind":"textbox","id":"sh/q1knu1w7","slide":7,"text":"Fit","textPreview":"Fit","textChars":3,"textLines":1,"bbox":[376,370,80,24]}
+{"kind":"textbox","id":"sh/2x4rm5gf","slide":7,"text":"Trust","textPreview":"Trust","textChars":5,"textLines":1,"bbox":[700,284,80,24]}
+{"kind":"textbox","id":"sh/nyx8vah0","slide":7,"text":"Motivation","textPreview":"Motivation","textChars":10,"textLines":1,"bbox":[690,544,120,24]}
+{"kind":"textbox","id":"sh/oz69ofy5","slide":7,"text":"The product gets smarter because people play, not because they fill out more forms.","textPreview":"The product gets smarter because people play, not because they fill out more forms.","textChars":83,"textLines":1,"bbox":[250,642,780,28]}
+{"kind":"notes","id":"nt/rbt0kl","slide":7,"text":"[Sources]\n- CourtMate PRD and Technical Design in the repository; product claims describe the current MVP direction.\n[/Sources]"}
+{"kind":"slide","id":"sl/my4usr","slide":8,"title":"BEACHHEAD","textShapes":11}
+{"kind":"textbox","id":"sh/axkz2hkv","slide":8,"text":"BEACHHEAD","textPreview":"BEACHHEAD","textChars":9,"textLines":1,"bbox":[62,38,260,22]}
+{"kind":"textbox","id":"sh/x0vidw36","slide":8,"text":"08","textPreview":"08","textChars":2,"textLines":1,"bbox":[1160,38,58,22]}
+{"kind":"shape","id":"sh/wz2h4r2l","slide":8,"bbox":[62,674,1156,1]}
+{"kind":"textbox","id":"sh/j2d0fmlc","slide":8,"text":"START WHERE DENSITY AND URGENCY ALREADY MEET","textPreview":"START WHERE DENSITY AND URGENCY ALREADY MEET","textChars":44,"textLines":1,"bbox":[72,82,500,24]}
+{"kind":"textbox","id":"sh/y14z6hkr","slide":8,"text":"Bengaluru is the first court.","textPreview":"Bengaluru is the first court.","textChars":29,"textLines":1,"bbox":[72,116,920,92]}
+{"kind":"textbox","id":"sh/lovihw3i","slide":8,"text":"Whitefield is the starting wedge: a high-energy cluster of apartments, courts, communities, and players already coordinating informally.","textPreview":"Whitefield is the starting wedge: a high-energy cluster of apartments, courts, communities, and players already coordinating informally.","textChars":136,"textLines":1,"bbox":[74,224,720,58]}
+{"kind":"shape","id":"sh/k3m18r2x","slide":8,"bbox":[80,348,500,220]}
+{"kind":"textbox","id":"sh/z69032l8","slide":8,"text":"NOW","textPreview":"NOW","textChars":3,"textLines":1,"bbox":[112,382,100,22]}
+{"kind":"textbox","id":"sh/e50zuxkn","slide":8,"text":"Whitefield → Brookefield → Varthur","textPreview":"Whitefield → Brookefield → Varthur","textChars":34,"textLines":1,"bbox":[112,424,400,36]}
+{"kind":"textbox","id":"sh/0vux03e1","slide":8,"text":"One dense local loop, across six racket sports.","textPreview":"One dense local loop, across six racket sports.","textChars":47,"textLines":1,"bbox":[114,490,390,30]}
+{"kind":"shape","id":"sh/lw3y98vm","slide":8,"bbox":[660,352,0,1]}
+{"kind":"textbox","id":"sh/y9cfytwv","slide":8,"text":"NEXT","textPreview":"NEXT","textChars":4,"textLines":1,"bbox":[730,382,100,22]}
+{"kind":"textbox","id":"sh/zulg7yxg","slide":8,"text":"Bengaluru → India → every\nracket-sports community","textPreview":"Bengaluru → India → every | racket-sports community","textChars":49,"textLines":2,"bbox":[730,424,430,86]}
+{"kind":"textbox","id":"sh/8zex43ex","slide":8,"text":"Portable CMR, local trust, and a repeatable playbook.","textPreview":"Portable CMR, local trust, and a repeatable playbook.","textChars":53,"textLines":1,"bbox":[732,526,390,30]}
+{"kind":"notes","id":"nt/my4usr","slide":8,"text":"[Sources]\n- CourtMate PRD and Technical Design in the repository; product claims describe the current MVP direction.\n[/Sources]"}
+{"kind":"slide","id":"sl/0xai3c","slide":9,"title":"THE MOAT","textShapes":17}
+{"kind":"textbox","id":"sh/ydkrudgn","slide":9,"text":"THE MOAT","textPreview":"THE MOAT","textChars":8,"textLines":1,"bbox":[62,38,260,22]}
+{"kind":"textbox","id":"sh/lgba58fe","slide":9,"text":"09","textPreview":"09","textChars":2,"textLines":1,"bbox":[1160,38,58,22]}
+{"kind":"shape","id":"sh/0f29w3yt","slide":9,"bbox":[62,674,1156,1]}
+{"kind":"textbox","id":"sh/bq9szyhc","slide":9,"text":"A TRUST GRAPH BUILT FROM REAL PLAY","textPreview":"A TRUST GRAPH BUILT FROM REAL PLAY","textChars":34,"textLines":1,"bbox":[72,82,500,24]}
+{"kind":"textbox","id":"sh/qp0rqtgr","slide":9,"text":"The defensibility is in the context around every game.","textPreview":"The defensibility is in the context around every game.","textChars":54,"textLines":1,"bbox":[72,116,920,92]}
+{"kind":"textbox","id":"sh/dcba18z2","slide":9,"text":"CourtMate connects identity, location, fit, attendance, private feedback, verified results, and community quality without exposing private player data.","textPreview":"CourtMate connects identity, location, fit, attendance, private feedback, verified results, and community quality without exposing privat...","textChars":151,"textLines":1,"bbox":[74,224,720,58]}
+{"kind":"shape","id":"sh/cr29s3yh","slide":9,"bbox":[86,372,190,142]}
+{"kind":"textbox","id":"sh/vmdsv2xg","slide":9,"text":"IDENTITY","textPreview":"IDENTITY","textChars":8,"textLines":1,"bbox":[104,398,150,20]}
+{"kind":"textbox","id":"sh/al4b2xgv","slide":9,"text":"Who is playing?","textPreview":"Who is playing?","textChars":15,"textLines":1,"bbox":[104,440,150,52]}
+{"kind":"textbox","id":"sh/8f290jip","slide":9,"text":"+","textPreview":"+","textChars":1,"textLines":1,"bbox":[286,424,40,36]}
+{"kind":"shape","id":"sh/90bqtozu","slide":9,"bbox":[326,372,190,142]}
+{"kind":"textbox","id":"sh/md0ry90j","slide":9,"text":"CONTEXT","textPreview":"CONTEXT","textChars":7,"textLines":1,"bbox":[344,398,150,20]}
+{"kind":"textbox","id":"sh/ne98reh4","slide":9,"text":"Where, when, and why?","textPreview":"Where, when, and why?","textChars":21,"textLines":1,"bbox":[344,440,150,52]}
+{"kind":"textbox","id":"sh/0bi9wjid","slide":9,"text":"+","textPreview":"+","textChars":1,"textLines":1,"bbox":[526,424,40,36]}
+{"kind":"shape","id":"sh/lcrq5ozy","slide":9,"bbox":[566,372,190,142]}
+{"kind":"textbox","id":"sh/y90ru907","slide":9,"text":"OUTCOME","textPreview":"OUTCOME","textChars":7,"textLines":1,"bbox":[584,398,150,20]}
+{"kind":"textbox","id":"sh/za983ehs","slide":9,"text":"What actually happened?","textPreview":"What actually happened?","textChars":23,"textLines":1,"bbox":[584,440,150,52]}
+{"kind":"textbox","id":"sh/c7i9szih","slide":9,"text":"+","textPreview":"+","textChars":1,"textLines":1,"bbox":[766,424,40,36]}
+{"kind":"shape","id":"sh/d8rq14j2","slide":9,"bbox":[806,372,190,142]}
+{"kind":"textbox","id":"sh/d4j6p0bq","slide":9,"text":"SIGNAL","textPreview":"SIGNAL","textChars":6,"textLines":1,"bbox":[824,398,150,20]}
+{"kind":"textbox","id":"sh/s3apwva5","slide":9,"text":"What should happen next?","textPreview":"What should happen next?","textChars":24,"textLines":1,"bbox":[824,440,150,52]}
+{"kind":"textbox","id":"sh/r2honqtk","slide":9,"text":"Privacy-safe aggregation is a feature, not a compromise.","textPreview":"Privacy-safe aggregation is a feature, not a compromise.","textChars":56,"textLines":1,"bbox":[306,598,670,30]}
+{"kind":"notes","id":"nt/0xai3c","slide":9,"text":"[Sources]\n- CourtMate PRD and Technical Design in the repository; product claims describe the current MVP direction.\n[/Sources]"}
+{"kind":"slide","id":"sl/phae2p","slide":10,"title":"THE VISION","textShapes":8}
+{"kind":"textbox","id":"sh/atojuh4z","slide":10,"text":"THE VISION","textPreview":"THE VISION","textChars":10,"textLines":1,"bbox":[62,38,260,22]}
+{"kind":"textbox","id":"sh/xwz2pcna","slide":10,"text":"10","textPreview":"10","textChars":2,"textLines":1,"bbox":[1160,38,58,22]}
+{"kind":"shape","id":"sh/cvq1w7m5","slide":10,"bbox":[62,674,1156,1]}
+{"kind":"shape","id":"sh/zyhkrm5g","slide":10,"bbox":[930,112,210,210]}
+{"kind":"textbox","id":"sh/yx8jyh4v","slide":10,"text":"MAKE THE\nNEXT GAME\nEASIEST TO\nJOIN.","textPreview":"MAKE THE | NEXT GAME | EASIEST TO | JOIN.","textChars":35,"textLines":4,"bbox":[968,154,145,150]}
+{"kind":"textbox","id":"sh/l0z2twnm","slide":10,"text":"CourtMate","textPreview":"CourtMate","textChars":9,"textLines":1,"bbox":[72,100,500,52]}
+{"kind":"textbox","id":"sh/kzq10rm1","slide":10,"text":"Find community → join game → play → rate → improve CMR → get better matches.","textPreview":"Find community → join game → play → rate → improve CMR → get better matches.","textChars":76,"textLines":1,"bbox":[76,220,720,82]}
+{"kind":"textbox","id":"sh/f2d0f25c","slide":10,"text":"We are building the connective layer that turns occasional court time into a trusted, growing habit.","textPreview":"We are building the connective layer that turns occasional court time into a trusted, growing habit.","textChars":100,"textLines":1,"bbox":[78,356,650,72]}
+{"kind":"shape","id":"sh/e14jmx4r","slide":10,"bbox":[78,500,360,1]}
+{"kind":"textbox","id":"sh/k76l0jep","slide":10,"text":"NEXT MILESTONE","textPreview":"NEXT MILESTONE","textChars":14,"textLines":1,"bbox":[78,534,200,20]}
+{"kind":"textbox","id":"sh/58fmtofa","slide":10,"text":"Make Games Explore irresistible in Bengaluru.","textPreview":"Make Games Explore irresistible in Bengaluru.","textChars":45,"textLines":1,"bbox":[78,570,600,34]}
+{"kind":"notes","id":"nt/phae2p","slide":10,"text":"[Sources]\n- CourtMate PRD and Technical Design in the repository; product claims describe the current MVP direction.\n[/Sources]"}

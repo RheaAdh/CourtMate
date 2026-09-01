@@ -9,13 +9,13 @@
 
 The Next.js client owns presentation, browser history, voice input, optimistic reactions, image previews, share-card rendering, theme state, and responsive navigation. FastAPI is authoritative for authentication, authorization, visibility, matching, capacity, lifecycle, feedback, CMR, notifications, and derived community scores. Gemini parses and explains verified records; it does not decide access or mutate Firestore directly.
 
-The authenticated shell has four primary areas: **Home**, **Games**, **Communities**, and **Assistant**. Profile and utility pages are history-aware. The client uses the same repository protocol against Firestore in deployment and an in-memory repository in local tests.
+The authenticated shell has four primary areas: **Home**, **Games**, **Profile**, and **Assistant**. Games → **Explore** is the map-led community discovery surface; Communities is retained only as a legacy routing alias that resolves to Games → Explore. Profile and utility pages are history-aware. The client uses the same repository protocol against Firestore in deployment and an in-memory repository in local tests.
 
 ## 2. Game Discovery And Creation
 
 `POST /v1/sessions/search` parses a natural-language request, applies deterministic hard constraints, and ranks verified records. Hard constraints include sport, lifecycle, visibility, capacity, date/time, CMR/skill compatibility, area or travel radius, and authorization. Similarity is never an authorization boundary.
 
-`GET /v1/me/explore` returns public or follower-visible open/full sessions that the current player is eligible to request. Private sessions are excluded unless the current player is already the organizer or a confirmed participant. The client applies the submitted Explore filters for text, sport, CMR band, exact date, and time of day.
+`GET /v1/me/explore` returns public or follower-visible open/full sessions that the current player is eligible to request. Private sessions are excluded unless the current player is already the organizer or a confirmed participant. Games → Explore loads `GET /v1/me/community-map?sport=all` by default around the player's approximate location and five-kilometre radius, then applies map filters for sport, radius, area, visibility, CMR fit, exact date, and time of day. Selecting a cluster or map point filters the returned game list to that location; the client never exposes individual player records.
 
 `POST /v1/groups` creates a session. `CreateGroupRequest.visibility` accepts `public`, `followers`, or `private`; when omitted, the player’s `default_session_visibility` is used. Game creation validates future start time, end after start, CMR bounds, format, and capacity.
 
@@ -31,7 +31,7 @@ Feedback stores match quality, satisfaction, optional return intent, and private
 
 ### CMR Scale And Migration
 
-The canonical CMR representation is a float in the inclusive `1.00–10.00` range. `Player.self_assessed_levels` stores an integer `1–10` confirmed by the player, `cmr_starting_ratings` stores the stable per-sport seed, and `cmr_ratings` stores the current two-decimal result-derived value. New-game and matching bands default to the player's CMR plus or minus `1.8`.
+The canonical CMR representation is a float in the inclusive `1.00–10.00` range. `Player.self_assessed_levels` stores an integer `1–10` selected by the player as an onboarding estimate, `cmr_starting_ratings` stores the stable per-sport seed, and `cmr_ratings` stores the current two-decimal value after confirmed results. A profile is **Starting level** at zero confirmed competitive games, **Provisional** below three, and **Verified** at three or more. The count comes from deterministic competitive-result replay, not casual attendance, private feedback, or the user-entered level. New-game and matching bands default to the player's CMR plus or minus `1.8`.
 
 Legacy persisted values are versioned by `Player.cmr_scale` and `Session.skill_scale`. The migration accepts the historic `1–8` and `0–100` CMR formats and converts them deterministically to the canonical range; it is idempotent and touches only CourtMate `players` and `sessions` Firestore documents. Run `PYTHONPATH=. python -m backend.migrate_cmr_to_10`. Authentication records and raw external ratings are not mutated.
 
@@ -39,14 +39,14 @@ Competitive replay uses an expected-result denominator of `1.8` CMR points and a
 
 ## 4. Communities And Aggregated Density
 
-`GET /v1/me/player-density` accepts sport, latitude, longitude, radius, and optional CMR bounds. The default client radius is 5 km. The server returns aggregated neighbourhood points only, with player count, intensity, CMR range, coordinates suitable for a neighbourhood marker, and distance. It must:
+`GET /v1/me/player-density` accepts sport, latitude, longitude, radius, and optional CMR bounds. The default client radius is 5 km. `GET /v1/me/community-map` accepts `sport=all` as well as a specific sport and returns nearby public game markers/clusters, aggregated density, and activity in one response. The server returns aggregated neighbourhood points only, with player count, intensity, CMR range, coordinates suitable for a neighbourhood marker, and distance. It must:
 
 - omit groups with fewer than three visible players;
 - avoid individual player IDs and exact home coordinates;
 - respect private profiles and the caller’s matching scope;
 - fall back to saved locality or the Whitefield coordinates when GPS is unavailable.
 
-The frontend renders the response with React SVG and CSS only. It has no map SDK, API key, billing dependency, external tile server, or street-road layer. Latitude/longitude differences are converted to approximate kilometres using the latitude cosine correction. The 5 km radius is represented by the base SVG ring; zoom applies one centered SVG transform to rings, crosshair, current-location marker, and hotspots. Pointer drag pans, wheel input zooms, and reset restores zoom 1 and zero pan.
+The frontend renders Google Maps when the browser key and SDK are available, with an SVG/CSS fallback when they are not. Google Maps loading is client-only and lazy; map markers are public-game or privacy-safe aggregation markers. Latitude/longitude differences are converted to approximate kilometres using the latitude cosine correction. The 5 km radius is represented by the base map ring; zoom, pan, pinch, and reset update the map without changing the selected filters.
 
 `GET /v1/me/community-leaderboard` accepts sport and optional area. It groups completed sessions by community, calculates quality signals, and returns entries only after three completed games and five ratings. Results are sorted deterministically by quality score and stable community identity. The client shows the leaderboard near the top of Communities, before the map, so it is visible on mobile. The optional facility directory is collapsed and fetches only when opened.
 

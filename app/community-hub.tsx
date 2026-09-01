@@ -160,7 +160,7 @@ function loadGoogleMapsScript(apiKey: string): Promise<void> {
     }
 
     const script = document.createElement("script");
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=maps,marker&callback=${callbackName}&v=weekly`;
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=maps,marker&callback=${callbackName}&loading=async&v=weekly`;
     script.async = true;
     script.defer = true;
     script.dataset.courtmateGmaps = "true";
@@ -181,6 +181,7 @@ function GoogleDensityMap({
   center,
   radiusKm,
   selectedArea,
+  onMapMove,
   onSelectCluster,
   onSelectGame,
 }: {
@@ -192,6 +193,7 @@ function GoogleDensityMap({
   radiusKm: number;
   selectedPoint: DensityPoint | null;
   selectedArea: string | null;
+  onMapMove: (center: { latitude: number; longitude: number }) => void;
   onSelect: (point: DensityPoint) => void;
   onSelectCommunity: (community: MapCommunity) => void;
   onSelectCluster: (cluster: MapCluster) => void;
@@ -205,8 +207,11 @@ function GoogleDensityMap({
 
   const onSelectClusterRef = useRef(onSelectCluster);
   const onSelectGameRef = useRef(onSelectGame);
+  const onMapMoveRef = useRef(onMapMove);
+  const mapDraggedRef = useRef(false);
   onSelectClusterRef.current = onSelectCluster;
   onSelectGameRef.current = onSelectGame;
+  onMapMoveRef.current = onMapMove;
 
   const mapKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
 
@@ -220,20 +225,30 @@ function GoogleDensityMap({
         const googleMaps = (window as unknown as { google: { maps: any } }).google.maps;
         if (!googleMaps) return;
 
+        let MapConstructor = googleMaps.Map;
+        let CircleConstructor = googleMaps.Circle;
         let AdvancedMarkerElement: any = null;
+        let LegacyMarkerConstructor = googleMaps.Marker;
         try {
           if (typeof googleMaps.importLibrary === "function") {
+            const mapsLib = await googleMaps.importLibrary("maps");
+            MapConstructor = mapsLib.Map ?? MapConstructor;
+            CircleConstructor = mapsLib.Circle ?? CircleConstructor;
             const markerLib = await googleMaps.importLibrary("marker");
             AdvancedMarkerElement = markerLib.AdvancedMarkerElement;
+            LegacyMarkerConstructor = markerLib.Marker ?? LegacyMarkerConstructor;
           }
         } catch {
           // Fallback to standard marker
         }
 
         if (cancelled || !mapRef.current) return;
+        if (typeof MapConstructor !== "function") {
+          throw new Error("Google Maps Map constructor is unavailable");
+        }
 
         if (!mapInstanceRef.current) {
-          const map = new googleMaps.Map(mapRef.current, {
+          const map = new MapConstructor(mapRef.current, {
             center: { lat: center.latitude, lng: center.longitude },
             zoom: Math.max(9, Math.min(14, Math.round(14 - Math.log2(radiusKm / 5)))),
             mapId: "DEMO_MAP_ID",
@@ -250,17 +265,30 @@ function GoogleDensityMap({
           });
           mapInstanceRef.current = map;
 
-          const circle = new googleMaps.Circle({
-            map,
-            center: { lat: center.latitude, lng: center.longitude },
-            radius: radiusKm * 1000,
-            fillColor: "#d7f23f",
-            fillOpacity: 0.12,
-            strokeColor: "#90a91c",
-            strokeOpacity: 0.85,
-            strokeWeight: 2,
+          map.addListener("dragstart", () => {
+            mapDraggedRef.current = true;
           });
-          circleInstanceRef.current = circle;
+          map.addListener("idle", () => {
+            if (!mapDraggedRef.current) return;
+            mapDraggedRef.current = false;
+            const nextCenter = map.getCenter?.();
+            if (!nextCenter) return;
+            onMapMoveRef.current({ latitude: nextCenter.lat(), longitude: nextCenter.lng() });
+          });
+
+          if (typeof CircleConstructor === "function") {
+            const circle = new CircleConstructor({
+              map,
+              center: { lat: center.latitude, lng: center.longitude },
+              radius: radiusKm * 1000,
+              fillColor: "#d7f23f",
+              fillOpacity: 0.12,
+              strokeColor: "#90a91c",
+              strokeOpacity: 0.85,
+              strokeWeight: 2,
+            });
+            circleInstanceRef.current = circle;
+          }
         } else {
           mapInstanceRef.current.setCenter({ lat: center.latitude, lng: center.longitude });
           mapInstanceRef.current.setZoom(Math.max(9, Math.min(14, Math.round(14 - Math.log2(radiusKm / 5)))));
@@ -344,7 +372,10 @@ function GoogleDensityMap({
             return marker;
           }
 
-          return new googleMaps.Marker({
+          if (typeof LegacyMarkerConstructor !== "function") {
+            throw new Error("Google Maps marker constructor is unavailable");
+          }
+          return new LegacyMarkerConstructor({
             map,
             position,
             title,
@@ -468,7 +499,7 @@ export function CommunityHub({
   const apiScope = isGuest ? "public" : "me";
 
   const [sportFilter, setSportFilter] = useState<SportFilter>("all");
-  const [radiusKm, setRadiusKm] = useState(5);
+  const [radiusKm, setRadiusKm] = useState(50);
   const [visibilityFilter, setVisibilityFilter] = useState<MapVisibilityFilter>("all");
   const [mapRefresh, setMapRefresh] = useState(1);
   const [hasSearched, setHasSearched] = useState(true);
@@ -700,6 +731,26 @@ export function CommunityHub({
 
   const center = location ?? DEFAULT_CENTER;
 
+  const handleMapMove = (nextCenter: { latitude: number; longitude: number }) => {
+    if (Math.abs(nextCenter.latitude - center.latitude) < 0.001 && Math.abs(nextCenter.longitude - center.longitude) < 0.001) return;
+    let nearestArea = areaFilter;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    for (const [area, coordinates] of Object.entries(BENGALURU_AREAS)) {
+      const distance = Math.hypot(nextCenter.latitude - coordinates.latitude, nextCenter.longitude - coordinates.longitude);
+      if (distance < nearestDistance) {
+        nearestArea = area;
+        nearestDistance = distance;
+      }
+    }
+    manualAreaRef.current = true;
+    setLocation(nextCenter);
+    setAreaFilter(nearestArea);
+    setLocationState("fallback");
+    setSelectedGameState(null);
+    setSelectedMapArea(null);
+    setSelectedGameIds(null);
+  };
+
   const isRequested = (sessionId: string) => requestedSessionIds.includes(sessionId);
   const isJoined = (sessionId: string) => joinedSessionIds.includes(sessionId);
 
@@ -787,13 +838,7 @@ export function CommunityHub({
   };
 
   return (
-    <section className="page-view community-page" aria-labelledby="community-page-title">
-      <header className="community-header">
-        <span className="kicker">{isGuest ? "BROWSE LOCAL GAMES" : "YOUR PEOPLE, YOUR SPORT"}</span>
-        <h1 id="community-page-title">{isGuest ? "Find a game nearby" : "Find your circle"}</h1>
-        <p>{isGuest ? "Explore public games, map activity, and local circles. Sign in only when you are ready to request a spot." : "Players like you are showing up nearby. Log every game, improve your CMR, and make your next match better."}</p>
-      </header>
-
+    <section className="community-page" aria-label="Nearby games and community activity">
       <section className="player-density-card" aria-labelledby="player-density-title">
         <div className="density-heading">
           <div>
@@ -892,8 +937,8 @@ export function CommunityHub({
               >
                 Search games
               </button>
+              {!isGuest && currentCmr != null && <button type="button" className={`radar-cmr-toggle ${cmrOnly ? "active" : ""}`} onClick={() => setCmrOnly((enabled) => !enabled)} aria-label="Filter games by my CMR" aria-pressed={cmrOnly}><span>CMR fit</span><i aria-hidden="true" /></button>}
             </div>
-            {!isGuest && currentCmr != null && <button type="button" className={`radar-cmr-toggle ${cmrOnly ? "active" : ""}`} onClick={() => setCmrOnly((enabled) => !enabled)}>CMR fit: {cmrOnly ? "on" : "off"}</button>}
             <div className="map-data-legend">
               <span>
                 <i className="legend-dot games" /> Active games
@@ -911,7 +956,7 @@ export function CommunityHub({
           </div>
         ) : densityLoading ? (
           <div className="density-map-loading">Scanning {radiusKm} km around you...</div>
-        ) : densityPoints.length || mapCommunities.length || nearbyGamesState.length ? (
+        ) : (
           <>
             <div className="density-map-shell">
               <div className="density-map-toolbar">
@@ -955,6 +1000,7 @@ export function CommunityHub({
                 radiusKm={radiusKm}
                 selectedPoint={selectedPoint}
                 selectedArea={selectedMapArea}
+                onMapMove={handleMapMove}
                 onSelect={setSelectedPoint}
                 onSelectCommunity={(community) =>
                   setSelectedPoint(densityPoints.find((point) => point.area === community.area) ?? null)
@@ -1099,11 +1145,6 @@ export function CommunityHub({
               </section>
             )}
           </>
-        ) : (
-          <div className="density-map-empty">
-            {densityError ||
-              `Not enough visible ${labels[sportFilter].toLowerCase()} players in one area yet. Invite your circle to make the signal visible.`}
-          </div>
         )}
 
         <p className="density-privacy-note">

@@ -42,9 +42,9 @@ Games also provides a structured create-game modal. The form validates that the 
 - casual, social, or competitive style;
 - visibility: discoverable on Explore, followers can discover, or private link only.
 
-### Games and Rally Circles
+### Games Explore and Rally Circles
 
-Games uses compact tabs for **Explore**, **My games**, **Pending**, and **Feedback**. Explore shows all eligible public games, ranked by fit and location, and supports text search, sport, CMR skill band, date, and time-of-day availability filters. Filters are applied with an explicit **See results** action.
+Games is the primary discovery surface and uses compact tabs for **Explore**, **My games**, **Pending**, and **Feedback**. Explore opens the large live map first, showing all eligible nearby public games around the player's approximate location with a five-kilometre default radius. Players can then narrow the map by sport, radius, area, visibility, CMR fit, date, and time of day and press **Search games**. Selecting a map point or cluster lists the matching games at that location; each game opens its Rally Circle preview and request-to-join action. The older Communities destination is no longer a bottom-navigation tab.
 
 Every confirmed game has a Rally Circle for the lineup, CMR, chat, waitlist, and completion. A confirmed player can mark the game complete. The game then moves to Feedback, where players submit private experience feedback, match quality, satisfaction, and session photos. A game has an explicit CMR impact: casual games never change CMR; competitive games change CMR only after the final score is valid and every player named in that result confirms it. The completed rally is then published to Home with the leaderboard and photo carousel.
 
@@ -54,28 +54,28 @@ Private games are designed for apartment groups, friends, and small communities.
 
 The share link is the access path, but authorization, capacity, approval, lifecycle, and membership checks remain server-enforced.
 
-### Communities
+### Map-led community discovery
 
-Communities is the player-first local matching layer. It shows:
+Games Explore also provides the player-first local matching layer. It shows:
 
 - “Players like you nearby” density for the selected sport;
 - a custom SVG/CSS radar map with the current approximate location, zoom, pan, distance rings, and aggregated neighbourhood hotspots;
 - a five-kilometre default radius, with larger radius choices;
-- a CMR compatibility toggle and sport selector;
+- an all-sports default, with sport selector and CMR compatibility toggle;
 - a community leaderboard scoped by sport and area;
 - an optional collapsed directory of nearby courts and booking links.
 
 The map never exposes individual player pins. Areas with fewer than three visible players are hidden, and displayed data is aggregated by neighbourhood. If location permission is denied, CourtMate uses saved profile coordinates, locality, or the Whitefield fallback.
 
-The community leaderboard ranks quality rather than popularity. A community needs at least three completed games and five submitted ratings. Ranking signals include match quality, feedback completion, repeat play, reliability, CMR improvement, completed games, and active members. Private individual feedback is never exposed.
+The community leaderboard ranks quality rather than popularity. A community needs at least three completed games and five submitted ratings. Ranking signals include match quality, feedback completion, repeat play, reliability, CMR improvement, completed games, and active members. Private individual feedback is never exposed. The map is the dominant mobile interface; the leaderboard and curated venues sit below it as supporting context.
 
 ## 4. CMR, Motivation, And Profile
 
-CMR is a 1.00–10.00 rating calculated separately for each sport. On first sign-in, a player selects a primary sport and one whole-number starting level: 1 Complete beginner, 2 Beginner, 3 Learning / recreational, 4 Intermediate, 5 Strong intermediate, 6 Advanced, 7 Very advanced, 8 Expert, 9 Elite, or 10 Competitive / professional. The product stores that confirmed starting point and then displays CMR to two decimals, for example 5.00 → 5.28 → 5.43. It is built from confirmed results in completed competitive games, not from popularity or private peer feedback. The calculation considers the result, score margin, both opponents' levels, partner/team strength, and CMR confidence. New players have lower confidence and therefore larger early adjustments; consistent competitive results gradually make each adjustment smaller. Casual games still improve attendance, streaks, community quality, and recommendations without changing skill rating. The product shows current CMR by sport, confidence, a trajectory graph with session name and rating on point hover/touch, CMR movement on completed rallies, a weekly play streak, and an activity heatmap.
+CMR is a 1.00–10.00 rating calculated separately for each sport. On first sign-in, a player selects a primary sport and one whole-number starting level: 1 Complete beginner, 2 Beginner, 3 Learning / recreational, 4 Intermediate, 5 Strong intermediate, 6 Advanced, 7 Very advanced, 8 Expert, 9 Elite, or 10 Competitive / professional. This is a self-reported starting estimate, not trusted evidence. The profile labels it **Starting level** until the player has confirmed competitive games, then **Provisional CMR** while the sample is small, and **Verified CMR** after at least three confirmed competitive games. The product stores the starting point and displays the evolving CMR to two decimals, for example 5.00 → 5.28 → 5.43. It is built from confirmed results in completed competitive games, not from popularity or private peer feedback. The calculation considers the result, score margin, both opponents' levels, partner/team strength, and CMR confidence. New players have lower confidence and therefore larger early adjustments; consistent competitive results gradually make each adjustment smaller. Casual games still improve attendance, streaks, community quality, and recommendations without changing skill rating. The product shows current CMR by sport, confirmed-game count, verification progress, confidence, a trajectory graph, CMR movement on completed rallies, a weekly play streak, and an activity heatmap.
 
 The matching and map defaults are a player CMR plus or minus 1.8. Raw external ratings, including a future verified DUPR rating, remain separately labeled evidence. They may prefill a suggested onboarding level but never overwrite a player's confirmed CourtMate starting level or CMR.
 
-Profiles are compact and combine the player card, sport-specific CMR, streak heatmap, trajectory, reliability, followers, and recent game activity without duplicate sections. Sign out is at the bottom of the profile page. Sporty avatars may be generated from a user-provided image and selected sport, but the original image remains optional.
+Profiles are compact and combine the player card, sport-specific CMR, verification progress, streak heatmap, trajectory, reliability, followers, and recent game activity without duplicate sections. Players can set or revise their self-reported level for any sport from Profile. Sign out is at the bottom of the profile page. Sporty avatars may be generated from a user-provided image and selected sport, but the original image remains optional.
 
 ## 5. Privacy, Trust, And Performance
 
