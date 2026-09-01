@@ -4,11 +4,16 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 Sport = Literal["pickleball", "badminton", "tennis", "padel", "squash", "table_tennis"]
+MapSport = Sport | Literal["all"]
 RatingSource = Literal["dupr", "organizer_confirmed", "synthetic", "self_reported", "unrated"]
 SkillLevel = Literal["beginner", "intermediate", "advanced"]
 Gender = Literal["woman", "man", "non_binary", "prefer_not_to_say"]
 AgeRange = Literal["any", "18_24", "25_34", "35_44", "45_plus"]
 SessionVisibility = Literal["public", "followers", "private"]
+
+CMR_MIN = 1.0
+CMR_MAX = 10.0
+LEGACY_SKILL_LEVEL_CMR = {"beginner": 2.0, "intermediate": 4.0, "advanced": 6.0}
 
 
 class CMRHistoryPoint(BaseModel):
@@ -18,6 +23,7 @@ class CMRHistoryPoint(BaseModel):
     game_rating: float | None = Field(default=None, ge=0, le=100)
     rating: float | None = Field(default=None, ge=0, le=100)
     delta: float | None = None
+    confidence: float | None = Field(default=None, ge=0, le=100)
 
 
 class SearchIntent(BaseModel):
@@ -26,8 +32,8 @@ class SearchIntent(BaseModel):
     date: date_type | None = None
     start_time: time | None = None
     end_time: time | None = None
-    skill_min: float | None = Field(default=None, ge=1, le=8)
-    skill_max: float | None = Field(default=None, ge=1, le=8)
+    skill_min: float | None = Field(default=None, ge=1, le=10)
+    skill_max: float | None = Field(default=None, ge=1, le=10)
     style: Literal["casual", "social", "competitive", "any"] = "any"
     open_slots_required: int = Field(default=1, ge=1, le=8)
     latitude: float | None = Field(default=None, ge=-90, le=90)
@@ -49,6 +55,10 @@ class Player(BaseModel):
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     travel_radius_km: float = Field(default=10.0, ge=1, le=100)
+    primary_sport: Sport | None = None
+    # Whole-number onboarding choices remain stable even as competitive CMR
+    # moves in decimals after confirmed results.
+    self_assessed_levels: dict[str, int] = Field(default_factory=dict)
     skill_levels: dict[str, SkillLevel] = Field(default_factory=dict)
     dupr_rating: float | None = Field(default=None, ge=1, le=8)
     rating_source: RatingSource = "unrated"
@@ -58,63 +68,118 @@ class Player(BaseModel):
     availability: list[str] = Field(default_factory=list)
     style: Literal["casual", "social", "competitive"] = "casual"
     reliability: float = Field(default=0.75, ge=0, le=1)
+    on_time_check_in_count: int = Field(default=0, ge=0)
+    late_check_in_count: int = Field(default=0, ge=0)
+    withdrawal_count: int = Field(default=0, ge=0)
+    late_withdrawal_count: int = Field(default=0, ge=0)
     community_score: float | None = Field(default=None, ge=1, le=5)
     community_rating_count: int = Field(default=0, ge=0)
     community_scores: dict[str, float] = Field(default_factory=dict)
     community_rating_counts: dict[str, int] = Field(default_factory=dict)
     cmr_ratings: dict[str, float] = Field(default_factory=dict)
+    cmr_starting_ratings: dict[str, float] = Field(default_factory=dict)
     cmr_game_counts: dict[str, int] = Field(default_factory=dict)
+    # Confidence grows only through confirmed competitive results. It controls
+    # how quickly a new player's CMR can move without changing reliability.
+    cmr_confidence: dict[str, float] = Field(default_factory=dict)
     cmr_history: dict[str, list[CMRHistoryPoint]] = Field(default_factory=dict)
-    cmr_scale: Literal[8, 100] = 8
+    # 8 and 100 are retained solely so persisted legacy documents can be
+    # migrated on read. All newly written records use the 1.00-10.00 scale.
+    cmr_scale: Literal[8, 100, 10] = 8
     friends: list[str] = Field(default_factory=list)
     opted_into_replacement_pool: bool = True
 
 
-def rating_for_sport(player: Player, sport: Sport) -> float | None:
-    """Return a rating in the legacy 1-8 compatibility scale for matching."""
-    if sport in player.cmr_ratings:
-        value = player.cmr_ratings[sport]
-        return round(1 + value * 7 / 100, 2) if player.cmr_scale == 100 else value
-    if sport in player.sport_ratings:
-        return player.sport_ratings[sport]
-    if sport == "pickleball" and player.dupr_rating is not None:
-        return player.dupr_rating
-    return None
+def clamp_cmr(value: float) -> float:
+    return round(max(CMR_MIN, min(CMR_MAX, value)), 2)
+
+
+def cmr_from_hundred(rating: float) -> float:
+    """Convert the short-lived 0-100 CMR version into 1.00-10.00."""
+    return clamp_cmr(1 + max(0.0, min(100.0, rating)) * 0.09)
 
 
 def cmr_from_legacy_rating(rating: float) -> float:
-    """Convert the former 1-8 CMR scale to the new 0-100 display scale."""
-    return round(max(0.0, min(100.0, (rating - 1) * 100 / 7)), 2)
+    """Convert the former 1-8 rating scale into 1.00-10.00."""
+    return clamp_cmr(1 + (max(1.0, min(8.0, rating)) - 1) * 9 / 7)
+
+
+def external_cmr_suggestion(player: Player, sport: Sport) -> float | None:
+    """Normalize external ratings for an onboarding suggestion, never as truth."""
+    raw_rating = player.sport_ratings.get(sport)
+    if raw_rating is None and sport == "pickleball":
+        raw_rating = player.dupr_rating
+    return cmr_from_legacy_rating(raw_rating) if raw_rating is not None else None
+
+
+def rating_for_sport(player: Player, sport: Sport) -> float | None:
+    """Return the current CourtMate Rating in the canonical 1.00-10.00 scale."""
+    if sport in player.cmr_ratings:
+        return clamp_cmr(player.cmr_ratings[sport])
+    if sport in player.self_assessed_levels:
+        return clamp_cmr(float(player.self_assessed_levels[sport]))
+    if sport in player.skill_levels:
+        return LEGACY_SKILL_LEVEL_CMR[player.skill_levels[sport]]
+    return external_cmr_suggestion(player, sport)
 
 
 def normalize_cmr_player(player: Player) -> Player:
-    """Upgrade old persisted CMR values without changing DUPR or skill bands."""
-    if player.cmr_scale == 100:
+    """Convert persisted CMR versions without overwriting raw external ratings."""
+    if player.cmr_scale == 10:
         return player
-    cmr_ratings = {sport: cmr_from_legacy_rating(rating) for sport, rating in player.cmr_ratings.items()}
+
+    converter = cmr_from_hundred if player.cmr_scale == 100 else cmr_from_legacy_rating
+    delta_multiplier = 0.09 if player.cmr_scale == 100 else 9 / 7
+    cmr_ratings = {sport: converter(rating) for sport, rating in player.cmr_ratings.items()}
     cmr_history = {
         sport: [
             point.model_copy(
                 update={
-                    "game_rating": cmr_from_legacy_rating(point.game_rating) if point.game_rating is not None else None,
-                    "rating": cmr_from_legacy_rating(point.rating) if point.rating is not None else None,
-                    "delta": round(point.delta * 100 / 7, 2) if point.delta is not None else None,
+                    "game_rating": converter(point.game_rating) if point.game_rating is not None else None,
+                    "rating": converter(point.rating) if point.rating is not None else None,
+                    "delta": round(point.delta * delta_multiplier, 2) if point.delta is not None else None,
                 }
             )
             for point in history
         ]
         for sport, history in player.cmr_history.items()
     }
-    return player.model_copy(update={"cmr_ratings": cmr_ratings, "cmr_history": cmr_history, "cmr_scale": 100})
+    self_assessed_levels = dict(player.self_assessed_levels)
+    for sport, skill_level in player.skill_levels.items():
+        self_assessed_levels.setdefault(sport, int(LEGACY_SKILL_LEVEL_CMR[skill_level]))
+    for sport, source in player.rating_sources.items():
+        if source == "self_reported" and sport not in self_assessed_levels and sport in player.sport_ratings:
+            self_assessed_levels[sport] = round(cmr_from_legacy_rating(player.sport_ratings[sport]))
+    for sport, level in self_assessed_levels.items():
+        cmr_ratings.setdefault(sport, clamp_cmr(float(level)))
+
+    starting_ratings = {
+        sport: converter(rating) for sport, rating in player.cmr_starting_ratings.items()
+    }
+    for sport, rating in cmr_ratings.items():
+        starting_ratings.setdefault(sport, rating)
+    for sport, level in self_assessed_levels.items():
+        starting_ratings.setdefault(sport, clamp_cmr(float(level)))
+    primary_sport = player.primary_sport or next(iter(self_assessed_levels), None)
+    return player.model_copy(
+        update={
+            "cmr_ratings": cmr_ratings,
+            "cmr_starting_ratings": starting_ratings,
+            "cmr_history": cmr_history,
+            "self_assessed_levels": self_assessed_levels,
+            "primary_sport": primary_sport,
+            "cmr_scale": 10,
+        }
+    )
 
 
 def baseline_rating_for_sport(player: Player, sport: Sport) -> float | None:
-    """Return only an external rating used to seed the first CMR calculation."""
-    if sport in player.sport_ratings:
-        return player.sport_ratings[sport]
-    if sport == "pickleball" and player.dupr_rating is not None:
-        return player.dupr_rating
-    return None
+    """Return a confirmed CMR seed, preferring the player's chosen level."""
+    if sport in player.cmr_starting_ratings:
+        return clamp_cmr(player.cmr_starting_ratings[sport])
+    if sport in player.self_assessed_levels:
+        return clamp_cmr(float(player.self_assessed_levels[sport]))
+    return external_cmr_suggestion(player, sport)
 
 
 class ProfileGameSummary(BaseModel):
@@ -140,12 +205,17 @@ class PublicPlayerProfile(BaseModel):
     rating_sources: dict[str, RatingSource] = Field(default_factory=dict)
     style: Literal["casual", "social", "competitive"] = "casual"
     reliability: float = Field(default=0.75, ge=0, le=1)
+    on_time_check_in_count: int = Field(default=0, ge=0)
+    late_check_in_count: int = Field(default=0, ge=0)
+    withdrawal_count: int = Field(default=0, ge=0)
+    late_withdrawal_count: int = Field(default=0, ge=0)
     community_score: float | None = Field(default=None, ge=1, le=5)
     community_rating_count: int = Field(default=0, ge=0)
     community_scores: dict[str, float] = Field(default_factory=dict)
     community_rating_counts: dict[str, int] = Field(default_factory=dict)
     cmr_ratings: dict[str, float] = Field(default_factory=dict)
     cmr_game_counts: dict[str, int] = Field(default_factory=dict)
+    cmr_confidence: dict[str, float] = Field(default_factory=dict)
     followers_count: int = Field(default=0, ge=0)
     following_count: int = Field(default=0, ge=0)
     is_following: bool = False
@@ -182,7 +252,9 @@ class ProfileUpdateRequest(BaseModel):
     longitude: float | None = Field(default=None, ge=-180, le=180)
     travel_radius_km: float | None = Field(default=None, ge=1, le=100)
     dupr_rating: float | None = Field(default=None, ge=1, le=8)
+    primary_sport: Sport | None = None
     sport: Sport | None = None
+    self_assessed_level: int | None = Field(default=None, ge=1, le=10)
     skill_level: SkillLevel | None = None
     # Kept for backwards-compatible API clients; the frontend no longer asks for it.
     skill_rating: float | None = Field(default=None, ge=1, le=8)
@@ -225,13 +297,26 @@ class Session(BaseModel):
     session_date: date_type
     start_time: time
     end_time: time
-    skill_min: float = Field(ge=1, le=8)
-    skill_max: float = Field(ge=1, le=8)
+    # A flexible window keeps the eventual game duration fixed while the
+    # confirmed line-up agrees on the exact slot in the Rally Circle.
+    time_window_start: time | None = None
+    time_window_end: time | None = None
+    duration_minutes: int = Field(default=60, ge=30, le=360)
+    time_finalized: bool = True
+    skill_min: float = Field(ge=1, le=10)
+    skill_max: float = Field(ge=1, le=10)
+    # Prior sessions used the 1-8 skill band. This allows a safe on-read
+    # conversion while ensuring newly created sessions use 1-10 CMR.
+    skill_scale: Literal[8, 10] = 8
     style: Literal["casual", "social", "competitive"]
+    # Existing sessions were created before rating mode existed, so they keep
+    # the legacy competitive default. New creation requests set this explicitly.
+    rating_mode: Literal["casual", "competitive"] = "competitive"
     game_format: Literal["singles", "doubles"] = "doubles"
     capacity: int = Field(ge=2, le=16)
     confirmed_player_ids: list[str] = Field(default_factory=list)
     waitlist_player_ids: list[str] = Field(default_factory=list)
+    checked_in_player_ids: list[str] = Field(default_factory=list)
     external_booking_url: str | None = None
     booking_provider: str | None = None
     booking_reference: str | None = None
@@ -244,6 +329,19 @@ class Session(BaseModel):
     @property
     def open_slots(self) -> int:
         return max(self.capacity - len(self.confirmed_player_ids), 0)
+
+
+def normalize_session(session: Session) -> Session:
+    """Upgrade old session skill bands to canonical 1.00-10.00 CMR bands."""
+    if session.skill_scale == 10:
+        return session
+    return session.model_copy(
+        update={
+            "skill_min": cmr_from_legacy_rating(session.skill_min),
+            "skill_max": cmr_from_legacy_rating(session.skill_max),
+            "skill_scale": 10,
+        }
+    )
 
 
 class RecommendationReason(BaseModel):
@@ -272,8 +370,8 @@ class PlayerDensityPoint(BaseModel):
     player_count: int = Field(ge=3)
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
-    cmr_min: float | None = Field(default=None, ge=0, le=100)
-    cmr_max: float | None = Field(default=None, ge=0, le=100)
+    cmr_min: float | None = Field(default=None, ge=1, le=10)
+    cmr_max: float | None = Field(default=None, ge=1, le=10)
     distance_km: float | None = Field(default=None, ge=0)
     intensity: Literal["warm", "hot", "very_hot"]
     activity_score: float = Field(default=0, ge=0, le=100)
@@ -282,7 +380,7 @@ class PlayerDensityPoint(BaseModel):
 
 
 class PlayerDensityResponse(BaseModel):
-    sport: Sport
+    sport: MapSport
     radius_km: float
     points: list[PlayerDensityPoint] = Field(default_factory=list)
 
@@ -312,10 +410,12 @@ class MapNearbyGame(BaseModel):
     start_time: time
     end_time: time
     open_slots: int = Field(ge=0)
-    skill_min: float = Field(ge=0, le=100)
-    skill_max: float = Field(ge=0, le=100)
+    skill_min: float = Field(ge=1, le=10)
+    skill_max: float = Field(ge=1, le=10)
     distance_km: float | None = Field(default=None, ge=0)
     match_score: float = Field(default=0, ge=0, le=100)
+    visibility: Literal["public", "followers"] = "public"
+    is_connection_game: bool = False
 
 
 class GameCluster(BaseModel):
@@ -329,7 +429,7 @@ class GameCluster(BaseModel):
 
 
 class CommunityMapResponse(BaseModel):
-    sport: Sport
+    sport: MapSport
     center_latitude: float | None = Field(default=None, ge=-90, le=90)
     center_longitude: float | None = Field(default=None, ge=-180, le=180)
     radius_km: float
@@ -409,8 +509,8 @@ class GroupProposal(BaseModel):
     session_date: date_type | None = None
     start_time: time | None = None
     end_time: time | None = None
-    skill_min: float
-    skill_max: float
+    skill_min: float = Field(ge=1, le=10)
+    skill_max: float = Field(ge=1, le=10)
     style: Literal["casual", "social", "competitive"]
     game_format: Literal["singles", "doubles"] = "doubles"
     capacity: int = Field(default=6, ge=2, le=16)
@@ -510,6 +610,7 @@ class AppNotification(BaseModel):
     request_id: str | None = None
     actor_id: str | None = None
     read: bool = False
+    action_status: Literal["pending", "approved", "declined", "waitlisted", "withdrawn"] | None = None
     created_at: datetime
 
 
@@ -625,16 +726,34 @@ class ChatResultDecisionRequest(BaseModel):
     agree: bool
 
 
+class TimePollOption(BaseModel):
+    id: str
+    label: str
+    start_time: time
+    end_time: time
+    voter_ids: list[str] = Field(default_factory=list)
+
+
+class TimePollVoteRequest(BaseModel):
+    option_id: str = Field(min_length=1, max_length=40)
+
+
 class ChatPost(BaseModel):
     id: str
     session_id: str
     player_id: str
     player_display_name: str
     message: str
-    post_type: Literal["message", "match_result"] = "message"
+    post_type: Literal["message", "match_result", "time_poll", "system"] = "message"
     teams: list["MatchTeam"] = Field(default_factory=list)
     result_status: Literal["pending_confirmation", "confirmed", "disputed"] | None = None
     confirmation_ids: list[str] = Field(default_factory=list)
+    poll_options: list[TimePollOption] = Field(default_factory=list)
+    # The participant snapshot prevents a late joiner from changing a poll
+    # that is already awaiting the original line-up's decision.
+    poll_participant_ids: list[str] = Field(default_factory=list)
+    poll_status: Literal["open", "resolved"] | None = None
+    poll_winner_id: str | None = None
     created_at: datetime
 
 
@@ -705,7 +824,7 @@ class SocialSessionPlayer(BaseModel):
     id: str
     display_name: str
     profile_image_url: str | None = None
-    cmr_rating: float | None = Field(default=None, ge=0, le=100)
+    cmr_rating: float | None = Field(default=None, ge=1, le=10)
 
 
 class SocialLeaderboardEntry(BaseModel):
@@ -713,7 +832,7 @@ class SocialLeaderboardEntry(BaseModel):
     player_id: str
     display_name: str
     profile_image_url: str | None = None
-    cmr_rating: float | None = Field(default=None, ge=0, le=100)
+    cmr_rating: float | None = Field(default=None, ge=1, le=10)
     cmr_delta: float | None = None
     wins: int = 0
     losses: int = 0
@@ -744,9 +863,13 @@ class CreateGroupRequest(BaseModel):
     session_date: date_type | None = None
     start_time: time | None = None
     end_time: time | None = None
-    skill_min: float | None = Field(default=None, ge=1, le=8)
-    skill_max: float | None = Field(default=None, ge=1, le=8)
+    time_window_start: time | None = None
+    time_window_end: time | None = None
+    duration_minutes: int = Field(default=60, ge=30, le=360)
+    skill_min: float | None = Field(default=None, ge=1, le=10)
+    skill_max: float | None = Field(default=None, ge=1, le=10)
     style: Literal["casual", "social", "competitive"] | None = None
+    rating_mode: Literal["casual", "competitive"] = "casual"
     game_format: Literal["singles", "doubles"] = "doubles"
     capacity: int = Field(default=6, ge=2, le=16)
     visibility: SessionVisibility | None = None

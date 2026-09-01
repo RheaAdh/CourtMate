@@ -36,7 +36,7 @@ The Assistant accepts typed or voice requests such as “find an intermediate pa
 Games also provides a structured create-game modal. The form validates that the start is after now and the end is after the start. It supports:
 
 - sport, area, date, start time, and end time;
-- sport-specific preferred player CMR range, defaulting to the creator’s CMR minus and plus 20;
+- sport-specific preferred player CMR range, defaulting to the creator's CMR minus and plus 1.8;
 - singles or doubles;
 - total player capacity, with open spots derived automatically from confirmed players;
 - casual, social, or competitive style;
@@ -46,7 +46,7 @@ Games also provides a structured create-game modal. The form validates that the 
 
 Games uses compact tabs for **Explore**, **My games**, **Pending**, and **Feedback**. Explore shows all eligible public games, ranked by fit and location, and supports text search, sport, CMR skill band, date, and time-of-day availability filters. Filters are applied with an explicit **See results** action.
 
-Every confirmed game has a Rally Circle for the lineup, CMR, chat, waitlist, and completion. A confirmed player can mark the game complete. The game then moves to Feedback, where players rate every other player, submit match quality and satisfaction feedback, and upload session photos. After the feedback round, CMR is updated and the completed rally is published to Home with the leaderboard and photo carousel.
+Every confirmed game has a Rally Circle for the lineup, CMR, chat, waitlist, and completion. A confirmed player can mark the game complete. The game then moves to Feedback, where players submit private experience feedback, match quality, satisfaction, and session photos. A game has an explicit CMR impact: casual games never change CMR; competitive games change CMR only after the final score is valid and every player named in that result confirms it. The completed rally is then published to Home with the leaderboard and photo carousel.
 
 ### Private games
 
@@ -71,7 +71,9 @@ The community leaderboard ranks quality rather than popularity. A community need
 
 ## 4. CMR, Motivation, And Profile
 
-CMR is a 0–100 rating calculated separately for each sport. It is built from completed games and private peer feedback, not from a single person’s opinion. The product shows current CMR by sport, a trajectory graph with session name and rating on point hover/touch, CMR movement on completed rallies, a weekly play streak, and an activity heatmap.
+CMR is a 1.00–10.00 rating calculated separately for each sport. On first sign-in, a player selects a primary sport and one whole-number starting level: 1 Complete beginner, 2 Beginner, 3 Learning / recreational, 4 Intermediate, 5 Strong intermediate, 6 Advanced, 7 Very advanced, 8 Expert, 9 Elite, or 10 Competitive / professional. The product stores that confirmed starting point and then displays CMR to two decimals, for example 5.00 → 5.28 → 5.43. It is built from confirmed results in completed competitive games, not from popularity or private peer feedback. The calculation considers the result, score margin, both opponents' levels, partner/team strength, and CMR confidence. New players have lower confidence and therefore larger early adjustments; consistent competitive results gradually make each adjustment smaller. Casual games still improve attendance, streaks, community quality, and recommendations without changing skill rating. The product shows current CMR by sport, confidence, a trajectory graph with session name and rating on point hover/touch, CMR movement on completed rallies, a weekly play streak, and an activity heatmap.
+
+The matching and map defaults are a player CMR plus or minus 1.8. Raw external ratings, including a future verified DUPR rating, remain separately labeled evidence. They may prefill a suggested onboarding level but never overwrite a player's confirmed CourtMate starting level or CMR.
 
 Profiles are compact and combine the player card, sport-specific CMR, streak heatmap, trajectory, reliability, followers, and recent game activity without duplicate sections. Sign out is at the bottom of the profile page. Sporty avatars may be generated from a user-provided image and selected sport, but the original image remains optional.
 
@@ -82,3 +84,13 @@ Firebase authentication, authorized API calls, session visibility, private profi
 The app keeps light mode as the default and maintains readable dark mode. Mobile pages use responsive spacing, centered bold tabs, sticky navigation where appropriate, scrollable modals, and no accidental desktop margins. Loading states are contextual and should not wait indefinitely for unrelated APIs.
 
 The primary success loop is: discover or create a game, share or request access, confirm the lineup, coordinate in a Rally Circle, play, complete, collect feedback, update CMR, publish the rally, and return for a better match.
+
+## 6. Future Scope
+
+### Verified DUPR for pickleball
+
+Subject to an approved DUPR partner integration and player consent, CourtMate may let a pickleball player connect their DUPR account. CourtMate may display the verified DUPR ID, singles and doubles ratings, verified/provisional status, reliability signal, and last-sync time.
+
+DUPR would improve initial pickleball matching for new CourtMate players. It does not replace CourtMate Rating (CMR): CMR remains sport-specific, is calculated from confirmed competitive CourtMate results, and stays portable across every supported racket sport.
+
+CourtMate must use DUPR's approved player-consent and token flow, sync only the fields needed for the experience, and never ask players to paste credentials into the app. Official DUPR match-result submission is out of scope until CourtMate has the required API-partner or club agreement.

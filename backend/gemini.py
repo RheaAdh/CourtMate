@@ -515,13 +515,13 @@ This screenshot is being attached to a completed racket-sport game."""
                 for sport, rating in player.cmr_ratings.items()
             ]
             if re.search(r"\bwhat is cmr\b|\bwhat does cmr mean\b|\bexplain cmr\b", query.lower()):
-                return "CMR means CourtMate Rating. It is a sport-specific score from 0 to 100 that updates from confirmed match results. It is a guide to progress, not a permanent label."
+                return "CMR means CourtMate Rating. It is a sport-specific score from 1.00 to 10.00 that starts with your confirmed level and updates from confirmed competitive match results. It is a guide to progress, not a permanent label."
             if not ratings:
                 return "You do not have a CMR history yet. Play a completed racket-sport game and check in to start tracking your form."
             sport, rating, games = max(ratings, key=lambda item: item[1])
             proof_count = len(activity_proofs)
             evidence = f" I also have {proof_count} wearable check-in{'' if proof_count == 1 else 's'} to compare." if proof_count else ""
-            return f"Your strongest current signal is {sport.replace('_', ' ').title()} at {rating:.1f}/100 CMR across {games} game{'' if games == 1 else 's'}.{evidence} Ask about a specific sport, rating trend, or wearable metric for a closer read."
+            return f"Your strongest current signal is {sport.replace('_', ' ').title()} at {rating:.2f}/10 CMR across {games} game{'' if games == 1 else 's'}.{evidence} Ask about a specific sport, rating trend, or wearable metric for a closer read."
 
         prompt = f"""You are CourtMate's private performance coach for racket-sport players.
 Answer the user's question using only the stored context below. Discuss CMR trends, completed games, consistency, and clearly extracted wearable metrics. Do not invent scores, medical advice, or metrics. Explain when the data is too limited. Keep the answer concise, warm, and actionable.
@@ -612,13 +612,13 @@ Stored player context: {context}
         area = locality_match.group(1).strip(" ,.-").title() if locality_match else "Whitefield"
         skill_bands = {
             "beginner": (1.0, 2.9),
-            "intermediate": (3.0, 3.5),
-            "advanced": (3.5, 5.0),
+            "intermediate": (3.0, 5.9),
+            "advanced": (6.0, 10.0),
         }
         skill_level = next((level for level in skill_bands if level in lowered), "")
         skill_min, skill_max = skill_bands.get(skill_level, (None, None))
-        numeric_range = re.search(r"\b([1-8](?:\.\d)?)\s*(?:-|to)\s*([1-8](?:\.\d)?)\b", lowered)
-        numeric_rating = re.search(r"\b(?:skill|level|rating|cmr)\s*(?:of|is|at|around|:)?\s*([1-8](?:\.\d)?)\b", lowered)
+        numeric_range = re.search(r"\b(10|[1-9](?:\.\d)?)\s*(?:-|to)\s*(10|[1-9](?:\.\d)?)\b", lowered)
+        numeric_rating = re.search(r"\b(?:skill|level|rating|cmr)\s*(?:of|is|at|around|:)?\s*(10|[1-9](?:\.\d)?)\b", lowered)
         if numeric_range:
             skill_min = float(numeric_range.group(1))
             skill_max = float(numeric_range.group(2))

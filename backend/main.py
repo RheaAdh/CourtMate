@@ -8,7 +8,7 @@ from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 from datetime import date, datetime, time, timedelta, timezone
 from time import monotonic, perf_counter
-from statistics import median
+from typing import Literal
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -20,7 +20,7 @@ from .auth import AuthIdentity, get_current_identity
 from .facilities import BENGALURU_FACILITIES
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, BookingUpdateRequest, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CommunityActivityPoint, CommunityJoinRequest, CommunityLeaderboardEntry, CommunityLeaderboardResponse, CommunityMapResponse, CommunityMembership, CommunityMembershipResponse, CreateGroupRequest, CreatedGroupResponse, ExploreSessionsResponse, Facility, FacilityListResponse, Feedback, FeedbackRequest, FollowRecord, GameCluster, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MapNearbyGame, MatchTeam, MyActivityResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, PlayerDensityPoint, PlayerDensityResponse, PlayerRating, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, SportyAvatarRequest, SportyAvatarResponse, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, BookingUpdateRequest, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CommunityActivityPoint, CommunityJoinRequest, CommunityLeaderboardEntry, CommunityLeaderboardResponse, CommunityMapResponse, CommunityMembership, CommunityMembershipResponse, CreateGroupRequest, CreatedGroupResponse, ExploreSessionsResponse, Facility, FacilityListResponse, Feedback, FeedbackRequest, FollowRecord, GameCluster, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MapNearbyGame, MapSport, MatchTeam, MyActivityResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, PlayerDensityPoint, PlayerDensityResponse, PlayerRating, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, SportyAvatarRequest, SportyAvatarResponse, TimePollOption, TimePollVoteRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
 from .vector_search import VectorIndexer, VectorRetriever
 
@@ -152,7 +152,14 @@ def get_current_player(identity: AuthIdentity = Depends(get_current_identity)) -
     display_name = identity.display_name or (identity.email.split("@")[0] if identity.email else "CourtMate player")
     default_area = os.getenv("COURTMATE_DEFAULT_AREA", "Whitefield")
     coordinates = _geocode_area(default_area)
-    return repository.save_player(Player(id=identity.uid, display_name=display_name, area=default_area, latitude=coordinates[0] if coordinates else None, longitude=coordinates[1] if coordinates else None))
+    return repository.save_player(Player(
+        id=identity.uid,
+        display_name=display_name,
+        area=default_area,
+        latitude=coordinates[0] if coordinates else None,
+        longitude=coordinates[1] if coordinates else None,
+        cmr_scale=10,
+    ))
 
 
 def _local_today() -> date:
@@ -166,8 +173,44 @@ def _session_window(session: Session) -> tuple[datetime, datetime]:
     return start, end
 
 
+def _tracked_reliability(player: Player, *, on_time_check_in_count: int, late_check_in_count: int, withdrawal_count: int, late_withdrawal_count: int) -> float:
+    """Build a separate reliability signal from attendance and confirmed commitments."""
+    check_in_count = on_time_check_in_count + late_check_in_count
+    if check_in_count:
+        # Four neutral check-ins prevent one arrival from swinging the score wildly.
+        attendance_score = (3 + on_time_check_in_count + late_check_in_count * 0.5) / (4 + check_in_count)
+    else:
+        attendance_score = 0.75
+    withdrawal_penalty = withdrawal_count * 0.04 + late_withdrawal_count * 0.08
+    return round(max(0.3, min(1.0, attendance_score - withdrawal_penalty)), 3)
+
+
+def _save_player_reliability_event(player: Player, *, on_time: bool | None = None, withdrew_late: bool | None = None) -> Player:
+    on_time_count = player.on_time_check_in_count + (1 if on_time is True else 0)
+    late_check_in_count = player.late_check_in_count + (1 if on_time is False else 0)
+    withdrawal_count = player.withdrawal_count + (1 if withdrew_late is not None else 0)
+    late_withdrawal_count = player.late_withdrawal_count + (1 if withdrew_late is True else 0)
+    reliability = _tracked_reliability(
+        player,
+        on_time_check_in_count=on_time_count,
+        late_check_in_count=late_check_in_count,
+        withdrawal_count=withdrawal_count,
+        late_withdrawal_count=late_withdrawal_count,
+    )
+    return repository.save_player(player.model_copy(update={
+        "on_time_check_in_count": on_time_count,
+        "late_check_in_count": late_check_in_count,
+        "withdrawal_count": withdrawal_count,
+        "late_withdrawal_count": late_withdrawal_count,
+        "reliability": reliability,
+    }))
+
+
 def _refresh_session_status(session: Session, refresh_cmr: bool = True, persist: bool = True, index: bool = True) -> Session:
     if session.status in {"completed", "cancelled"}:
+        return session
+    # A window-based session has no actual playing time until its poll settles.
+    if not session.time_finalized:
         return session
     now = datetime.now(local_timezone)
     start, end = _session_window(session)
@@ -457,6 +500,18 @@ def _session_visible_to_player(session: Session, player: Player, following_ids: 
     return False
 
 
+def _map_session_visible_to_player(session: Session, visibility_filter: str, following_ids: set[str]) -> bool:
+    """Show public games by default and follower games only to direct connections."""
+    if session.visibility == "private":
+        return False
+    is_connection_game = session.organizer_id in following_ids
+    if visibility_filter == "public":
+        return session.visibility == "public"
+    if visibility_filter == "friends":
+        return is_connection_game
+    return session.visibility == "public" or (session.visibility == "followers" and is_connection_game)
+
+
 @app.post("/v1/social/posts", response_model=SocialPostView)
 def create_social_post(request: SocialPostCreateRequest, player: Player = Depends(get_current_player)) -> SocialPostView:
     caption = request.caption.strip()
@@ -545,21 +600,46 @@ def share_social_post(post_id: str, player: Player = Depends(get_current_player)
 
 @app.post("/v1/me/profile", response_model=Player)
 def update_profile(request: ProfileUpdateRequest, player: Player = Depends(get_current_player)) -> Player:
-    updates = request.model_dump(exclude_none=True, exclude={"sport", "skill_level", "skill_rating"})
+    updates = request.model_dump(exclude_none=True, exclude={"primary_sport", "sport", "self_assessed_level", "skill_level", "skill_rating"})
     if request.area and request.latitude is None and request.longitude is None:
         coordinates = _geocode_area(request.area)
         if coordinates:
             updates.update({"latitude": coordinates[0], "longitude": coordinates[1]})
     updated = player.model_copy(update=updates)
-    if request.sport and request.skill_rating is not None:
-        sport_ratings = {**player.sport_ratings, request.sport: request.skill_rating}
-        rating_sources = {**player.rating_sources, request.sport: "self_reported"}
-        rating_updates = {"sport_ratings": sport_ratings, "rating_sources": rating_sources}
-        if request.sport == "pickleball":
-            rating_updates.update({"dupr_rating": request.skill_rating, "rating_source": "self_reported"})
-        updated = updated.model_copy(update=rating_updates)
-    if request.sport and request.skill_level:
-        updated = updated.model_copy(update={"skill_levels": {**updated.skill_levels, request.sport: request.skill_level}})
+    if request.primary_sport:
+        updated = updated.model_copy(update={"primary_sport": request.primary_sport})
+    if request.sport:
+        self_assessed_level = request.self_assessed_level
+        legacy_cmr = None
+        if self_assessed_level is None and request.skill_rating is not None:
+            # Temporary compatibility for older clients that posted 1-8.
+            legacy_cmr = cmr_from_legacy_rating(request.skill_rating)
+            self_assessed_level = round(legacy_cmr)
+        if self_assessed_level is None and request.skill_level:
+            self_assessed_level = {"beginner": 2, "intermediate": 4, "advanced": 6}[request.skill_level]
+        if self_assessed_level is not None:
+            games_played = updated.cmr_game_counts.get(request.sport, 0)
+            if games_played:
+                raise HTTPException(status_code=409, detail="CMR is based on confirmed competitive games and cannot be reset")
+            level = legacy_cmr if legacy_cmr is not None else float(self_assessed_level)
+            updated = updated.model_copy(update={
+                "primary_sport": updated.primary_sport or request.sport,
+                "self_assessed_levels": {**updated.self_assessed_levels, request.sport: int(self_assessed_level)},
+                "cmr_starting_ratings": {**updated.cmr_starting_ratings, request.sport: level},
+                "cmr_ratings": {**updated.cmr_ratings, request.sport: level},
+                "cmr_scale": 10,
+            })
+        if request.skill_rating is not None:
+            # Preserve the legacy fields for older mobile clients while the
+            # canonical CMR and onboarding values above power all matching.
+            updated = updated.model_copy(update={
+                "sport_ratings": {**updated.sport_ratings, request.sport: request.skill_rating},
+                "rating_sources": {**updated.rating_sources, request.sport: "self_reported"},
+            })
+        if request.skill_level:
+            updated = updated.model_copy(update={
+                "skill_levels": {**updated.skill_levels, request.sport: request.skill_level},
+            })
     return repository.save_player(updated)
 
 
@@ -840,12 +920,17 @@ def _public_profile(
         rating_sources=player.rating_sources,
         style=player.style,
         reliability=player.reliability,
+        on_time_check_in_count=player.on_time_check_in_count,
+        late_check_in_count=player.late_check_in_count,
+        withdrawal_count=player.withdrawal_count,
+        late_withdrawal_count=player.late_withdrawal_count,
         community_score=player.community_score,
         community_rating_count=player.community_rating_count,
         community_scores=player.community_scores,
         community_rating_counts=player.community_rating_counts,
         cmr_ratings=player.cmr_ratings,
         cmr_game_counts=player.cmr_game_counts,
+        cmr_confidence=player.cmr_confidence,
         followers_count=resolved_followers_count,
         following_count=resolved_following_count,
         is_following=resolved_is_following,
@@ -861,9 +946,9 @@ def _public_profile(
 def _session_cmr_rating(candidate: Player, sport: str) -> float | None:
     current = candidate.cmr_ratings.get(sport)
     if current is not None:
-        return round(current, 1)
-    legacy = rating_for_sport(candidate, sport)
-    return round(cmr_from_legacy_rating(legacy), 1) if legacy is not None else None
+        return round(current, 2)
+    rating = rating_for_sport(candidate, sport)
+    return round(rating, 2) if rating is not None else None
 
 
 def _session_cmr_delta(candidate: Player, session: Session) -> float | None:
@@ -1094,110 +1179,123 @@ def _refresh_community_scores() -> None:
             repository.save_player(player.model_copy(update=updates))
 
 
-def _relative_match_ratings(session: Session, teams: list, players: dict[str, Player] | None = None) -> dict[str, float]:
-    """Turn a two-sided result into comparable 0-100 game ratings."""
-    if len(teams) != 2 or any(team.score is None or not team.player_ids for team in teams):
-        return {}
-    players = players or {player.id: player for player in repository.list_players()}
-    team_ratings = []
-    for team in teams:
-        members = [players[player_id] for player_id in team.player_ids if player_id in players]
-        if not members:
-            return {}
-        ratings = [cmr_from_legacy_rating(baseline_rating_for_sport(member, session.sport) or 3.5) for member in members]
-        team_ratings.append(sum(ratings) / len(ratings))
-    score_a, score_b = teams[0].score, teams[1].score
-    score_gap = abs(score_a - score_b)
-    margin_bonus = min(8.0, score_gap / max(max(score_a, score_b), 1) * 12.0)
-    result_a = 1.0 if score_a > score_b else 0.0 if score_a < score_b else 0.5
-    expected_a = 1 / (1 + 10 ** ((team_ratings[1] - team_ratings[0]) / 35))
-    result_ratings = {}
-    for index, team in enumerate(teams):
-        result = result_a if index == 0 else 1 - result_a if result_a != 0.5 else 0.5
-        outcome_delta = 18 * (result - (expected_a if index == 0 else 1 - expected_a))
-        margin_delta = margin_bonus if result == 1 else -margin_bonus if result == 0 else 0
-        game_rating = round(max(0, min(100, team_ratings[index] + outcome_delta + margin_delta)), 2)
-        for player_id in team.player_ids:
-            result_ratings[player_id] = game_rating
-    return result_ratings
+def _cmr_seed_rating(player: Player, sport: Sport) -> float:
+    """Start a sport at its chosen level, or a neutral 5.00 CMR."""
+    return baseline_rating_for_sport(player, sport) or 5.0
+
+
+def _cmr_confidence_for_games(game_count: int) -> float:
+    """Ramp confidence quickly at first, then slow it as the record matures."""
+    return round(min(100.0, 100 * (1 - 0.72 ** max(game_count, 0))), 1)
+
+
+def _is_valid_competitive_result(session: Session, teams: list[MatchTeam]) -> bool:
+    """Accept a final two-sided score without prescribing a sport's format."""
+    if session.rating_mode != "competitive" or len(teams) != 2:
+        return False
+    if any(team.score is None or not team.player_ids for team in teams):
+        return False
+    player_ids = [player_id for team in teams for player_id in team.player_ids]
+    if len(player_ids) != len(set(player_ids)) or any(player_id not in session.confirmed_player_ids for player_id in player_ids):
+        return False
+    scores = [team.score for team in teams]
+    return max(scores) > 0 and (scores[0] != scores[1] or scores[0] > 0)
+
+
+def _confirmed_competitive_results(sessions: list[Session]) -> list[tuple[Session, ChatPost]]:
+    results: list[tuple[Session, ChatPost]] = []
+    for session in sessions:
+        if session.status not in {"awaiting_feedback", "completed"} or session.rating_mode != "competitive":
+            continue
+        confirmed = [
+            post for post in repository.list_chat_posts(session.id)
+            if post.post_type == "match_result"
+            and post.result_status == "confirmed"
+            and _is_valid_competitive_result(session, post.teams)
+        ]
+        if confirmed:
+            # A corrected result is posted later in chat and therefore wins.
+            results.append((session, max(confirmed, key=lambda post: post.created_at)))
+    return sorted(results, key=lambda item: (item[0].session_date, item[0].start_time, item[1].created_at))
 
 
 def _refresh_cmr_ratings() -> None:
-    """Recompute CMR and a chronological per-game history from completed-game feedback."""
-    ratings_by_player: dict[tuple[str, str], dict[str, list[float]]] = {}
-    ranked_feedback_sessions: set[tuple[str, str]] = set()
-    sessions_by_id = {session.id: session for session in repository.list_sessions() if session.status == "completed"}
+    """Recompute CMR solely from confirmed, valid competitive game results."""
     players_by_id = {player.id: player for player in repository.list_players()}
-    for session in sessions_by_id.values():
-        for post in repository.list_chat_posts(session.id):
-            if post.post_type != "match_result" or post.result_status not in {None, "confirmed"}:
-                continue
-            for player_id, game_rating in _relative_match_ratings(session, post.teams, players_by_id).items():
-                ratings_by_player.setdefault((player_id, session.sport), {}).setdefault(session.id, []).append(game_rating)
-    for feedback_item in repository.list_feedback():
-        session = sessions_by_id.get(feedback_item.session_id)
-        if not session:
+    results = _confirmed_competitive_results(repository.list_sessions())
+    ratings: dict[tuple[str, Sport], float] = {}
+    game_counts: dict[tuple[str, Sport], int] = {}
+    histories: dict[tuple[str, Sport], list[CMRHistoryPoint]] = {}
+
+    for session, post in results:
+        teams = post.teams
+        team_ratings: list[float] = []
+        for team in teams:
+            member_ratings = []
+            for player_id in team.player_ids:
+                player = players_by_id.get(player_id)
+                if not player:
+                    member_ratings = []
+                    break
+                key = (player_id, session.sport)
+                member_ratings.append(ratings.get(key, _cmr_seed_rating(player, session.sport)))
+            if not member_ratings:
+                team_ratings = []
+                break
+            team_ratings.append(sum(member_ratings) / len(member_ratings))
+        if len(team_ratings) != 2:
             continue
-        for rating in feedback_item.ratings:
-            if rating.rank_score is not None:
-                value = rating.rank_score
-            elif rating.rating_10 is not None:
-                value = round((rating.rating_10 - 1) * 100 / 9, 2)
-            elif rating.rating is not None:
-                value = round((rating.rating - 1) * 100 / 4, 2)
-            elif rating.skill_level:
-                value = {"beginner": 25.0, "intermediate": 50.0, "advanced": 75.0}[rating.skill_level]
-            else:
-                value = None
-            if value is not None:
-                game_ratings = ratings_by_player.setdefault((rating.player_id, session.sport), {})
-                game_ratings.setdefault(session.id, []).append(value)
-            if rating.rank_score is not None:
-                ranked_feedback_sessions.add((session.id, session.sport))
-    completed_sessions_by_player: dict[str, list[Session]] = {}
-    for session in sessions_by_id.values():
-        for player_id in session.confirmed_player_ids:
-            completed_sessions_by_player.setdefault(player_id, []).append(session)
-    for player_id, completed_sessions in completed_sessions_by_player.items():
-        player = players_by_id.get(player_id)
-        if not player:
-            continue
-        sessions_by_sport: dict[str, list[Session]] = {}
-        for session in completed_sessions:
-            sessions_by_sport.setdefault(session.sport, []).append(session)
+
+        score_a, score_b = teams[0].score or 0, teams[1].score or 0
+        expected_a = 1 / (1 + 10 ** ((team_ratings[1] - team_ratings[0]) / 1.8))
+        result_a = 1.0 if score_a > score_b else 0.0 if score_a < score_b else 0.5
+        score_factor = 1 + min(0.2, abs(score_a - score_b) / max(score_a, score_b, 1) * 0.2)
+
+        for index, team in enumerate(teams):
+            outcome = result_a if index == 0 else 1 - result_a if result_a != 0.5 else 0.5
+            expected = expected_a if index == 0 else 1 - expected_a
+            for player_id in team.player_ids:
+                player = players_by_id[player_id]
+                key = (player_id, session.sport)
+                previous = ratings.get(key, _cmr_seed_rating(player, session.sport))
+                games_before = game_counts.get(key, 0)
+                confidence_before = _cmr_confidence_for_games(games_before)
+                k_factor = 0.90 - 0.54 * (confidence_before / 100)
+                delta = round(k_factor * (outcome - expected) * score_factor, 2)
+                rating = round(max(1, min(10, previous + delta)), 2)
+                games_after = games_before + 1
+                confidence_after = _cmr_confidence_for_games(games_after)
+                ratings[key] = rating
+                game_counts[key] = games_after
+                histories.setdefault(key, []).append(CMRHistoryPoint(
+                    session_id=session.id,
+                    session_date=session.session_date,
+                    group_name=session.group_name,
+                    game_rating=rating,
+                    rating=rating,
+                    delta=round(rating - previous, 2),
+                    confidence=confidence_after,
+                ))
+
+    for player in players_by_id.values():
         cmr_ratings = dict(player.cmr_ratings)
         cmr_game_counts = dict(player.cmr_game_counts)
+        cmr_confidence = dict(player.cmr_confidence)
         cmr_history = dict(player.cmr_history)
-        for sport, sport_sessions in sessions_by_sport.items():
-            prior = cmr_from_legacy_rating(baseline_rating_for_sport(player, sport) or 3.5)
-            running_rating: float | None = None
-            game_total = 0.0
-            rated_game_count = 0
-            history: list[CMRHistoryPoint] = []
-            for session in sorted(sport_sessions, key=lambda item: (item.session_date, item.start_time)):
-                values = ratings_by_player.get((player_id, sport), {}).get(session.id, [])
-                if values:
-                    game_rating = round(median(values), 2) if (session.id, sport) in ranked_feedback_sessions else round(sum(values) / len(values), 2)
-                    rated_game_count += 1
-                    previous_rating = running_rating if running_rating is not None else prior
-                    if (session.id, sport) in ranked_feedback_sessions:
-                        # Rank feedback is subjective, so use a small bounded
-                        # step from the current rating rather than a raw reset.
-                        movement = max(-5.0, min(5.0, game_rating - previous_rating))
-                        running_rating = round(previous_rating + movement, 2)
-                    else:
-                        game_total += game_rating
-                        running_rating = round((prior * 3 + game_total) / (3 + rated_game_count), 2)
-                    delta = round(running_rating - previous_rating, 2)
-                    history.append(CMRHistoryPoint(session_id=session.id, session_date=session.session_date, group_name=session.group_name, game_rating=game_rating, rating=running_rating, delta=delta))
-                else:
-                    history.append(CMRHistoryPoint(session_id=session.id, session_date=session.session_date, group_name=session.group_name, rating=running_rating))
-            cmr_history[sport] = history
-            if running_rating is not None:
-                cmr_ratings[sport] = running_rating
-                cmr_game_counts[sport] = rated_game_count
-        repository.save_player(player.model_copy(update={"cmr_ratings": cmr_ratings, "cmr_game_counts": cmr_game_counts, "cmr_history": cmr_history, "cmr_scale": 100}))
-    # Feedback changes the leaderboard data embedded in cached Home cards.
+        for (player_id, sport), rating in ratings.items():
+            if player_id != player.id:
+                continue
+            cmr_ratings[sport] = rating
+            cmr_game_counts[sport] = game_counts[(player_id, sport)]
+            cmr_confidence[sport] = _cmr_confidence_for_games(game_counts[(player_id, sport)])
+            cmr_history[sport] = histories[(player_id, sport)]
+        repository.save_player(player.model_copy(update={
+            "cmr_ratings": cmr_ratings,
+            "cmr_game_counts": cmr_game_counts,
+            "cmr_confidence": cmr_confidence,
+            "cmr_history": cmr_history,
+            "cmr_scale": 10,
+        }))
     _clear_social_feed_cache()
 
 
@@ -1331,9 +1429,9 @@ def _group_proposal(intent: SearchIntent, player_id: str, proposed_name: str | N
     intent = _move_past_proposal_forward(intent)
     player = repository.get_player(player_id)
     rating = rating_for_sport(player, intent.sport) if player else None
-    rating = rating if rating is not None else 3.25
-    skill_min = intent.skill_min if intent.skill_min is not None else max(1.0, round(rating - .3, 1))
-    skill_max = intent.skill_max if intent.skill_max is not None else min(8.0, round(rating + .3, 1))
+    rating = rating if rating is not None else 5.0
+    skill_min = intent.skill_min if intent.skill_min is not None else max(1.0, round(rating - 1.8, 2))
+    skill_max = intent.skill_max if intent.skill_max is not None else min(10.0, round(rating + 1.8, 2))
     style = intent.style if intent.style != "any" else player.style if player else "casual"
     game_format = "singles" if re.search(r"\bsingles?\b", query.lower()) else "doubles"
     return GroupProposal(
@@ -1514,6 +1612,37 @@ def _notify_request_update(join_request: JoinRequest, session: Session) -> None:
         pass
 
 
+def _resolve_join_request_notification(join_request: JoinRequest, organizer_id: str) -> None:
+    """Mark the organizer's action alert resolved wherever the decision was made."""
+    for notification in repository.list_notifications_for_player(organizer_id):
+        if notification.kind == "join_request" and notification.request_id == join_request.id:
+            repository.mark_notification_read(notification.id, organizer_id)
+
+
+def _notification_with_action_status(notification: AppNotification, player: Player) -> AppNotification:
+    """Return action state from the source record so old alerts cannot look actionable."""
+    action_status = None
+    if notification.kind == "join_request" and notification.request_id:
+        join_request = next(
+            (item for item in repository.list_join_requests(notification.session_id) if item.id == notification.request_id),
+            None,
+        )
+        action_status = join_request.status if join_request else "withdrawn"
+    elif notification.kind == "follow" and notification.actor_id:
+        if repository.is_following(notification.actor_id, player.id):
+            action_status = "approved"
+        elif repository.is_follow_request_pending(notification.actor_id, player.id):
+            action_status = "pending"
+        else:
+            action_status = "declined"
+    if action_status is None:
+        return notification
+    return notification.model_copy(update={
+        "action_status": action_status,
+        "read": notification.read or action_status != "pending",
+    })
+
+
 @app.post("/v1/sessions/{session_id}/leave", response_model=Session)
 def leave_session(session_id: str, player: Player = Depends(get_current_player)) -> Session:
     session = _get_session(session_id)
@@ -1523,7 +1652,11 @@ def leave_session(session_id: str, player: Player = Depends(get_current_player))
     if session.organizer_id == player.id:
         raise HTTPException(status_code=409, detail="The organizer cannot leave their own group")
     if player.id in session.confirmed_player_ids:
+        starts_at, _ = _session_window(session)
+        _save_player_reliability_event(player, withdrew_late=datetime.now(local_timezone) >= starts_at - timedelta(hours=12))
         session.confirmed_player_ids.remove(player.id)
+        if player.id in session.checked_in_player_ids:
+            session.checked_in_player_ids.remove(player.id)
         prior_request = next((candidate for candidate in repository.list_join_requests(session_id) if candidate.player_id == player.id and candidate.status == "approved"), None)
         if prior_request:
             prior_request.status = "withdrawn"
@@ -1554,6 +1687,33 @@ def leave_session(session_id: str, player: Player = Depends(get_current_player))
         session.status = "open"
     saved = repository.save_session(session)
     _index_session_best_effort(saved)
+    return saved
+
+
+@app.post("/v1/sessions/{session_id}/check-in", response_model=Session)
+def check_in_to_session(session_id: str, player: Player = Depends(get_current_player)) -> Session:
+    """Record a confirmed player's self check-in without exposing it publicly."""
+    session = _get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Game not found")
+    if not session.time_finalized:
+        raise HTTPException(status_code=409, detail="Finalize the time poll in the Rally Circle before checking in")
+    _require_active_session(session)
+    if player.id not in session.confirmed_player_ids:
+        raise HTTPException(status_code=403, detail="Only confirmed players can check in")
+    if player.id in session.checked_in_player_ids:
+        return session
+
+    starts_at, ends_at = _session_window(session)
+    now = datetime.now(local_timezone)
+    if now < starts_at - timedelta(hours=1):
+        raise HTTPException(status_code=409, detail="Check-in opens one hour before the game")
+    if now > ends_at:
+        raise HTTPException(status_code=409, detail="This game has already ended")
+
+    on_time = now <= starts_at + timedelta(minutes=15)
+    _save_player_reliability_event(player, on_time=on_time)
+    saved = repository.save_session(session.model_copy(update={"checked_in_player_ids": [*session.checked_in_player_ids, player.id]}))
     return saved
 
 
@@ -1620,6 +1780,7 @@ def decide_join_request(session_id: str, request_id: str, request: JoinRequestDe
             join_request.status = "waitlisted"
             saved_request = repository.save_join_request(join_request)
             _notify_request_update(saved_request, session)
+            _resolve_join_request_notification(saved_request, player.id)
             return saved_request
         if join_request.player_id not in session.confirmed_player_ids:
             session.confirmed_player_ids.append(join_request.player_id)
@@ -1628,6 +1789,7 @@ def decide_join_request(session_id: str, request_id: str, request: JoinRequestDe
     join_request.status = request.status
     saved_request = repository.save_join_request(join_request)
     _notify_request_update(saved_request, session)
+    _resolve_join_request_notification(saved_request, player.id)
     return saved_request
 
 
@@ -1649,7 +1811,8 @@ def notifications(player: Player = Depends(get_current_player)) -> Notifications
     cached = _get_cached_read_view(cache_key)
     if cached is not None:
         return cached
-    return _cache_read_view(cache_key, NotificationsResponse(notifications=repository.list_notifications_for_player(player.id)))
+    items = [_notification_with_action_status(notification, player) for notification in repository.list_notifications_for_player(player.id)]
+    return _cache_read_view(cache_key, NotificationsResponse(notifications=items))
 
 
 @app.post("/v1/me/notifications/{notification_id}/read", response_model=AppNotification)
@@ -1802,11 +1965,8 @@ def explore_sessions(player: Player = Depends(get_current_player)) -> ExploreSes
     return _cache_read_view(cache_key, ExploreSessionsResponse(recommendations=recommendations))
 
 
-def _player_cmr_100(player: Player, sport: Sport) -> float | None:
-    if sport in player.cmr_ratings:
-        return player.cmr_ratings[sport]
-    legacy_rating = rating_for_sport(player, sport)
-    return cmr_from_legacy_rating(legacy_rating) if legacy_rating is not None else None
+def _player_cmr(player: Player, sport: Sport) -> float | None:
+    return rating_for_sport(player, sport)
 
 
 def _community_name(sport: Sport, area: str) -> str:
@@ -1815,12 +1975,12 @@ def _community_name(sport: Sport, area: str) -> str:
 
 @app.get("/v1/me/player-density", response_model=PlayerDensityResponse)
 def player_density(
-    sport: Sport = "pickleball",
+    sport: MapSport = "all",
     latitude: float | None = Query(default=None, ge=-90, le=90),
     longitude: float | None = Query(default=None, ge=-180, le=180),
     radius_km: float = Query(default=20, ge=1, le=100),
-    cmr_min: float | None = Query(default=None, ge=0, le=100),
-    cmr_max: float | None = Query(default=None, ge=0, le=100),
+    cmr_min: float | None = Query(default=None, ge=1, le=10),
+    cmr_max: float | None = Query(default=None, ge=1, le=10),
     player: Player = Depends(get_current_player),
 ) -> PlayerDensityResponse:
     """Return aggregated neighborhood demand, never individual player locations."""
@@ -1832,8 +1992,14 @@ def player_density(
     for candidate in repository.list_players():
         if candidate.is_profile_private:
             continue
-        candidate_cmr = _player_cmr_100(candidate, sport)
-        if candidate_cmr is None and sport not in candidate.skill_levels:
+        candidate_cmrs = (
+            [rating_for_sport(candidate, candidate_sport) for candidate_sport in ("pickleball", "badminton", "tennis", "padel", "squash", "table_tennis")]
+            if sport == "all"
+            else [_player_cmr(candidate, sport)]
+        )
+        candidate_cmrs = [value for value in candidate_cmrs if value is not None]
+        candidate_cmr = sum(candidate_cmrs) / len(candidate_cmrs) if candidate_cmrs else None
+        if candidate_cmr is None:
             continue
         if cmr_min is not None and candidate_cmr is not None and candidate_cmr < cmr_min:
             continue
@@ -1883,17 +2049,30 @@ def _map_coordinates(session: Session) -> tuple[float | None, float | None]:
     return coordinates if coordinates is not None else (None, None)
 
 
+def _public_map_viewer(area: str, latitude: float | None, longitude: float | None) -> Player:
+    fallback_latitude, fallback_longitude = _geocode_area(area) or _fallback_area_coordinates["whitefield"]
+    return Player(
+        id="public-map-viewer",
+        display_name="Guest",
+        area=area,
+        latitude=latitude if latitude is not None else fallback_latitude,
+        longitude=longitude if longitude is not None else fallback_longitude,
+        cmr_scale=10,
+    )
+
+
 @app.get("/v1/me/community-map", response_model=CommunityMapResponse)
 def community_map(
-    sport: Sport = "pickleball",
+    sport: MapSport = "all",
     latitude: float | None = Query(default=None, ge=-90, le=90),
     longitude: float | None = Query(default=None, ge=-180, le=180),
     radius_km: float = Query(default=5, ge=1, le=100),
-    cmr_min: float | None = Query(default=None, ge=0, le=100),
-    cmr_max: float | None = Query(default=None, ge=0, le=100),
+    cmr_min: float | None = Query(default=None, ge=1, le=10),
+    cmr_max: float | None = Query(default=None, ge=1, le=10),
     date: date | None = Query(default=None),
     time_of_day: str | None = Query(default=None),
     activity_type: str = Query(default="all"),
+    visibility_filter: str = Query(default="all"),
     player: Player = Depends(get_current_player),
 ) -> CommunityMapResponse:
     """Return one privacy-safe read model for all Communities map overlays."""
@@ -1902,11 +2081,14 @@ def community_map(
     normalized_activity = activity_type.casefold()
     if normalized_activity not in {"all", "players", "communities", "games"}:
         raise HTTPException(status_code=422, detail="Activity type must be all, players, communities, or games")
+    normalized_visibility = visibility_filter.casefold()
+    if normalized_visibility not in {"all", "public", "friends"}:
+        raise HTTPException(status_code=422, detail="Visibility filter must be all, public, or friends")
     origin_latitude = latitude if latitude is not None else player.latitude
     origin_longitude = longitude if longitude is not None else player.longitude
     cache_key = _read_view_cache_key(
         "community-map", player.id, sport, f"{(origin_latitude or 0):.2f}", f"{(origin_longitude or 0):.2f}",
-        str(radius_km), str(cmr_min), str(cmr_max), str(date), (time_of_day or "").casefold(), normalized_activity,
+        str(radius_km), str(cmr_min), str(cmr_max), str(date), (time_of_day or "").casefold(), normalized_activity, normalized_visibility,
     )
     cached = _get_cached_read_view(cache_key)
     if cached:
@@ -1914,21 +2096,19 @@ def community_map(
 
     today = _local_today()
     all_sessions = repository.list_sessions()
-    public_upcoming = [
+    following_ids = {record.following_id for record in repository.list_following(player.id)}
+    visible_upcoming = [
         session for session in all_sessions
-        if session.sport == sport and session.visibility == "public"
+        if (sport == "all" or session.sport == sport) and _map_session_visible_to_player(session, normalized_visibility, following_ids)
         and session.status in {"open", "full", "in_progress"} and session.session_date >= today
         and (date is None or session.session_date == date) and _map_time_matches(session, time_of_day)
     ]
-    player_rating = rating_for_sport(player, sport)
-    player_cmr = None
-    if player_rating is not None:
-        player_cmr = player_rating if player.cmr_scale == 100 else cmr_from_legacy_rating(player_rating)
+    player_cmr = None if sport == "all" else rating_for_sport(player, sport)
     if player_cmr is not None and ((cmr_min is not None and player_cmr < cmr_min) or (cmr_max is not None and player_cmr > cmr_max)):
-        public_upcoming = []
+        visible_upcoming = []
 
     nearby_games: list[MapNearbyGame] = []
-    for session in public_upcoming:
+    for session in visible_upcoming:
         session_latitude, session_longitude = _map_coordinates(session)
         if session_latitude is None or session_longitude is None:
             continue
@@ -1939,8 +2119,8 @@ def community_map(
                 continue
         skill_fit = 50.0
         if player_cmr is not None:
-            session_min = cmr_from_legacy_rating(session.skill_min)
-            session_max = cmr_from_legacy_rating(session.skill_max)
+            session_min = session.skill_min
+            session_max = session.skill_max
             if session_min <= player_cmr <= session_max:
                 skill_fit = 100.0
             else:
@@ -1951,9 +2131,11 @@ def community_map(
             id=session.id, group_name=session.group_name, sport=session.sport, area=session.area,
             venue_name=session.venue_name, latitude=session_latitude, longitude=session_longitude,
             session_date=session.session_date, start_time=session.start_time, end_time=session.end_time,
-            open_slots=session.open_slots, skill_min=cmr_from_legacy_rating(session.skill_min),
-            skill_max=cmr_from_legacy_rating(session.skill_max), distance_km=round(distance, 1) if distance is not None else None,
+            open_slots=session.open_slots, skill_min=session.skill_min,
+            skill_max=session.skill_max, distance_km=round(distance, 1) if distance is not None else None,
             match_score=round(skill_fit * 0.65 + distance_fit * 0.35, 1),
+            visibility=session.visibility,
+            is_connection_game=session.organizer_id in following_ids,
         ))
     nearby_games.sort(key=lambda game: (-game.match_score, game.distance_km if game.distance_km is not None else 9999, game.session_date, game.start_time))
 
@@ -1975,9 +2157,9 @@ def community_map(
     memberships = repository.list_community_memberships()
     membership_groups: dict[str, set[str]] = {}
     for membership in memberships:
-        if membership.sport == sport:
+        if sport == "all" or membership.sport == sport:
             membership_groups.setdefault(membership.area.casefold(), set()).add(membership.player_id)
-    public_sessions = [session for session in all_sessions if session.sport == sport and session.visibility == "public"]
+    public_sessions = [session for session in all_sessions if (sport == "all" or session.sport == sport) and session.visibility == "public"]
     area_sessions: dict[str, list[Session]] = {}
     for session in public_sessions:
         area_sessions.setdefault(session.area.casefold(), []).append(session)
@@ -1987,7 +2169,7 @@ def community_map(
         upcoming = [session for session in area_items if session.status in {"open", "full", "in_progress"} and session.session_date >= today]
         recent_completed = [session for session in area_items if session.status == "completed" and (today - session.session_date).days <= 30]
         active_players = set(membership_groups.get(area_key, set())) | {player_id for session in upcoming for player_id in session.confirmed_player_ids}
-        recent_joins = [membership for membership in memberships if membership.sport == sport and membership.area.casefold() == area_key and (datetime.now(timezone.utc) - membership.joined_at).days <= 30]
+        recent_joins = [membership for membership in memberships if (sport == "all" or membership.sport == sport) and membership.area.casefold() == area_key and (datetime.now(timezone.utc) - membership.joined_at).days <= 30]
         recency_signal = max((1 - min((datetime.now(timezone.utc) - item.joined_at).days, 30) / 30 for item in recent_joins), default=0.0)
         activity_score = round(min(100.0, len(active_players) * 6 + len(upcoming) * 18 + len(recent_completed) * 8 + recency_signal * 10), 1)
         coordinates = [_map_coordinates(session) for session in area_items]
@@ -1997,11 +2179,12 @@ def community_map(
         area_distance = distance_km(origin_latitude, origin_longitude, area_latitude, area_longitude) if origin_latitude is not None and origin_longitude is not None and area_latitude is not None and area_longitude is not None else None
         if area_distance is not None and area_distance > radius_km:
             continue
-        community_activity.append(CommunityActivityPoint(
-            community_id=f"community:{sport}:{area_key.replace(' ', '-')}", name=_community_name(sport, area), sport=sport, area=area,
-            latitude=area_latitude, longitude=area_longitude, active_player_count=len(active_players), upcoming_game_count=len(upcoming),
-            activity_score=activity_score, quality_score=round(min(100.0, activity_score * 0.45 + len(recent_completed) * 8), 1),
-        ))
+        if sport != "all":
+            community_activity.append(CommunityActivityPoint(
+                community_id=f"community:{sport}:{area_key.replace(' ', '-')}", name=_community_name(sport, area), sport=sport, area=area,
+                latitude=area_latitude, longitude=area_longitude, active_player_count=len(active_players), upcoming_game_count=len(upcoming),
+                activity_score=activity_score, quality_score=round(min(100.0, activity_score * 0.45 + len(recent_completed) * 8), 1),
+            ))
     community_activity.sort(key=lambda item: (-item.activity_score, item.name.casefold()))
 
     density_response = player_density(sport=sport, latitude=latitude, longitude=longitude, radius_km=radius_km, cmr_min=cmr_min, cmr_max=cmr_max, player=player)
@@ -2020,6 +2203,35 @@ def community_map(
         generated_at=datetime.now(timezone.utc),
     )
     return _cache_read_view(cache_key, response)
+
+
+@app.get("/v1/public/community-map", response_model=CommunityMapResponse)
+def public_community_map(
+    sport: MapSport = "all",
+    latitude: float | None = Query(default=None, ge=-90, le=90),
+    longitude: float | None = Query(default=None, ge=-180, le=180),
+    radius_km: float = Query(default=5, ge=1, le=100),
+    cmr_min: float | None = Query(default=None, ge=1, le=10),
+    cmr_max: float | None = Query(default=None, ge=1, le=10),
+    date: date | None = Query(default=None),
+    time_of_day: str | None = Query(default=None),
+    activity_type: str = Query(default="all"),
+    area: str = Query(default="Whitefield", min_length=1, max_length=80),
+) -> CommunityMapResponse:
+    """Read-only public map: only aggregated player demand and public games."""
+    return community_map(
+        sport=sport,
+        latitude=latitude,
+        longitude=longitude,
+        radius_km=radius_km,
+        cmr_min=cmr_min,
+        cmr_max=cmr_max,
+        date=date,
+        time_of_day=time_of_day,
+        activity_type=activity_type,
+        visibility_filter="public",
+        player=_public_map_viewer(area, latitude, longitude),
+    )
 
 
 @app.get("/v1/me/community-leaderboard", response_model=CommunityLeaderboardResponse)
@@ -2063,6 +2275,11 @@ def community_leaderboard(sport: Sport = "pickleball", area: str | None = None, 
     return CommunityLeaderboardResponse(sport=sport, area=area, entries=entries[:20])
 
 
+@app.get("/v1/public/community-leaderboard", response_model=CommunityLeaderboardResponse)
+def public_community_leaderboard(sport: Sport = "pickleball", area: str | None = None) -> CommunityLeaderboardResponse:
+    return community_leaderboard(sport=sport, area=area, player=_public_map_viewer(area or "Whitefield", None, None))
+
+
 @app.get("/v1/me/venues", response_model=FacilityListResponse)
 def nearby_facilities(
     sport: Sport = "pickleball",
@@ -2076,6 +2293,15 @@ def nearby_facilities(
     records.sort(key=lambda record: (0 if requested_area and requested_area in str(record["area"]).casefold() else 1, str(record["name"]).casefold()))
     facilities = [Facility.model_validate(record) for record in records[:limit]]
     return FacilityListResponse(sport=sport, area=area or player.area, facilities=facilities)
+
+
+@app.get("/v1/public/venues", response_model=FacilityListResponse)
+def public_nearby_facilities(
+    sport: Sport = "pickleball",
+    area: str = Query(default="Whitefield", min_length=1, max_length=80),
+    limit: int = Query(default=12, ge=1, le=50),
+) -> FacilityListResponse:
+    return nearby_facilities(sport=sport, area=area, limit=limit, player=_public_map_viewer(area, None, None))
 
 
 def _community_id(sport: Sport, area: str) -> str:
@@ -2223,6 +2449,104 @@ def update_booking(session_id: str, request: BookingUpdateRequest, player: Playe
     return saved
 
 
+def _time_poll_label(start_time: time, end_time: time) -> str:
+    return f"{start_time.strftime('%I:%M %p').lstrip('0')}–{end_time.strftime('%I:%M %p').lstrip('0')}"
+
+
+def _time_poll_options(session: Session) -> list[TimePollOption]:
+    if not session.time_window_start or not session.time_window_end:
+        return []
+    cursor = datetime.combine(session.session_date, session.time_window_start)
+    window_end = datetime.combine(session.session_date, session.time_window_end)
+    options: list[TimePollOption] = []
+    while cursor + timedelta(minutes=session.duration_minutes) <= window_end:
+        slot_end = cursor + timedelta(minutes=session.duration_minutes)
+        options.append(TimePollOption(
+            id=cursor.strftime("%H%M"),
+            label=_time_poll_label(cursor.time(), slot_end.time()),
+            start_time=cursor.time(),
+            end_time=slot_end.time(),
+        ))
+        # Half-hour increments give a useful choice without overwhelming chat.
+        cursor += timedelta(minutes=30)
+    return options
+
+
+@app.post("/v1/sessions/{session_id}/time-poll", response_model=ChatPost)
+def create_time_poll(session_id: str, player: Player = Depends(get_current_player)) -> ChatPost:
+    session = _member_session(session_id, player)
+    _require_joinable_session(session)
+    if session.organizer_id != player.id:
+        raise HTTPException(status_code=403, detail="Only the organizer can start the time poll")
+    if session.time_finalized or not session.time_window_start or not session.time_window_end:
+        raise HTTPException(status_code=409, detail="This game already has a fixed time")
+    participant_ids = list(session.confirmed_player_ids)
+    if len(participant_ids) < 2:
+        raise HTTPException(status_code=409, detail="Start the poll once at least one other player has joined")
+    existing = next((post for post in repository.list_chat_posts(session.id) if post.post_type == "time_poll" and post.poll_status == "open"), None)
+    if existing:
+        return existing
+    options = _time_poll_options(session)
+    if not options:
+        raise HTTPException(status_code=422, detail="This time window cannot fit the selected game duration")
+    return repository.save_chat_post(ChatPost(
+        id=uuid4().hex,
+        session_id=session.id,
+        player_id=player.id,
+        player_display_name=player.display_name,
+        message=f"Pick the best {session.duration_minutes}-minute slot. The game time will lock once everyone votes.",
+        post_type="time_poll",
+        poll_options=options,
+        poll_participant_ids=participant_ids,
+        poll_status="open",
+        created_at=datetime.now(timezone.utc),
+    ))
+
+
+@app.post("/v1/sessions/{session_id}/chat/{post_id}/vote", response_model=ChatPost)
+def vote_on_time_poll(session_id: str, post_id: str, request: TimePollVoteRequest, player: Player = Depends(get_current_player)) -> ChatPost:
+    session = _member_session(session_id, player)
+    post = next((candidate for candidate in repository.list_chat_posts(session_id) if candidate.id == post_id), None)
+    if not post or post.post_type != "time_poll":
+        raise HTTPException(status_code=404, detail="Time poll not found")
+    if post.poll_status == "resolved":
+        return post
+    if player.id not in post.poll_participant_ids:
+        raise HTTPException(status_code=403, detail="Only players confirmed when this poll started can vote")
+    selected = next((option for option in post.poll_options if option.id == request.option_id), None)
+    if not selected:
+        raise HTTPException(status_code=422, detail="Choose one of the available time slots")
+
+    options: list[TimePollOption] = []
+    for option in post.poll_options:
+        voters = [voter_id for voter_id in option.voter_ids if voter_id != player.id]
+        if option.id == selected.id:
+            voters.append(player.id)
+        options.append(option.model_copy(update={"voter_ids": voters}))
+    voted_ids = {voter_id for option in options for voter_id in option.voter_ids}
+    updates: dict[str, object] = {"poll_options": options}
+    if set(post.poll_participant_ids).issubset(voted_ids):
+        winner = sorted(options, key=lambda option: (-len(option.voter_ids), option.start_time, option.id))[0]
+        updates.update({"poll_status": "resolved", "poll_winner_id": winner.id})
+        session = repository.save_session(session.model_copy(update={
+            "start_time": winner.start_time,
+            "end_time": winner.end_time,
+            "time_finalized": True,
+        }))
+        _index_session_best_effort(session)
+        repository.save_chat_post(ChatPost(
+            # A stable id makes finalization idempotent if a client retries.
+            id=f"time-poll-finalized-{post.id}",
+            session_id=session.id,
+            player_id="system",
+            player_display_name="CourtMate",
+            message=f"Time confirmed for {winner.label}. Please book the court!",
+            post_type="system",
+            created_at=datetime.now(timezone.utc),
+        ))
+    return repository.save_chat_post(post.model_copy(update=updates))
+
+
 @app.get("/v1/sessions/{session_id}/chat", response_model=ChatResponse)
 def group_chat(session_id: str, player: Player = Depends(get_current_player)) -> ChatResponse:
     session = _member_session(session_id, player)
@@ -2244,7 +2568,13 @@ def post_group_chat(session_id: str, request: ChatPostRequest, player: Player = 
         else:
             _require_active_session(session)
     if post_type == "match_result":
+        if session.status not in {"awaiting_feedback", "completed"}:
+            raise HTTPException(status_code=409, detail="Record the final score after the game is marked complete")
         _validate_chat_match_teams(teams, session)
+        if player.id not in {player_id for team in teams for player_id in team.player_ids}:
+            raise HTTPException(status_code=403, detail="Only a player in the result can post its final score")
+        if session.rating_mode == "competitive" and not _is_valid_competitive_result(session, teams):
+            raise HTTPException(status_code=422, detail="Add a valid final score for both sides before confirming this competitive result")
         if not message:
             def team_label(team) -> str:
                 names = []
@@ -2318,6 +2648,8 @@ def complete_session(session_id: str, background_tasks: BackgroundTasks, player:
         raise HTTPException(status_code=404, detail="Session not found")
     if player.id not in session.confirmed_player_ids:
         raise HTTPException(status_code=403, detail="Only confirmed players can complete this game")
+    if not session.time_finalized:
+        raise HTTPException(status_code=409, detail="Finalize the time poll in the Rally Circle before completing this game")
     if session.status == "cancelled":
         raise HTTPException(status_code=409, detail="Cancelled games cannot be completed")
     if session.status == "completed":
@@ -2359,15 +2691,31 @@ def complete_session(session_id: str, background_tasks: BackgroundTasks, player:
 def create_group(background_tasks: BackgroundTasks, request: CreateGroupRequest, player: Player = Depends(get_current_player)) -> CreatedGroupResponse:
     intent = _parse_intent(request.query, request.sport, player)
     proposal = _group_proposal(intent, player.id, request.group_name, request.query)
-    overrides = request.model_dump(exclude_none=True, exclude={"query", "group_name", "sport", "visibility"})
+    overrides = request.model_dump(exclude_none=True, exclude={
+        "query", "group_name", "sport", "visibility",
+        "time_window_start", "time_window_end", "duration_minutes", "rating_mode",
+    })
     session_visibility = request.visibility or player.default_session_visibility
     if request.area:
         coordinates = _geocode_area(request.area)
         overrides.update({"area": request.area, "latitude": coordinates[0] if coordinates else None, "longitude": coordinates[1] if coordinates else None})
     proposal = proposal.model_copy(update=overrides)
     session_date = proposal.session_date or _local_today()
-    start_time = proposal.start_time or time(19)
-    end_time = proposal.end_time or (datetime.combine(session_date, start_time) + timedelta(hours=2)).time()
+    time_window_start = request.time_window_start
+    time_window_end = request.time_window_end
+    uses_time_window = time_window_start is not None or time_window_end is not None
+    if uses_time_window and (time_window_start is None or time_window_end is None):
+        raise HTTPException(status_code=422, detail="Choose both the start and end of the time window")
+    if uses_time_window:
+        assert time_window_start is not None and time_window_end is not None
+        window_minutes = int((datetime.combine(session_date, time_window_end) - datetime.combine(session_date, time_window_start)).total_seconds() / 60)
+        if window_minutes < request.duration_minutes:
+            raise HTTPException(status_code=422, detail="The time window must be at least as long as the game duration")
+        start_time = time_window_start
+        end_time = (datetime.combine(session_date, start_time) + timedelta(minutes=request.duration_minutes)).time()
+    else:
+        start_time = proposal.start_time or time(19)
+        end_time = proposal.end_time or (datetime.combine(session_date, start_time) + timedelta(hours=2)).time()
     if session_date < _local_today():
         raise HTTPException(status_code=422, detail="Choose today or a future date")
     if session_date == _local_today() and datetime.combine(session_date, start_time, tzinfo=local_timezone) <= datetime.now(local_timezone):
@@ -2390,9 +2738,15 @@ def create_group(background_tasks: BackgroundTasks, request: CreateGroupRequest,
         session_date=session_date,
         start_time=start_time,
         end_time=end_time,
+        time_window_start=time_window_start,
+        time_window_end=time_window_end,
+        duration_minutes=request.duration_minutes if uses_time_window else 60,
+        time_finalized=not uses_time_window,
         skill_min=proposal.skill_min,
         skill_max=proposal.skill_max,
+        skill_scale=10,
         style=proposal.style,
+        rating_mode=request.rating_mode,
         game_format=request.game_format,
         sport=proposal.sport,
         capacity=request.capacity,

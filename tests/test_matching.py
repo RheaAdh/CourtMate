@@ -3,7 +3,7 @@ from datetime import date, datetime, time, timedelta, timezone
 
 from backend.gemini import GeminiIntentParser
 from backend.matching import search_sessions, suggest_replacements
-from backend.models import Player, SearchIntent, Session, cmr_from_legacy_rating, normalize_cmr_player, rating_for_sport
+from backend.models import Player, SearchIntent, Session, cmr_from_legacy_rating, normalize_cmr_player, normalize_session, rating_for_sport
 from backend.repository import InMemoryRepository
 from tests.fixtures import load_repository_fixture
 from backend.vector_search import VectorIndexer, VectorRetriever, session_to_document
@@ -99,7 +99,7 @@ class MatchingTests(unittest.TestCase):
         self.assertFalse(parser.is_performance_query("Find games near me"))
         self.assertTrue(parser.is_performance_query("How is my CMR changing?"))
 
-    def test_cmr_uses_100_scale_and_preserves_legacy_matching(self):
+    def test_cmr_migrates_100_scale_to_canonical_ten_point_scale(self):
         player = Player(
             id="cmr-player",
             display_name="CMR Player",
@@ -107,8 +107,10 @@ class MatchingTests(unittest.TestCase):
             cmr_ratings={"pickleball": 50.0},
             cmr_scale=100,
         )
-        self.assertEqual(cmr_from_legacy_rating(4.5), 50.0)
-        self.assertEqual(rating_for_sport(player, "pickleball"), 4.5)
+        self.assertEqual(cmr_from_legacy_rating(4.5), 5.5)
+        normalized = normalize_cmr_player(player)
+        self.assertEqual(normalized.cmr_ratings["pickleball"], 5.5)
+        self.assertEqual(rating_for_sport(normalized, "pickleball"), 5.5)
 
     def test_old_cmr_values_are_normalized_on_read(self):
         player = Player(
@@ -119,9 +121,29 @@ class MatchingTests(unittest.TestCase):
             cmr_scale=8,
         )
         normalized = normalize_cmr_player(player)
-        self.assertEqual(normalized.cmr_scale, 100)
-        self.assertEqual(normalized.cmr_ratings["pickleball"], 50.0)
-        self.assertEqual(rating_for_sport(normalized, "pickleball"), 4.5)
+        self.assertEqual(normalized.cmr_scale, 10)
+        self.assertEqual(normalized.cmr_ratings["pickleball"], 5.5)
+        self.assertEqual(rating_for_sport(normalized, "pickleball"), 5.5)
+
+    def test_legacy_session_skill_band_is_converted_on_read(self):
+        session = Session(
+            id="legacy-session",
+            group_name="Legacy session",
+            organizer_id="organizer",
+            area="Whitefield",
+            session_date=date.today() + timedelta(days=1),
+            start_time=time(8),
+            end_time=time(9),
+            skill_min=3.0,
+            skill_max=5.0,
+            style="casual",
+            capacity=4,
+            skill_scale=8,
+        )
+        normalized = normalize_session(session)
+        self.assertEqual(normalized.skill_scale, 10)
+        self.assertEqual(normalized.skill_min, 3.57)
+        self.assertEqual(normalized.skill_max, 6.14)
 
     def test_fallback_parser_extracts_core_search_fields(self):
         intent = GeminiIntentParser().parse("Find a casual intermediate pickleball game near Whitefield this Sunday morning")
@@ -147,12 +169,12 @@ class MatchingTests(unittest.TestCase):
         close_band = Session(
             id="cmr-close", sport="pickleball", group_name="CMR Close Rally", organizer_id="p2", area="Whitefield",
             latitude=12.9698, longitude=77.7499, session_date=date.today() + timedelta(days=2), start_time=time(8), end_time=time(10),
-            skill_min=3.0, skill_max=3.4, style="casual", capacity=8,
+            skill_min=3.7, skill_max=3.95, skill_scale=10, style="casual", capacity=8,
         )
         edge_band = Session(
             id="cmr-edge", sport="pickleball", group_name="CMR Edge Rally", organizer_id="p2", area="Whitefield",
             latitude=12.9698, longitude=77.7499, session_date=date.today() + timedelta(days=2), start_time=time(8), end_time=time(10),
-            skill_min=3.0, skill_max=3.8, style="casual", capacity=8,
+            skill_min=3.7, skill_max=4.4, skill_scale=10, style="casual", capacity=8,
         )
         intent = SearchIntent(sport="pickleball", area="Whitefield", date=close_band.session_date)
         results = search_sessions([edge_band, close_band], intent, repo.list_players(), player)
@@ -170,14 +192,14 @@ class MatchingTests(unittest.TestCase):
         self.assertTrue(all(result.reasons.distance_km is not None for result in results))
         self.assertNotIn("s2", {result.session.id for result in results})
 
-    def test_profile_skill_level_does_not_filter_search(self):
+    def test_self_assessed_level_is_a_cmr_for_matching(self):
         repo = InMemoryRepository()
         load_repository_fixture(repo)
         player = repo.get_player("p5")
         player.skill_levels = {"pickleball": "advanced"}
         intent = GeminiIntentParser().parse("Find a casual game near Whitefield this Sunday")
         results = search_sessions(repo.list_sessions(), intent, repo.list_players(), player)
-        self.assertIn("s1", {result.session.id for result in results})
+        self.assertNotIn("s1", {result.session.id for result in results})
 
     def test_explicit_search_level_filters_without_using_profile_level(self):
         repo = InMemoryRepository()

@@ -52,15 +52,15 @@ def make_history(player_id: str, ratings: dict[str, float], games: int) -> dict[
     for sport, legacy_rating in ratings.items():
         target = cmr_from_legacy_rating(legacy_rating)
         points: list[CMRHistoryPoint] = []
-        previous = max(0.0, target - 8.0)
+        previous = max(1.0, target - 0.72)
         for index in range(games):
             progress = (index + 1) / games
-            current = round(max(0.0, min(100.0, target - 8.0 + progress * 8.0)), 2)
+            current = round(max(1.0, min(10.0, target - 0.72 + progress * 0.72)), 2)
             points.append(CMRHistoryPoint(
                 session_id=f"demo-history-{player_id}-{sport}-{index + 1}",
                 session_date=date.today() - timedelta(days=(games - index) * 9),
                 group_name=f"{sport.replace('_', ' ').title()} Demo Rally {index + 1}",
-                game_rating=round(max(0.0, min(100.0, current + (2.0 if index % 2 == 0 else -1.0))), 2),
+                game_rating=round(max(1.0, min(10.0, current + (0.18 if index % 2 == 0 else -0.09))), 2),
                 rating=current,
                 delta=round(current - previous, 2),
             ))
@@ -87,10 +87,13 @@ def make_player(player_id: str, name: str, area: str, ratings: dict[str, float],
         travel_radius_km=12,
         sport_ratings=ratings,
         rating_sources={sport: "synthetic" for sport in ratings},
+        primary_sport=next(iter(ratings), None),
+        self_assessed_levels={sport: round(cmr_from_legacy_rating(rating)) for sport, rating in ratings.items()},
         cmr_ratings={sport: cmr_from_legacy_rating(rating) for sport, rating in ratings.items()},
+        cmr_starting_ratings={sport: cmr_from_legacy_rating(rating) for sport, rating in ratings.items()},
         cmr_game_counts={sport: history_games for sport in ratings},
         cmr_history=make_history(player_id, ratings, history_games),
-        cmr_scale=100,
+        cmr_scale=10,
         rating_source="synthetic",
         rating_confidence=0.8,
         style=style,
@@ -112,8 +115,9 @@ def make_session(session_id: str, name: str, organizer_id: str, sport: str, area
         session_date=session_date,
         start_time=start,
         end_time=end,
-        skill_min=minimum,
-        skill_max=maximum,
+        skill_min=cmr_from_legacy_rating(minimum),
+        skill_max=cmr_from_legacy_rating(maximum),
+        skill_scale=10,
         style=style,
         capacity=8,
         confirmed_player_ids=confirmed,
@@ -195,9 +199,9 @@ def seed_activity_history(repository: FirestoreRepository, players: list[Player]
                 session_id=session.id,
                 session_date=session.session_date,
                 group_name=session.group_name,
-                game_rating=round(max(0.0, min(100.0, current + delta)), 2),
+                game_rating=round(max(1.0, min(10.0, current + delta * 0.09)), 2),
                 rating=current,
-                delta=delta,
+                delta=round(delta * 0.09, 2),
             ))
             updated_history = dict(player.cmr_history)
             updated_history[session.sport] = history

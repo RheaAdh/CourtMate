@@ -3,6 +3,8 @@
 import { PointerEvent, useEffect, useRef, useState } from "react";
 
 type Sport = "pickleball" | "badminton" | "tennis" | "padel" | "squash" | "table_tennis";
+type SportFilter = Sport | "all";
+type MapVisibilityFilter = "all" | "public" | "friends";
 
 export type NearbyGame = {
   id: string;
@@ -20,6 +22,8 @@ export type NearbyGame = {
   longitude?: number | null;
   distance_km?: number | null;
   match_score: number;
+  visibility?: "public" | "followers";
+  is_connection_game?: boolean;
 };
 
 type DensityPoint = {
@@ -96,12 +100,15 @@ export type CommunityHubProps = {
   onOpenExistingGame?: (sessionId: string, status: "pending" | "joined") => void;
   onOpenRallyCircle?: (sessionId: string) => void;
   onRequestJoin?: (game: NearbyGame) => Promise<void> | void;
+  isGuest?: boolean;
+  onSignIn?: () => void;
   initialLatitude?: number | null;
   initialLongitude?: number | null;
   initialArea?: string;
 };
 
-const labels: Record<Sport, string> = {
+const labels: Record<SportFilter, string> = {
+  all: "All sports",
   pickleball: "Pickleball",
   badminton: "Badminton",
   tennis: "Tennis",
@@ -450,18 +457,22 @@ export function CommunityHub({
   onOpenExistingGame,
   onOpenRallyCircle,
   onRequestJoin,
+  isGuest = false,
+  onSignIn,
   initialLatitude,
   initialLongitude,
   initialArea = "Whitefield",
 }: CommunityHubProps) {
   const authorizedFetchRef = useRef(authorizedFetch);
   authorizedFetchRef.current = authorizedFetch;
+  const apiScope = isGuest ? "public" : "me";
 
-  const [sportFilter, setSportFilter] = useState<Sport>("tennis");
+  const [sportFilter, setSportFilter] = useState<SportFilter>("all");
   const [radiusKm, setRadiusKm] = useState(5);
+  const [visibilityFilter, setVisibilityFilter] = useState<MapVisibilityFilter>("all");
   const [mapRefresh, setMapRefresh] = useState(1);
   const [hasSearched, setHasSearched] = useState(true);
-  const [cmrOnly] = useState(false);
+  const [cmrOnly, setCmrOnly] = useState(false);
 
   const [densityPoints, setDensityPoints] = useState<DensityPoint[]>([]);
   const [densityLoading, setDensityLoading] = useState(false);
@@ -531,18 +542,21 @@ export function CommunityHub({
       sport: sportFilter,
       radius_km: radiusKm.toString(),
       activity_type: "all",
+      area: areaFilter,
     });
+    if (!isGuest) params.set("visibility_filter", visibilityFilter);
     if (location) {
       params.set("latitude", location.latitude.toString());
       params.set("longitude", location.longitude.toString());
     }
     if (cmrOnly && currentCmr != null) {
-      params.set("cmr_min", Math.max(0, currentCmr - 20).toString());
-      params.set("cmr_max", Math.min(100, currentCmr + 20).toString());
+      params.set("cmr_min", Math.max(1, currentCmr - 1.8).toFixed(2));
+      params.set("cmr_max", Math.min(10, currentCmr + 1.8).toFixed(2));
     }
 
     const loadLegacyMap = async () => {
-      const legacyParams = new URLSearchParams({ sport: sportFilter, radius_km: radiusKm.toString() });
+      if (isGuest) throw new Error("Public map unavailable");
+      const legacyParams = new URLSearchParams({ sport: sportFilter === "all" ? "tennis" : sportFilter, radius_km: radiusKm.toString() });
       if (location) {
         legacyParams.set("latitude", location.latitude.toString());
         legacyParams.set("longitude", location.longitude.toString());
@@ -574,7 +588,7 @@ export function CommunityHub({
     };
 
     void authorizedFetchRef
-      .current(`${apiUrl}/v1/me/community-map?${params}`)
+      .current(`${apiUrl}/v1/${apiScope}/community-map?${params}`)
       .then(async (response) => {
         if (!response.ok) throw new Error();
         return response.json() as Promise<{
@@ -613,16 +627,23 @@ export function CommunityHub({
     return () => {
       cancelled = true;
     };
-  }, [apiUrl, mapRefresh, sportFilter, radiusKm, location.latitude, location.longitude]);
+  }, [apiUrl, apiScope, isGuest, mapRefresh, sportFilter, radiusKm, visibilityFilter, areaFilter, location.latitude, location.longitude, cmrOnly, currentCmr]);
 
   useEffect(() => {
     let cancelled = false;
+    if (sportFilter === "all") {
+      setLeaderboard([]);
+      setLeaderboardLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
     setLeaderboardLoading(true);
     const params = new URLSearchParams({ sport: sportFilter });
     if (initialArea) params.set("area", initialArea);
 
     void authorizedFetchRef
-      .current(`${apiUrl}/v1/me/community-leaderboard?${params}`)
+      .current(`${apiUrl}/v1/${apiScope}/community-leaderboard?${params}`)
       .then(async (response) => {
         if (!response.ok) throw new Error();
         return response.json() as Promise<{ entries: LeaderboardEntry[] }>;
@@ -640,17 +661,24 @@ export function CommunityHub({
     return () => {
       cancelled = true;
     };
-  }, [apiUrl, sportFilter, initialArea]);
+  }, [apiUrl, apiScope, sportFilter, initialArea]);
 
   useEffect(() => {
     let cancelled = false;
     if (!facilitiesOpen) return () => { cancelled = true; };
+    if (sportFilter === "all") {
+      setFacilities([]);
+      setFacilitiesLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
     setFacilitiesLoading(true);
     const params = new URLSearchParams({ sport: sportFilter });
     if (initialArea) params.set("area", initialArea);
 
     void authorizedFetchRef
-      .current(`${apiUrl}/v1/me/venues?${params}`)
+      .current(`${apiUrl}/v1/${apiScope}/venues?${params}`)
       .then(async (response) => {
         if (!response.ok) throw new Error();
         return response.json() as Promise<{ facilities: Facility[] }>;
@@ -668,7 +696,7 @@ export function CommunityHub({
     return () => {
       cancelled = true;
     };
-  }, [apiUrl, sportFilter, initialArea, facilitiesOpen]);
+  }, [apiUrl, apiScope, sportFilter, initialArea, facilitiesOpen]);
 
   const center = location ?? DEFAULT_CENTER;
 
@@ -691,6 +719,10 @@ export function CommunityHub({
   };
 
   const handleGameAction = async (game: NearbyGame) => {
+    if (isGuest) {
+      onSignIn?.();
+      return;
+    }
     if (isRequested(game.id)) {
       onOpenExistingGame?.(game.id, "pending");
       return;
@@ -757,9 +789,9 @@ export function CommunityHub({
   return (
     <section className="page-view community-page" aria-labelledby="community-page-title">
       <header className="community-header">
-        <span className="kicker">YOUR PEOPLE, YOUR SPORT</span>
-        <h1 id="community-page-title">Find your circle</h1>
-        <p>Players like you are showing up nearby. Log every game, improve your CMR, and make your next match better.</p>
+        <span className="kicker">{isGuest ? "BROWSE LOCAL GAMES" : "YOUR PEOPLE, YOUR SPORT"}</span>
+        <h1 id="community-page-title">{isGuest ? "Find a game nearby" : "Find your circle"}</h1>
+        <p>{isGuest ? "Explore public games, map activity, and local circles. Sign in only when you are ready to request a spot." : "Players like you are showing up nearby. Log every game, improve your CMR, and make your next match better."}</p>
       </header>
 
       <section className="player-density-card" aria-labelledby="player-density-title">
@@ -769,7 +801,7 @@ export function CommunityHub({
             <h2 id="player-density-title">Active games near you</h2>
             <p>
               {nearbyGamesState.length
-                ? `${nearbyGamesState.length} public ${labels[sportFilter].toLowerCase()} game${nearbyGamesState.length === 1 ? "" : "s"} within ${radiusKm} km`
+                ? `${nearbyGamesState.length} ${!isGuest && visibilityFilter === "friends" ? "connection" : visibilityFilter === "public" || isGuest ? "public" : "visible"} ${labels[sportFilter].toLowerCase()} game${nearbyGamesState.length === 1 ? "" : "s"} within ${radiusKm} km`
                 : `Find active ${labels[sportFilter].toLowerCase()} games within ${radiusKm} km`}
             </p>
           </div>
@@ -778,14 +810,16 @@ export function CommunityHub({
               <select
                 value={sportFilter}
                 onChange={(event) => {
-                  setSportFilter(event.target.value as Sport);
+                  setSportFilter(event.target.value as SportFilter);
                   setSelectedGameState(null);
                   setSelectedMapArea(null);
                   setSelectedGameIds(null);
                 }}
                 aria-label="Choose sport"
               >
+                <option value="all">All sports</option>
                 {Object.entries(labels).map(([value, label]) => (
+                  value !== "all" &&
                   <option key={value} value={value}>
                     {label}
                   </option>
@@ -806,6 +840,23 @@ export function CommunityHub({
                 <option value="35">Within 35 km</option>
                 <option value="50">Within 50 km</option>
               </select>
+
+              {!isGuest && (
+                <select
+                  value={visibilityFilter}
+                  onChange={(event) => {
+                    setVisibilityFilter(event.target.value as MapVisibilityFilter);
+                    setSelectedGameState(null);
+                    setSelectedMapArea(null);
+                    setSelectedGameIds(null);
+                  }}
+                  aria-label="Choose game visibility"
+                >
+                  <option value="all">All games</option>
+                  <option value="public">Public only</option>
+                  <option value="friends">Friends</option>
+                </select>
+              )}
 
               <select
                 value={areaFilter}
@@ -842,6 +893,7 @@ export function CommunityHub({
                 Search games
               </button>
             </div>
+            {!isGuest && currentCmr != null && <button type="button" className={`radar-cmr-toggle ${cmrOnly ? "active" : ""}`} onClick={() => setCmrOnly((enabled) => !enabled)}>CMR fit: {cmrOnly ? "on" : "off"}</button>}
             <div className="map-data-legend">
               <span>
                 <i className="legend-dot games" /> Active games
@@ -996,7 +1048,7 @@ export function CommunityHub({
               <section className="map-game-list" aria-labelledby="nearby-games-title">
                 <div className="map-game-list-heading">
                   <div>
-                    <span className="kicker">PUBLIC GAMES NEARBY</span>
+                    <span className="kicker">{!isGuest && visibilityFilter === "friends" ? "FRIEND GAMES NEARBY" : "GAMES NEARBY"}</span>
                     <h3 id="nearby-games-title">
                       {selectedMapArea ? `Games in ${selectedMapArea}` : "Games happening around you"}
                     </h3>
@@ -1014,6 +1066,7 @@ export function CommunityHub({
                       <small>
                         {game.open_slots} {game.open_slots === 1 ? "spot" : "spots"} open · {Math.round(game.match_score)}% match fit
                       </small>
+                      {game.is_connection_game && <small className="map-game-connection">From a connection</small>}
                     </div>
                     <div className="map-game-actions">
                       <button
@@ -1028,7 +1081,9 @@ export function CommunityHub({
                         onClick={() => void handleGameAction(game)}
                         disabled={requestingGameId === game.id}
                       >
-                        {requestingGameId === game.id
+                        {isGuest
+                          ? "Log in to join →"
+                          : requestingGameId === game.id
                           ? "Requesting..."
                           : isRequested(game.id)
                           ? "Pending request →"

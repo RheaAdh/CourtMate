@@ -16,6 +16,7 @@ type FeedbackMember = {
 type PostGameFeedbackProps = {
   sessionId: string;
   sport: string;
+  ratingMode?: "casual" | "competitive";
   members: FeedbackMember[];
   currentUserId?: string;
   apiUrl: string;
@@ -24,7 +25,7 @@ type PostGameFeedbackProps = {
   onToast: (message: string) => void;
 };
 
-export function PostGameFeedbackPanel({ sessionId, sport, members, currentUserId, apiUrl, authorizedFetch, onSaved, onToast }: PostGameFeedbackProps) {
+export function PostGameFeedbackPanel({ sessionId, sport, ratingMode = "casual", members, currentUserId, apiUrl, authorizedFetch, onSaved, onToast }: PostGameFeedbackProps) {
   const [playerRatings, setPlayerRatings] = useState<Record<string, string>>({});
   const [matchQuality, setMatchQuality] = useState("5");
   const [photoUrls, setPhotoUrls] = useState<string[]>([]);
@@ -91,7 +92,7 @@ export function PostGameFeedbackPanel({ sessionId, sport, members, currentUserId
         }),
       });
       if (!response.ok) throw new Error("Feedback failed");
-      onToast("Private ratings saved. CMR is updating.");
+      onToast(ratingMode === "competitive" ? "Private feedback saved. The confirmed score decides CMR." : "Private feedback saved. This casual game did not change CMR.");
       onSaved();
     } catch {
       onToast("Could not save your post-game feedback");
@@ -101,9 +102,9 @@ export function PostGameFeedbackPanel({ sessionId, sport, members, currentUserId
   }
 
   return <form className="workspace-panel feedback-panel feedback-panel-new" onSubmit={submitFeedback}>
-    <div className="workspace-panel-heading"><div><span className="kicker">POST-MATCH</span><h3>How was the game?</h3><p className="feedback-intro">Your private ratings help calibrate CMR.</p></div></div>
+    <div className="workspace-panel-heading"><div><span className="kicker">POST-MATCH</span><h3>How was the game?</h3><p className="feedback-intro">Private feedback improves quality and trust. {ratingMode === "competitive" ? "CMR only changes from a confirmed final score." : "This casual game does not change CMR."}</p></div></div>
     <div className="feedback-fields feedback-quality-field"><label><span>Game match quality</span><select aria-label="Rate game match quality" value={matchQuality} onChange={(event) => setMatchQuality(event.target.value)}>{Array.from({ length: 5 }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value} / 5{value === 5 ? " · Excellent" : value === 1 ? " · Poor" : ""}</option>)}</select></label></div>
-    <fieldset className="player-rating-fields"><legend>Your private ratings</legend><div className="player-rating-list">{members.filter((member) => member.id !== currentUserId).map((member) => <label className="player-rating-row" key={member.id}><span><strong>{member.display_name}</strong><small>{member.cmr_ratings?.[sport] != null ? `${member.cmr_ratings[sport].toFixed(1)} CMR` : "CMR building"}</small></span><select required aria-label={`Rate ${member.display_name} out of 10`} value={playerRatings[member.id] ?? ""} onChange={(event) => setPlayerRatings((ratings) => ({ ...ratings, [member.id]: event.target.value }))}><option value="" disabled>Rate /10</option>{Array.from({ length: 10 }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value} / 10</option>)}</select></label>)}</div></fieldset>
+    <fieldset className="player-rating-fields"><legend>Private player feedback</legend><div className="player-rating-list">{members.filter((member) => member.id !== currentUserId).map((member) => <label className="player-rating-row" key={member.id}><span><strong>{member.display_name}</strong><small>{member.cmr_ratings?.[sport] != null ? `${member.cmr_ratings[sport].toFixed(1)} CMR` : "CMR building"}</small></span><select required aria-label={`Rate playing with ${member.display_name} out of 10`} value={playerRatings[member.id] ?? ""} onChange={(event) => setPlayerRatings((ratings) => ({ ...ratings, [member.id]: event.target.value }))}><option value="" disabled>Experience /10</option>{Array.from({ length: 10 }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value} / 10</option>)}</select></label>)}</div></fieldset>
     <button className="dark-button" type="submit" disabled={saving || photoUploading}>{saving ? "Saving..." : "Save feedback"} <span>→</span></button>
     <div className="feedback-photo-row">
       <div><strong>Add game photos</strong><small>They appear with the final leaderboard on Home.</small></div>

@@ -25,9 +25,17 @@ Private sessions are not sent through `_notify_players_about_game` and are not i
 
 Relevant session states are `open`, `full`, `in_progress`, `awaiting_feedback`, `completed`, and `cancelled`. Join requests are `pending`, `approved`, `declined`, `waitlisted`, or `withdrawn`.
 
-Group Space routes provide the session preview, member profiles, chat, join requests, leaderboard, feedback, and completion. A confirmed player can call `POST /v1/sessions/{id}/complete`. The server moves the session to `awaiting_feedback`; after the required feedback is collected, it updates sport-specific CMR, clears derived read caches, marks the session completed, and publishes the stable Home activity record.
+Group Space routes provide the session preview, member profiles, chat, join requests, leaderboard, feedback, and completion. A confirmed player can call `POST /v1/sessions/{id}/complete`. The server moves the session to `awaiting_feedback`; after the required feedback is collected, it marks the session completed and publishes the stable Home activity record. A competitive session may record one final two-sided score in chat. Every player in that result must confirm it before the server recalculates sport-specific CMR; casual sessions cannot update CMR.
 
-Feedback stores match quality, satisfaction, optional return intent, and private ratings from each player for every other confirmed player. Ratings are combined across available raters and constrained so one game cannot cause an extreme change. The resulting CMR history contains the session, rating, delta, game rating, and date. Home renders the session leaderboard and attached session media after publication.
+Feedback stores match quality, satisfaction, optional return intent, and private ratings from each player for every other confirmed player. It contributes to community quality and trust signals, never directly to CMR. CMR replay is deterministic: each confirmed competitive result uses combined partner strength, opponent strength, win/loss/draw, and a bounded score-margin factor. Per-sport CMR confidence rises from confirmed result count, reducing the adjustment factor for established players. CMR history records the session, rating, delta, resulting game rating, confidence, and date. Home renders the session leaderboard and attached session media after publication.
+
+### CMR Scale And Migration
+
+The canonical CMR representation is a float in the inclusive `1.00–10.00` range. `Player.self_assessed_levels` stores an integer `1–10` confirmed by the player, `cmr_starting_ratings` stores the stable per-sport seed, and `cmr_ratings` stores the current two-decimal result-derived value. New-game and matching bands default to the player's CMR plus or minus `1.8`.
+
+Legacy persisted values are versioned by `Player.cmr_scale` and `Session.skill_scale`. The migration accepts the historic `1–8` and `0–100` CMR formats and converts them deterministically to the canonical range; it is idempotent and touches only CourtMate `players` and `sessions` Firestore documents. Run `PYTHONPATH=. python -m backend.migrate_cmr_to_10`. Authentication records and raw external ratings are not mutated.
+
+Competitive replay uses an expected-result denominator of `1.8` CMR points and a confidence-adjusted K factor from `0.90` for a new record to `0.36` for an established record. Only a valid, two-sided result confirmed by every named participant is replayed. Casual results and private feedback never modify CMR.
 
 ## 4. Communities And Aggregated Density
 
@@ -78,3 +86,11 @@ PYTHONPATH=. pytest -q
 ```
 
 Tests must cover private games being absent from Explore, shared-link preview and join requests, visibility authorization, lifecycle transitions, all-player feedback, CMR updates, Home publication, community density privacy and five-kilometre filtering, location fallback, minimum leaderboard thresholds, stable ranking, map zoom/pan/reset, mobile layout, and existing search, social, media, notification, and profile flows.
+
+## 8. Future Integration: DUPR
+
+DUPR is a future, pickleball-only enrichment integration. It requires an approved DUPR partner relationship and a player-scoped consent/token flow. The public read-only contract can support a connected player's DUPR identity and rating sync; official match reporting requires separate partner or club authorization.
+
+When enabled, store only the data required for matching and display: DUPR ID, singles/doubles rating, verified rating, provisional flags, reliability score, sync timestamp, and token metadata required for server-side refresh. Encrypt or otherwise protect partner credentials and refresh tokens, never expose them to the browser, and support disconnect/revocation.
+
+`cmr_ratings["pickleball"]` remains CourtMate's own confirmed-result-derived rating. DUPR data is a separately labeled source that may seed new-player matching or serve as an additional ranking signal; it must not overwrite CMR, be used for non-pickleball sports, or be accessed through scraped or undocumented endpoints.

@@ -161,7 +161,7 @@ def session_to_document(session: Session) -> SearchDocument:
 def player_to_document(player: Player) -> SearchDocument:
     rated_sports = []
     for sport, rating in sorted(player.cmr_ratings.items()):
-        rated_sports.append(f"{sport.replace('_', ' ')} CMR {rating:.1f} out of 100")
+        rated_sports.append(f"{sport.replace('_', ' ')} CMR {rating:.2f} out of 10")
     content = (
         f"Public racket-sport player {player.display_name} near {player.area}. "
         f"{' '.join(rated_sports) if rated_sports else 'No confirmed CMR yet.'} "
@@ -310,4 +310,3 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
         return -1.0
     denominator = math.sqrt(sum(value * value for value in left)) * math.sqrt(sum(value * value for value in right))
     return sum(a * b for a, b in zip(left, right)) / denominator if denominator else -1.0
-

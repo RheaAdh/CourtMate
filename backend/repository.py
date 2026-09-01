@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Protocol
 from pydantic import ValidationError
 
-from .models import ActivityProof, AppNotification, ChatPost, CommunityMembership, Feedback, FollowRecord, JoinRequest, Player, SearchDocument, Session, SocialComment, SocialPost, VectorSearchResult, normalize_cmr_player
+from .models import ActivityProof, AppNotification, ChatPost, CommunityMembership, Feedback, FollowRecord, JoinRequest, Player, SearchDocument, Session, SocialComment, SocialPost, VectorSearchResult, normalize_cmr_player, normalize_session
 from .vector_search import cosine_similarity
 
 
@@ -88,13 +88,14 @@ class InMemoryRepository:
         self.community_memberships: dict[str, CommunityMembership] = {}
 
     def list_sessions(self) -> list[Session]:
-        return list(self.sessions.values())
+        return [normalize_session(session) for session in self.sessions.values()]
 
     def get_sessions(self, session_ids: list[str]) -> list[Session]:
-        return [self.sessions[session_id] for session_id in session_ids if session_id in self.sessions]
+        return [normalize_session(self.sessions[session_id]) for session_id in session_ids if session_id in self.sessions]
 
     def get_session(self, session_id: str) -> Session | None:
-        return self.sessions.get(session_id)
+        session = self.sessions.get(session_id)
+        return normalize_session(session) if session else None
 
     def list_players(self) -> list[Player]:
         return [normalize_cmr_player(player) for player in self.players.values()]
@@ -186,14 +187,15 @@ class InMemoryRepository:
         return [request for request in self.join_requests.values() if request.player_id == player_id]
 
     def list_sessions_by_organizer(self, organizer_id: str) -> list[Session]:
-        return [session for session in self.sessions.values() if session.organizer_id == organizer_id]
+        return [normalize_session(session) for session in self.sessions.values() if session.organizer_id == organizer_id]
 
     def list_sessions_for_player(self, player_id: str) -> list[Session]:
-        return [session for session in self.sessions.values() if player_id in session.confirmed_player_ids]
+        return [normalize_session(session) for session in self.sessions.values() if player_id in session.confirmed_player_ids]
 
     def save_session(self, session: Session) -> Session:
-        self.sessions[session.id] = session
-        return session
+        normalized = normalize_session(session)
+        self.sessions[normalized.id] = normalized
+        return normalized
 
     def save_community_membership(self, membership: CommunityMembership) -> CommunityMembership:
         self.community_memberships[membership.id] = membership
@@ -298,7 +300,7 @@ class FirestoreRepository:
             value = data.get(field)
             if isinstance(value, datetime):
                 data[field] = value.date().isoformat() if field == "session_date" else value.time().isoformat()
-        return Session.model_validate(data)
+        return normalize_session(Session.model_validate(data))
 
     @staticmethod
     def _write_model(model) -> dict:
@@ -442,9 +444,10 @@ class FirestoreRepository:
         return [self._as_session(document) for document in documents]
 
     def save_session(self, session: Session) -> Session:
-        reference = self.client.collection("sessions").document(session.id)
-        reference.set(self._write_model(session))
-        return session
+        normalized = normalize_session(session)
+        reference = self.client.collection("sessions").document(normalized.id)
+        reference.set(self._write_model(normalized))
+        return normalized
 
     def save_community_membership(self, membership: CommunityMembership) -> CommunityMembership:
         reference = self.client.collection("community_memberships").document(membership.id)
