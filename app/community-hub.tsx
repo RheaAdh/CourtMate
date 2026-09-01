@@ -201,6 +201,7 @@ function GoogleDensityMap({
 }) {
   const mapRef = useRef<HTMLDivElement>(null);
   const [mapReady, setMapReady] = useState(false);
+  const [mapError, setMapError] = useState<string | null>(null);
   const mapInstanceRef = useRef<any>(null);
   const circleInstanceRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
@@ -216,14 +217,18 @@ function GoogleDensityMap({
   const mapKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
 
   useEffect(() => {
-    if (!mapKey || !mapRef.current) return;
+    if (!mapKey || !mapRef.current) {
+      if (!mapKey) setMapError("Interactive map is unavailable right now.");
+      return;
+    }
     let cancelled = false;
+    setMapError(null);
 
     loadGoogleMapsScript(mapKey)
       .then(async () => {
         if (cancelled || !mapRef.current) return;
         const googleMaps = (window as unknown as { google: { maps: any } }).google.maps;
-        if (!googleMaps) return;
+        if (!googleMaps) throw new Error("Google Maps namespace is unavailable");
 
         let MapConstructor = googleMaps.Map;
         let CircleConstructor = googleMaps.Circle;
@@ -456,10 +461,16 @@ function GoogleDensityMap({
           markersRef.current.push(marker);
         });
 
-        if (!cancelled) setMapReady(true);
+        if (!cancelled) {
+          setMapError(null);
+          setMapReady(true);
+        }
       })
       .catch((error: unknown) => {
-        if (!cancelled) setMapReady(false);
+        if (!cancelled) {
+          setMapReady(false);
+          setMapError("Interactive map is unavailable right now. Nearby games are still listed below.");
+        }
         console.error("CourtMate Google Maps initialization notice:", error);
       });
 
@@ -468,14 +479,29 @@ function GoogleDensityMap({
     };
   }, [mapKey, center.latitude, center.longitude, radiusKm, games, clusters, points, selectedArea]);
 
-  if (!mapKey) return null;
+  if (!mapKey) {
+    return (
+      <div className="google-density-map-status" role="status">
+        <strong>Interactive map unavailable</strong>
+        <span>Nearby games are still listed below.</span>
+      </div>
+    );
+  }
 
   return (
-    <div
-      className={`google-density-map ${mapReady ? "is-ready" : ""}`}
-      ref={mapRef}
-      aria-label="Google Maps active games radar"
-    />
+    <>
+      <div
+        className={`google-density-map ${mapReady ? "is-ready" : ""}`}
+        ref={mapRef}
+        aria-label="Google Maps active games radar"
+      />
+      {mapError && (
+        <div className="google-density-map-status" role="status">
+          <strong>Interactive map unavailable</strong>
+          <span>{mapError.replace("Interactive map is unavailable right now. ", "")}</span>
+        </div>
+      )}
+    </>
   );
 }
 

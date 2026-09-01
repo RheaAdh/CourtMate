@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0d2118" />
+  <title>CourtMate | Pitch Deck</title>
+  <style>
+    :root {
+      --ink: #10241b;
+      --ink-2: #183326;
+      --paper: #f8f8ef;
+      --surface: #eef3df;
+      --line: #d7e2c4;
+      --lime: #d8f43c;
+      --lime-deep: #afce22;
+      --mint: #56d3a1;
+      --coral: #ff8f68;
+      --muted: #627266;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --sans: "Avenir Next", "Montserrat", "Trebuchet MS", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #0b1711;
+      color: var(--ink);
+      font-family: var(--sans);
+    }
+
+    button { font: inherit; }
+    .deck { min-height: 100svh; }
+    .slide {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      padding: clamp(24px, 4vw, 62px) clamp(28px, 7vw, 112px) clamp(18px, 3vw, 36px);
+      overflow: hidden;
+      background: var(--paper);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateX(28px) scale(.985);
+      transition: opacity .42s ease, transform .52s cubic-bezier(.2,.8,.2,1);
+    }
+    .slide.active { z-index: 1; opacity: 1; pointer-events: auto; transform: none; }
+    .slide.dark { color: #f7fbec; background: var(--ink); }
+    .slide.acid { background: var(--lime); }
+    .slide::before,
+    .slide::after { position: absolute; content: ""; pointer-events: none; }
+    .slide.dark::before { width: 62vw; height: 62vw; top: -37vw; right: -23vw; border: 1px solid rgba(216,244,60,.25); border-radius: 50%; }
+    .slide.dark::after { width: 32vw; height: 32vw; right: 3vw; bottom: -17vw; border: 1px solid rgba(216,244,60,.16); border-radius: 50%; }
+    .slide.acid::before { width: 44vw; height: 44vw; top: -24vw; right: -13vw; border: 1px solid rgba(16,36,27,.2); border-radius: 50%; }
+    .slide.acid::after { width: 33vw; height: 33vw; bottom: -22vw; left: -9vw; border: 1px solid rgba(16,36,27,.2); border-radius: 50%; }
+
+    .slide-top, .slide-footer { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; }
+    .brand { display: flex; align-items: center; gap: 14px; }
+    .brand img { width: clamp(126px, 14vw, 184px); height: auto; object-fit: contain; }
+    .brand-rule { width: 36px; height: 1px; background: var(--line); }
+    .eyebrow { margin: 0; color: #788b79; font: 700 clamp(9px, .8vw, 12px)/1 var(--mono); letter-spacing: .17em; text-transform: uppercase; }
+    .dark .eyebrow { color: #d8f43c; }
+    .slide-index { color: var(--muted); font: 700 11px var(--mono); letter-spacing: .11em; }
+    .dark .slide-index { color: #b7c5b8; }
+    .slide-footer { color: var(--muted); font: 10px var(--mono); }
+    .dark .slide-footer { color: #a8b9aa; }
+    .slide-footer strong { color: inherit; }
+    .progress { width: min(24vw, 230px); height: 4px; overflow: hidden; border-radius: 4px; background: var(--line); }
+    .dark .progress { background: rgba(245,251,236,.2); }
+    .progress i { display: block; height: 100%; background: var(--lime-deep); }
+    .dark .progress i, .acid .progress i { background: var(--lime); }
+
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { max-width: 1040px; margin-bottom: 18px; font-size: clamp(54px, 8vw, 128px); letter-spacing: -.085em; line-height: .88; }
+    h2 { margin-bottom: 16px; font-size: clamp(36px, 5.4vw, 78px); letter-spacing: -.075em; line-height: .93; }
+    h3 { margin-bottom: 8px; font-size: clamp(16px, 1.6vw, 23px); letter-spacing: -.04em; }
+    .lede { max-width: 650px; margin: 0; color: var(--muted); font-size: clamp(17px, 1.8vw, 27px); line-height: 1.3; letter-spacing: -.03em; }
+    .dark .lede { color: #c5d0c5; }
+    .slide-body { position: relative; z-index: 1; align-self: center; min-height: 0; }
+    .lime { color: var(--lime); }
+    .coral { color: var(--coral); }
+    .wordmark { display: inline-block; padding: 8px 12px; border: 1px solid currentColor; border-radius: 999px; font: 700 11px var(--mono); letter-spacing: .09em; text-transform: uppercase; }
+
+    .hero-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(330px, .8fr); align-items: center; gap: 6vw; }
+    .hero-title { margin-top: 20px; max-width: 760px; }
+    .hero-title em { color: var(--lime); font-family: Georgia, serif; font-style: italic; font-weight: 400; }
+    .hero-art { position: relative; min-height: 430px; }
+    .court { position: absolute; inset: 5% 2% 3% 8%; overflow: hidden; border: 1px solid rgba(216,244,60,.7); border-radius: 34px; background: linear-gradient(135deg, #162f23 0 48%, #10241b 48%); box-shadow: 0 30px 70px rgba(0,0,0,.28); }
+    .court::before { position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: rgba(216,244,60,.55); content: ""; }
+    .court::after { position: absolute; top: 15%; bottom: 15%; left: 16%; right: 16%; border: 1px solid rgba(216,244,60,.42); border-radius: 18px; content: ""; }
+    .court-net { position: absolute; z-index: 1; top: 50%; left: 0; width: 100%; border-top: 2px solid var(--lime); }
+    .ball { position: absolute; z-index: 3; width: 74px; height: 74px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 13px rgba(216,244,60,.14); }
+    .ball.one { top: 22%; left: 24%; }
+    .ball.two { right: 18%; bottom: 20%; width: 30px; height: 30px; box-shadow: 0 0 0 9px rgba(216,244,60,.12); }
+    .orbit { position: absolute; width: 178px; height: 178px; right: -8%; top: -3%; border: 1px solid rgba(216,244,60,.32); border-radius: 50%; }
+    .floating-card { position: absolute; z-index: 5; right: -2%; bottom: 10%; width: min(275px, 65%); padding: 18px; border: 1px solid rgba(216,244,60,.58); border-radius: 18px; background: rgba(248,248,239,.95); color: var(--ink); box-shadow: 0 16px 40px rgba(0,0,0,.22); transform: rotate(-4deg); }
+    .floating-card small { display: block; color: var(--muted); font: 10px var(--mono); }
+    .floating-card strong { display: block; margin: 5px 0 10px; font-size: 20px; letter-spacing: -.05em; }
+    .floating-card div { display: flex; align-items: center; justify-content: space-between; color: #55784d; font: 700 10px var(--mono); }
+    .floating-card b { padding: 6px 9px; border-radius: 999px; background: var(--lime); color: var(--ink); }
+
+    .problem-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 5vh; }
+    .problem { min-height: 230px; padding: clamp(18px, 2vw, 30px); border: 1px solid var(--line); border-radius: 22px; background: #fbfcf7; }
+    .problem:nth-child(2) { transform: translateY(30px); background: var(--ink); color: white; border-color: var(--ink); }
+    .problem:nth-child(3) { transform: translateY(60px); background: var(--lime); border-color: var(--lime); }
+    .problem:nth-child(4) { transform: translateY(30px); }
+    .problem-number { display: block; margin-bottom: 42px; color: var(--lime-deep); font: 700 13px var(--mono); }
+    .problem:nth-child(2) .problem-number { color: var(--lime); }
+    .problem:nth-child(3) .problem-number { color: var(--ink); }
+    .problem p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.45; }
+    .problem:nth-child(2) p { color: #c5d0c5; }
+    .problem:nth-child(3) p { color: var(--ink-2); }
+
+    .loop { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; align-items: center; margin-top: 6vh; }
+    .loop-step { position: relative; min-height: 200px; padding: 22px; border: 1px solid rgba(216,244,60,.24); border-radius: 20px; background: rgba(255,255,255,.04); }
+    .loop-step::after { position: absolute; top: 50%; right: -14px; width: 20px; height: 1px; background: var(--lime); content: ""; }
+    .loop-step:last-child::after { display: none; }
+    .loop-icon { display: grid; width: 42px; height: 42px; place-items: center; margin-bottom: 28px; border-radius: 50%; background: var(--lime); color: var(--ink); font: 800 16px var(--mono); }
+    .loop-step p { margin: 0; color: #b8c7ba; font-size: 13px; line-height: 1.35; }
+
+    .product-grid { display: grid; grid-template-columns: .8fr 1.2fr; align-items: center; gap: 6vw; }
+    .product-stack { display: grid; gap: 11px; margin-top: 34px; }
+    .product-stack div { display: flex; align-items: center; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 15px; }
+    .product-stack b { display: grid; width: 29px; height: 29px; place-items: center; border-radius: 8px; background: var(--lime); color: var(--ink); font: 800 11px var(--mono); }
+    .phone { width: min(100%, 430px); aspect-ratio: .52; margin: 0 auto; padding: 13px; border: 8px solid #182d23; border-radius: 42px; background: #182d23; box-shadow: 0 26px 55px rgba(20,36,27,.2); }
+    .phone-screen { position: relative; height: 100%; overflow: hidden; border-radius: 28px; background: #eff6db; }
+    .phone-map { position: absolute; inset: 0; opacity: .9; background: linear-gradient(140deg, transparent 47%, #b5c9a6 48% 49%, transparent 50%), linear-gradient(45deg, transparent 48%, #c4d5b8 49% 50%, transparent 51%), repeating-linear-gradient(0deg, transparent 0 48px, rgba(108,132,102,.13) 49px 50px), repeating-linear-gradient(90deg, transparent 0 74px, rgba(108,132,102,.13) 75px 76px), #e9f0dc; }
+    .phone-map::before { position: absolute; inset: 12% 9% 18%; border: 1px solid rgba(148,174,51,.7); border-radius: 50%; content: ""; }
+    .phone-head { position: absolute; top: 24px; left: 22px; right: 22px; }
+    .phone-head small { display: block; color: #647863; font: 8px var(--mono); letter-spacing: .12em; }
+    .phone-head strong { display: block; margin-top: 5px; font-size: 19px; letter-spacing: -.06em; }
+    .map-pin { position: absolute; z-index: 2; display: grid; width: 53px; height: 53px; place-items: center; border: 3px solid var(--lime); border-radius: 50%; background: var(--ink); color: white; font-weight: 800; }
+    .map-pin.a { top: 42%; left: 32%; }
+    .map-pin.b { top: 58%; left: 58%; width: 39px; height: 39px; }
+    .map-pin.c { top: 67%; left: 21%; width: 34px; height: 34px; }
+    .phone-filter { position: absolute; z-index: 2; top: 118px; left: 18px; right: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+    .phone-filter span { padding: 9px; border-radius: 8px; background: rgba(248,248,239,.92); color: var(--ink); font: 700 8px var(--mono); }
+    .game-pill { position: absolute; z-index: 3; right: 14px; bottom: 24px; left: 14px; padding: 13px; border-radius: 15px; background: #f8f8ef; box-shadow: 0 10px 25px rgba(20,36,27,.18); }
+    .game-pill b { display: block; font-size: 12px; }
+    .game-pill small { display: block; margin-top: 3px; color: var(--muted); font: 8px var(--mono); }
+
+    .trust-layout { display: grid; grid-template-columns: 1.1fr .9fr; gap: 7vw; align-items: center; }
+    .trust-copy { padding-right: 2vw; }
+    .metric-rack { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .metric { min-height: 170px; padding: 22px; border: 1px solid rgba(216,244,60,.34); border-radius: 20px; background: rgba(255,255,255,.04); }
+    .metric:nth-child(1) { grid-column: 1 / -1; min-height: 145px; background: var(--lime); color: var(--ink); }
+    .metric b { display: block; margin: 16px 0 4px; font-size: clamp(38px, 5vw, 67px); letter-spacing: -.08em; line-height: .8; }
+    .metric span { color: #aebfaf; font: 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .metric:first-child span { color: #516246; }
+    .metric p { margin: 7px 0 0; color: #b8c7ba; font-size: 12px; line-height: 1.35; }
+    .metric:first-child p { color: #415c43; }
+    .streak { display: grid; grid-template-columns: repeat(7, 12px); gap: 5px; margin-top: 14px; }
+    .streak i { width: 12px; height: 12px; border-radius: 3px; background: #d7e1d6; }
+    .streak i:nth-child(4n), .streak i:nth-child(5n) { background: #80b870; }
+    .streak i:nth-child(7n) { background: var(--lime); }
+
+    .cmr-layout { display: grid; grid-template-columns: .8fr 1.2fr; gap: 7vw; align-items: center; }
+    .cmr-scale { position: relative; display: grid; gap: 7px; margin-top: 34px; }
+    .cmr-scale div { display: grid; grid-template-columns: 35px 1fr; gap: 12px; align-items: center; font: 10px var(--mono); }
+    .cmr-scale i { height: 14px; border-radius: 999px; background: #dfe8ce; }
+    .cmr-scale div:nth-child(3) i { background: linear-gradient(90deg, var(--lime-deep), var(--lime)); }
+    .rating-board { position: relative; min-height: 390px; padding: 32px; overflow: hidden; border: 1px solid var(--line); border-radius: 30px; background: #f2f6df; }
+    .rating-number { position: relative; z-index: 3; font-size: clamp(92px, 15vw, 200px); font-weight: 900; letter-spacing: -.12em; line-height: .8; }
+    .rating-number small { margin-left: 9px; font-size: 24px; letter-spacing: -.06em; }
+    .rating-track { position: absolute; right: 5%; bottom: 11%; left: 5%; height: 48%; }
+    .rating-track svg { width: 100%; height: 100%; overflow: visible; }
+    .rating-track path { fill: rgba(216,244,60,.18); stroke: #779737; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; }
+    .rating-track circle { fill: var(--paper); stroke: var(--ink); stroke-width: 4; }
+    .rating-legend { position: absolute; z-index: 3; top: 38px; right: 32px; display: grid; gap: 7px; color: var(--muted); font: 9px var(--mono); text-align: right; }
+    .rating-legend b { color: var(--ink); font-size: 17px; }
+
+    .market-layout { display: grid; grid-template-columns: .85fr 1.15fr; gap: 7vw; align-items: end; }
+    .market-stat { margin-top: 36px; }
+    .market-stat b { display: block; color: var(--ink); font-size: clamp(66px, 8vw, 118px); letter-spacing: -.1em; line-height: .85; }
+    .market-stat span { color: var(--muted); font: 11px var(--mono); }
+    .funnel { display: grid; gap: 12px; }
+    .funnel-row { position: relative; min-height: 92px; padding: 18px 24px; border-radius: 16px; background: var(--surface); }
+    .funnel-row:nth-child(1) { width: 100%; background: var(--ink); color: white; }
+    .funnel-row:nth-child(2) { width: 77%; margin-left: 11%; background: #dce8bf; }
+    .funnel-row:nth-child(3) { width: 51%; margin-left: 24%; background: var(--lime); }
+    .funnel-row b { display: block; font-size: 20px; letter-spacing: -.05em; }
+    .funnel-row small { display: block; margin-top: 5px; color: var(--muted); font: 9px var(--mono); line-height: 1.4; }
+    .funnel-row:first-child small { color: #c3d0c4; }
+    .source-note { margin-top: 18px; color: var(--muted); font: 9px var(--mono); line-height: 1.5; }
+
+    .business-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 5vh; }
+    .business { min-height: 274px; padding: 22px; border-radius: 22px; background: rgba(255,255,255,.07); }
+    .business:nth-child(2) { background: rgba(216,244,60,.18); }
+    .business:nth-child(3) { background: var(--lime); color: var(--ink); }
+    .business:nth-child(4) { background: #274535; }
+    .business-label { color: #c4d4c7; font: 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+    .business:nth-child(3) .business-label { color: #516246; }
+    .business-icon { display: grid; width: 48px; height: 48px; place-items: center; margin: 45px 0 20px; border: 1px solid currentColor; border-radius: 50%; font-size: 22px; }
+    .business p { margin: 0; color: #cad5cb; font-size: 13px; line-height: 1.4; }
+    .business:nth-child(3) p { color: #38533d; }
+
+    .growth-layout { display: grid; grid-template-columns: .9fr 1.1fr; gap: 7vw; align-items: center; }
+    .city-path { position: relative; min-height: 380px; }
+    .city-line { position: absolute; top: 20%; bottom: 8%; left: 46%; width: 2px; background: var(--line); }
+    .city { position: absolute; display: grid; place-items: center; width: 112px; height: 112px; border: 1px solid var(--line); border-radius: 50%; background: var(--paper); text-align: center; }
+    .city b { display: block; font-size: 13px; }
+    .city small { display: block; margin-top: 4px; color: var(--muted); font: 8px var(--mono); }
+    .city.one { top: 6%; left: 29%; border: 8px solid var(--lime); background: var(--ink); color: white; box-shadow: 0 12px 28px rgba(20,36,27,.2); }
+    .city.two { top: 35%; right: 7%; }
+    .city.three { bottom: 2%; left: 6%; }
+    .city-four { position: absolute; bottom: 7%; right: 20%; color: var(--muted); font: 10px var(--mono); }
+    .growth-list { display: grid; gap: 13px; margin-top: 30px; }
+    .growth-list p { display: flex; gap: 15px; margin: 0; padding-bottom: 13px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 15px; }
+    .growth-list b { color: var(--ink); }
+
+    .tech-layout { display: grid; grid-template-columns: .72fr 1.28fr; gap: 6vw; align-items: center; }
+    .tech-points { display: grid; gap: 14px; margin-top: 28px; }
+    .tech-points p { margin: 0; padding-left: 15px; border-left: 2px solid var(--lime); color: #c5d0c5; font-size: 14px; line-height: 1.45; }
+    .architecture { display: grid; gap: 9px; }
+    .arch-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; }
+    .arch-node { min-height: 92px; padding: 14px; border: 1px solid rgba(216,244,60,.28); border-radius: 14px; background: rgba(255,255,255,.04); }
+    .arch-node strong { display: block; color: var(--lime); font-size: 13px; letter-spacing: -.04em; }
+    .arch-node small { display: block; margin-top: 7px; color: #aebfaf; font: 8px var(--mono); line-height: 1.35; }
+    .arch-arrow { height: 20px; margin-left: 12%; border-left: 1px dashed rgba(216,244,60,.5); }
+    .arch-wide { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; }
+    .arch-wide .arch-node { min-height: 78px; background: rgba(216,244,60,.1); }
+    .arch-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 4px; }
+    .arch-strip span { padding: 9px; border-radius: 9px; background: rgba(255,255,255,.07); color: #dce8db; font: 8px var(--mono); text-align: center; }
+
+    .roadmap-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; margin-top: 6vh; }
+    .phase { position: relative; min-height: 310px; padding: 25px; border-top: 2px solid var(--ink); }
+    .phase::before { position: absolute; top: -8px; left: 0; width: 14px; height: 14px; border-radius: 50%; background: var(--ink); content: ""; }
+    .phase:nth-child(2) { border-color: #6e8e31; }
+    .phase:nth-child(2)::before { background: #6e8e31; }
+    .phase:nth-child(3) { border-color: #2d8567; }
+    .phase:nth-child(3)::before { background: #2d8567; }
+    .phase span { color: var(--muted); font: 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+    .phase h3 { margin-top: 37px; font-size: 27px; }
+    .phase p { max-width: 260px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+    .end-note { display: flex; align-items: center; justify-content: space-between; margin-top: 5vh; padding: 22px; border-radius: 18px; background: var(--ink); color: white; }
+    .end-note strong { color: var(--lime); font-size: clamp(19px, 2vw, 29px); letter-spacing: -.05em; }
+    .end-note small { color: #c2d0c3; font: 10px var(--mono); }
+
+    .controls { position: fixed; z-index: 20; right: 20px; bottom: 18px; display: flex; gap: 7px; }
+    .controls button { width: 42px; height: 38px; border: 1px solid rgba(216,244,60,.35); border-radius: 10px; background: rgba(16,36,27,.93); color: white; cursor: pointer; }
+    .controls button:hover { background: var(--lime); color: var(--ink); }
+    .help { position: fixed; z-index: 20; bottom: 25px; left: 24px; color: rgba(248,248,239,.64); font: 10px var(--mono); }
+
+    @media (max-width: 850px) {
+      body { overflow: auto; }
+      .deck { min-height: 0; }
+      .slide { position: relative; display: none; min-height: 100svh; padding: 28px 24px 22px; overflow: auto; }
+      .slide.active { display: grid; }
+      .hero-grid, .product-grid, .trust-layout, .cmr-layout, .market-layout, .growth-layout, .tech-layout { grid-template-columns: 1fr; gap: 30px; }
+      .hero-art { min-height: 330px; }
+      .problem-grid, .business-grid { grid-template-columns: repeat(2, 1fr); margin-top: 28px; }
+      .problem:nth-child(n) { transform: none; }
+      .loop { grid-template-columns: 1fr; margin-top: 25px; }
+      .loop-step { min-height: 0; display: grid; grid-template-columns: 52px 1fr; gap: 14px; padding: 15px; }
+      .loop-icon { margin: 0; }
+      .loop-step::after { top: auto; right: auto; bottom: -11px; left: 35px; width: 1px; height: 14px; }
+      .rating-board { min-height: 290px; }
+      .arch-row { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 540px) {
+      h1 { font-size: 54px; }
+      h2 { font-size: 38px; }
+      .slide { padding: 22px 17px 18px; }
+      .slide-top .brand-rule, .help { display: none; }
+      .problem-grid, .business-grid, .roadmap-grid, .metric-rack { grid-template-columns: 1fr; }
+      .business { min-height: 190px; }
+      .business-icon { margin: 26px 0 16px; }
+      .metric:nth-child(1) { grid-column: auto; }
+      .market-layout { align-items: start; }
+      .city-path { min-height: 330px; }
+      .phone { width: 290px; }
+      .roadmap-grid { gap: 22px; }
+      .phase { min-height: 190px; }
+      .end-note { align-items: flex-start; flex-direction: column; gap: 8px; }
+      .controls { right: 12px; bottom: 12px; }
+      .controls button { width: 38px; height: 34px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="deck" aria-label="CourtMate pitch deck">
+    <section class="slide dark active" data-slide="1">
+      <header class="slide-top"><div class="brand"><img src="../public/courtmate-header-logo-dark.png" alt="CourtMate" /><span class="brand-rule"></span><span class="eyebrow">Google Cloud Hackathon</span></div><span class="slide-index">01 / 12</span></header>
+      <div class="slide-body hero-grid">
+        <div><span class="wordmark lime">The local sport layer</span><h1 class="hero-title">Find a game.<br /><em>Find your people.</em></h1><p class="lede">CourtMate turns local racket sports from scattered messages into reliable communities that actually show up.</p></div>
+        <div class="hero-art" aria-hidden="true"><div class="orbit"></div><div class="court"><div class="court-net"></div><div class="ball one"></div><div class="ball two"></div></div><div class="floating-card"><small>RALLY CIRCLE</small><strong>Whitefield Badminton</strong><div><span>Tonight · 7:00 PM</span><b>3 spots</b></div></div></div>
+      </div>
+      <footer class="slide-footer"><span><strong>CourtMate</strong> · Find your people. Play more.</span><div class="progress"><i style="width:8.33%"></i></div></footer>
+    </section>
+
+    <section class="slide" data-slide="2">
+      <header class="slide-top"><div class="brand"><img src="../public/courtmate-header-logo.png" alt="CourtMate" /><span class="brand-rule"></span><span class="eyebrow">The problem</span></div><span class="slide-index">02 / 12</span></header>
+      <div class="slide-body"><h2>Playing more should not<br />feel like project management.</h2><p class="lede">The path from “I want to play” to a good game is broken in four places.</p><div class="problem-grid"><article class="problem"><span class="problem-number">01</span><h3>Discovery</h3><p>Great games are buried in scattered WhatsApp chats, venue calls, and one-off social posts.</p></article><article class="problem"><span class="problem-number">02</span><h3>Compatibility</h3><p>Players cannot reliably assess skill fit, game intensity, or whether the group will be a good match.</p></article><article class="problem"><span class="problem-number">03</span><h3>Coordination</h3><p>Finding a time, filling a court, and settling a booking takes too much effort.</p></article><article class="problem"><span class="problem-number">04</span><h3>Trust</h3><p>No-shows, last-minute exits, and missing feedback weaken the entire local sports loop.</p></article></div></div>
+      <footer class="slide-footer"><span>Real-world friction, not a lack of player intent.</span><div class="progress"><i style="width:16.66%"></i></div></footer>
+    </section>
+
+    <section class="slide dark" data-slide="3">
+      <header class="slide-top"><div class="brand"><img src="../public/courtmate-header-logo-dark.png" alt="CourtMate" /><span class="brand-rule"></span><span class="eyebrow">The solution</span></div><span class="slide-index">03 / 12</span></header>
+      <div class="slide-body"><h2>One loop for a better<br /><span class="lime">local sports life.</span></h2><p class="lede">CourtMate connects discovery to community, then makes every confirmed game strengthen the next one.</p><div class="loop"><article class="loop-step"><div class="loop-icon">01</div><h3>Discover</h3><p>Live nearby games on a map, with sport, distance, visibility, and CMR-fit context.</p></article><article class="loop-step"><div class="loop-icon">02</div><h3>Join</h3><p>Clear request, pending, approved, and waitlist states build confidence.</p></article><article class="loop-step"><div class="loop-icon">03</div><h3>Coordinate</h3><p>Rally Circles settle timing, chat, polls, and bookings together.</p></article><article class="loop-step"><div class="loop-icon">04</div><h3>Show up</h3><p>Attendance, streaks, and reliability become community signals.</p></article><article class="loop-step"><div class="loop-icon">05</div><h3>Improve</h3><p>Confirmed results and feedback make CMR more useful over time.</p></article></div></div>
+      <footer class="slide-footer"><span>More games → more trust → better games.</span><div class="progress"><i style="width:25%"></i></div></footer>
+    </section>
+
+    <section class="slide" data-slide="4">
+      <header class="slide-top"><div class="brand"><img src="../public/courtmate-header-logo.png" alt="CourtMate" /><span class="brand-rule"></span><span class="eyebrow">Product experience</span></div><span class="slide-index">04 / 12</span></header>
+      <div class="slide-body product-grid"><div><h2>The map is where<br />the game starts.</h2><p class="lede">Explore nearby games before signing in. Log in only when ready to request a spot.</p><div class="product-stack"><div><b>01</b><span>All-sport discovery by current location</span></div><div><b>02</b><span>Distance, area, visibility, and CMR-fit controls</span></div><div><b>03</b><span>Public, friends-only, and trusted community games</span></div><div><b>04</b><span>Live game clusters with clear join status</span></div></div></div><div class="phone" aria-label="CourtMate nearby games product illustration"><div class="phone-screen"><div class="phone-map"></div><div class="phone-head"><small>LIVE COMMUNITY RADAR</small><strong>Active games near you</strong></div><div class="phone-filter"><span>All sports</span><span>Within 50 km</span><span>All games</span><span>Indiranagar</span></div><span class="map-pin a">6</span><span class="map-pin b">3</span><span class="map-pin c">2</span><div class="game-pill"><b>Sunday Badminton Rally</b><small>Indiranagar · 6:00 PM · 2 spots open</small></div></div></div></div>
+      <footer class="slide-footer"><span>Browse freely. Join intentionally.</span><div class="progress"><i style="width:33.33%"></i></div></footer>
+    </section>
+
+    <section class="slide dark" data-slide="5">
+      <header class="slide-top"><div class="brand"><img src="../public/courtmate-header-logo-dark.png" alt="CourtMate" /><span class="brand-rule"></span><span class="eyebrow">Community and trust</span></div><span class="slide-index">05 / 12</span></header>
+      <div class="slide-body trust-layout"><div class="trust-copy"><h2>Trust is a feature,<br />not a profile field.</h2><p class="lede">Rally Circles turn a one-off session into a reliable local community.</p><div class="product-stack"><div><b>✓</b><span class="lime">Group chat and time-window polls</span></div><div><b>✓</b><span class="lime">Clear requests, approvals, waitlists, and reminders</span></div><div><b>✓</b><span class="lime">Feedback loops after every confirmed game</span></div></div></div><div class="metric-rack"><article class="metric"><span>Show-up reliability</span><b>95%</b><p>Attendance stays separate from skill, so a great player cannot hide poor community behaviour.</p></article><article class="metric"><span>Weekly streak</span><b>3</b><div class="streak" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></article><article class="metric"><span>Action loop</span><b>1 tap</b><p>Pending players get feedback reminders at the right moment.</p></article></div></div>
+      <footer class="slide-footer"><span>Reliable people make reliable communities.</span><div class="progress"><i style="width:41.66%"></i></div></footer>
+    </section>
+
+    <section class="slide" data-slide="6">
+      <header class="slide-top"><div class="brand"><img src="../public/courtmate-header-logo.png" alt="CourtMate" /><span class="brand-rule"></span><span class="eyebrow">CourtMate Rating</span></div><span class="slide-index">06 / 12</span></header>
+      <div class="slide-body cmr-layout"><div><span class="wordmark">Human-friendly input</span><h2 style="margin-top:22px">Simple to start.<br />Sophisticated by play.</h2><p class="lede">Players choose a 1–10 starting level. A sport-specific CMR evolves only as real, confirmed behaviour adds evidence.</p><div class="cmr-scale"><div><span>1–2</span><i></i><b>New to the sport</b></div><div><span>3–5</span><i></i><b>Learning to strong intermediate</b></div><div><span>6–8</span><i></i><b>Advanced to expert</b></div><div><span>9–10</span><i></i><b>Elite and competitive</b></div></div></div><div class="rating-board"><div class="rating-legend"><span>VERIFIED BADMINTON CMR</span><b>Intermediate · 8 games</b></div><div class="rating-number">5.67<small>/ 10</small></div><div class="rating-track"><svg viewBox="0 0 600 250" preserveAspectRatio="none" aria-hidden="true"><path d="M0,206 L95,155 L195,177 L300,103 L395,131 L502,51 L600,93 L600,250 L0,250 Z"></path><circle cx="0" cy="206" r="10"></circle><circle cx="95" cy="155" r="10"></circle><circle cx="195" cy="177" r="10"></circle><circle cx="300" cy="103" r="10"></circle><circle cx="395" cy="131" r="10"></circle><circle cx="502" cy="51" r="10"></circle><circle cx="600" cy="93" r="10"></circle></svg></div></div></div>
+      <footer class="slide-footer"><span>Inputs: results, feedback, reliability, participation, and game volume.</span><div class="progress"><i style="width:50%"></i></div></footer>
+    </section>
+
+    <section class="slide" data-slide="7">
+      <header class="slide-top"><div class="brand"><img src="../public/courtmate-header-logo.png" alt="CourtMate" /><span class="brand-rule"></span><span class="eyebrow">Market opportunity</span></div><span class="slide-index">07 / 12</span></header>
+      <div class="slide-body market-layout"><div><h2>Start local.<br />Build a national<br />community graph.</h2><p class="lede">Bengaluru is the focused beachhead for a much larger, under-digitised paid activity market.</p><div class="market-stat"><b>₹37,700cr</b><span>India fitness market projected for 2030</span></div></div><div><div class="funnel"><div class="funnel-row"><b>TAM · India paid fitness & recreational activity</b><small>₹16,200cr in 2024, projected ₹37,700cr by 2030 · approximately 15% CAGR</small></div><div class="funnel-row"><b>SAM · Urban, digitally reachable racket-sport players & venues</b><small>Top 10 cities contribute 56% of market revenue; CourtMate targets high-density local play.</small></div><div class="funnel-row"><b>SOM · Bengaluru’s neighbourhood communities</b><small>Badminton, tennis, pickleball, and padel · player and venue network in the first 24 months.</small></div></div><p class="source-note">Sources: Deloitte India / Health &amp; Fitness Association, India Fitness Market Report 2025. CourtMate SAM and SOM are management estimates pending primary venue and player research.</p></div></div>
+      <footer class="slide-footer"><span>Use the market to focus the wedge, not inflate the claim.</span><div class="progress"><i style="width:58.33%"></i></div></footer>
+    </section>
+
+    <section class="slide dark" data-slide="8">
+      <header class="slide-top"><div class="brand"><img src="../public/courtmate-header-logo-dark.png" alt="CourtMate" /><span class="brand-rule"></span><span class="eyebrow">Business model</span></div><span class="slide-index">08 / 12</span></header>
+      <div class="slide-body"><h2>Monetise the ecosystem<br />that gets stronger with use.</h2><p class="lede">CourtMate aligns player value, organiser time savings, and venue demand.</p><div class="business-grid"><article class="business"><span class="business-label">01 · B2B SaaS</span><div class="business-icon">⌘</div><h3>Venue OS</h3><p>Community management, player CRM, demand signals, and organiser workflows for partner venues.</p></article><article class="business"><span class="business-label">02 · Transaction</span><div class="business-icon">↗</div><h3>Booking referrals</h3><p>Commission or referral revenue from court bookings driven through trusted group demand.</p></article><article class="business"><span class="business-label">03 · B2C premium</span><div class="business-icon">◎</div><h3>Player Pro</h3><p>Advanced CMR insight, priority discovery, richer history, and premium community tools.</p></article><article class="business"><span class="business-label">04 · Network</span><div class="business-icon">+</div><h3>Events & brands</h3><p>Sponsored leagues, tournaments, equipment partners, and local sports activations.</p></article></div></div>
+      <footer class="slide-footer"><span>Start with value creation. Monetise where trust removes friction.</span><div class="progress"><i style="width:66.66%"></i></div></footer>
+    </section>
+
+    <section class="slide" data-slide="9">
+      <header class="slide-top"><div class="brand"><img src="../public/courtmate-header-logo.png" alt="CourtMate" /><span class="brand-rule"></span><span class="eyebrow">Go-to-market</span></div><span class="slide-index">09 / 12</span></header>
+      <div class="slide-body growth-layout"><div><h2>Win one court cluster.<br />Then the city.</h2><p class="lede">The product grows from concentrated supply, repeat play, and community-led demand rather than broad, expensive acquisition.</p><div class="growth-list"><p><b>01</b><span>Partner with venues and proven organisers to seed reliable game supply.</span></p><p><b>02</b><span>Equip Rally Circle ambassadors to create neighbourhood communities.</span></p><p><b>03</b><span>Use referrals, shared game links, streaks, and CMR progress to compound retention.</span></p></div></div><div class="city-path"><div class="city-line"></div><div class="city one"><div><b>Bengaluru</b><small>BEACHHEAD</small></div></div><div class="city two"><div><b>Top city clusters</b><small>REPEATABLE PLAYBOOK</small></div></div><div class="city three"><div><b>National graph</b><small>VENUES + PLAYERS</small></div></div><div class="city-four">Neighbourhood → city → network</div></div></div>
+      <footer class="slide-footer"><span>Supply density first. City expansion second.</span><div class="progress"><i style="width:75%"></i></div></footer>
+    </section>
+
+    <section class="slide dark" data-slide="10">
+      <header class="slide-top"><div class="brand"><img src="../public/courtmate-header-logo-dark.png" alt="CourtMate" /><span class="brand-rule"></span><span class="eyebrow">Built with Google Cloud</span></div><span class="slide-index">10 / 12</span></header>
+      <div class="slide-body tech-layout"><div><h2>Google AI that helps,<br /><span class="lime">without deciding.</span></h2><p class="lede">CourtMate uses Gemini for understanding and discovery, while verified data and deterministic rules remain authoritative.</p><div class="tech-points"><p>Gemini parses natural-language requests, produces grounded discovery explanations, and reads optional wearable screenshots.</p><p>Firestore remains the source of truth for availability, privacy, join decisions, attendance, and CMR.</p><p>Deterministic fallbacks keep the core search and matching experience available when AI is unavailable.</p></div></div><div class="architecture" aria-label="Google Cloud architecture"><div class="arch-row"><div class="arch-node"><strong>Next.js + React</strong><small>Mobile-first player experience</small></div><div class="arch-node"><strong>Google Maps</strong><small>Location-aware game discovery</small></div><div class="arch-node"><strong>Firebase Auth</strong><small>Google identity and secure access</small></div><div class="arch-node"><strong>Cloud Storage</strong><small>Profile images and activity proof</small></div></div><div class="arch-arrow"></div><div class="arch-wide"><div class="arch-node"><strong>Cloud Run + FastAPI</strong><small>Server-side API, matching, trust rules, and protected secrets.</small></div><div class="arch-node"><strong>Cloud Firestore</strong><small>Sessions, chat, feedback, notifications, CMR history, and communities.</small></div></div><div class="arch-arrow"></div><div class="arch-wide"><div class="arch-node"><strong>Vertex AI + Gemini</strong><small>Intent parsing, grounded response generation, and image analysis.</small></div><div class="arch-node"><strong>Firestore Vector Search</strong><small>Gemini embeddings retrieve relevant games and community context.</small></div></div><div class="arch-strip"><span>Privacy-aware</span><span>Grounded retrieval</span><span>Scale-to-zero MVP</span></div></div></div>
+      <footer class="slide-footer"><span>Responsible AI: helpful, grounded, and resilient.</span><div class="progress"><i style="width:83.33%"></i></div></footer>
+    </section>
+
+    <section class="slide acid" data-slide="11">
+      <header class="slide-top"><div class="brand"><img src="../public/courtmate-header-logo.png" alt="CourtMate" /><span class="brand-rule"></span><span class="eyebrow" style="color:#35523c">Why now</span></div><span class="slide-index" style="color:#35523c">11 / 12</span></header>
+      <div class="slide-body"><h2>Booking apps solve<br />transactions. WhatsApp<br />solves chat.</h2><p class="lede" style="color:#31513b">CourtMate is the trusted community layer between the court and the player.</p><div class="problem-grid"><article class="problem" style="background:rgba(248,248,239,.55);border-color:rgba(16,36,27,.18)"><span class="problem-number" style="color:#35523c">DISCOVERY</span><h3>Map → game</h3><p>Right place, right sport, right context.</p></article><article class="problem" style="background:#10241b;color:white;border-color:#10241b"><span class="problem-number">COMMUNITY</span><h3>Game → circle</h3><p>Repeat play and social trust create retention.</p></article><article class="problem" style="background:#f8f8ef;border-color:rgba(16,36,27,.18)"><span class="problem-number" style="color:#35523c">PROGRESS</span><h3>Circle → CMR</h3><p>Every confirmed game improves matching quality.</p></article><article class="problem" style="background:#89b96e;border-color:#89b96e"><span class="problem-number" style="color:#1b3525">NETWORK</span><h3>CMR → better games</h3><p>Better fit creates a compounding local graph.</p></article></div></div>
+      <footer class="slide-footer"><span style="color:#35523c">CourtMate owns the loop, not just a transaction.</span><div class="progress" style="background:rgba(16,36,27,.18)"><i style="width:91.66%;background:#10241b"></i></div></footer>
+    </section>
+
+    <section class="slide dark" data-slide="12">
+      <header class="slide-top"><div class="brand"><img src="../public/courtmate-header-logo-dark.png" alt="CourtMate" /><span class="brand-rule"></span><span class="eyebrow">Vision and roadmap</span></div><span class="slide-index">12 / 12</span></header>
+      <div class="slide-body"><h2>Make showing up<br /><span class="lime">easier.</span></h2><p class="lede">Build the trusted local sports identity layer, starting with the people already looking for their next game.</p><div class="roadmap-grid"><article class="phase"><span>Phase 1 · Now</span><h3>Bengaluru PMF</h3><p>Dense community discovery across badminton, tennis, pickleball, and padel. Validate repeat play, reliability, and venue value.</p></article><article class="phase"><span>Phase 2 · Next</span><h3>Network effects</h3><p>Venue operating tools, booking partnerships, ambassador communities, premium player insights, and richer group coordination.</p></article><article class="phase"><span>Phase 3 · Scale</span><h3>Trusted sport graph</h3><p>Multi-city expansion, verified ratings, tournament pathways, and future pickleball ecosystem integrations such as DUPR.</p></article></div><div class="end-note"><strong>CourtMate makes showing up easier.</strong><small>Google Cloud Hackathon · 2026</small></div></div>
+      <footer class="slide-footer"><span>Thank you.</span><div class="progress"><i style="width:100%"></i></div></footer>
+    </section>
+  </main>
+
+  <nav class="controls" aria-label="Slide controls"><button type="button" id="previous" aria-label="Previous slide">←</button><button type="button" id="next" aria-label="Next slide">→</button></nav>
+  <span class="help">Use ← → keys · F for fullscreen</span>
+  <script>
+    (() => {
+      const slides = [...document.querySelectorAll('.slide')];
+      const previous = document.querySelector('#previous');
+      const next = document.querySelector('#next');
+      let current = 0;
+
+      const show = (index) => {
+        current = (index + slides.length) % slides.length;
+        slides.forEach((slide, slideIndex) => slide.classList.toggle('active', slideIndex === current));
+        history.replaceState(null, '', `#slide-${current + 1}`);
+      };
+
+      previous.addEventListener('click', () => show(current - 1));
+      next.addEventListener('click', () => show(current + 1));
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowRight' || event.key === 'PageDown' || event.key === ' ') { event.preventDefault(); show(current + 1); }
+        if (event.key === 'ArrowLeft' || event.key === 'PageUp') { event.preventDefault(); show(current - 1); }
+        if (event.key.toLowerCase() === 'f') {
+          if (document.fullscreenElement) document.exitFullscreen();
+          else document.documentElement.requestFullscreen?.();
+        }
+      });
+
+      const requestedSlide = Number.parseInt(location.hash.replace('#slide-', ''), 10);
+      if (requestedSlide >= 1 && requestedSlide <= slides.length) show(requestedSlide - 1);
+    })();
+  </script>
+</body>
+</html>

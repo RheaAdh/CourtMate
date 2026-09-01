@@ -78,6 +78,17 @@ The Tournament Desk is a racket-sport competition MVP. Open `Tournaments`, creat
 
 For coordinate-aware locality matching, set `GOOGLE_MAPS_API_KEY` with the Google Maps Geocoding API enabled. The key stays server-side; the backend geocodes search localities and profile locality labels, while browser location permission can provide more precise coordinates. If the key is absent, textual locality matching remains available.
 
+### Google Maps on Vercel
+
+The interactive Explore map uses the browser-only `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`. Next.js embeds `NEXT_PUBLIC_*` values at build time, so setting only `GOOGLE_MAPS_API_KEY` on Cloud Run or adding the value after deployment will not enable the map in the web app.
+
+1. In Vercel, add `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` to the Production environment (and Preview if preview deployments need maps).
+2. In Google Cloud, enable **Maps JavaScript API** and billing for that key.
+3. Restrict the browser key to `https://court-mate-blr.vercel.app/*` (plus any required preview or custom domains). Keep the server-side Geocoding key separate from the browser key when possible.
+4. Redeploy Vercel after saving the variable. The key must be present in the generated browser bundle.
+
+If the key is missing or rejected, CourtMate keeps the density illustration as a fallback and displays an "Interactive map unavailable" status while still listing nearby games below.
+
 ## Google sign-in setup
 
 Firebase Authentication Google sign-in is used for identity; the backend verifies the Firebase ID token before reading or writing player, group, or join-request data.

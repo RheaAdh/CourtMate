@@ -321,6 +321,9 @@ button { cursor:pointer; }
 .density-map-svg:active { cursor: grabbing; }
 .google-density-map { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; overflow: hidden; border-radius: 17px; background: var(--paper); }
 .google-density-map:not(.is-ready) { background: transparent; pointer-events: none; }
+.google-density-map-status { position: absolute; z-index: 4; right: 16px; bottom: 16px; left: 16px; display: grid; gap: 4px; max-width: 310px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 13px; background: color-mix(in srgb, var(--paper) 92%, var(--lime)); box-shadow: 0 10px 24px rgba(20,35,25,.12); color: var(--ink); }
+.google-density-map-status strong { font-size: .74rem; }
+.google-density-map-status span { color: var(--muted); font: .62rem "DM Mono", monospace; line-height: 1.45; }
 .map-filter-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 14px 0 4px; padding: 10px; border: 1px solid var(--line); border-radius: 16px; background: color-mix(in srgb, var(--paper) 80%, var(--lime)); }
 .map-filter-label { margin: 0 4px 0 2px; color: var(--muted); font: .58rem "DM Mono", monospace; letter-spacing: .08em; }
 .map-filter-strip select, .map-date-filter, .map-reset-filters { min-height: 36px; border: 1px solid var(--line); border-radius: 999px; padding: 0 11px; background: var(--paper); color: var(--ink); font: 600 .64rem "DM Mono", monospace; }
