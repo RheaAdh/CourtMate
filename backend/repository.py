@@ -61,6 +61,7 @@ class Repository(Protocol):
     def is_follow_request_pending(self, follower_id: str, following_id: str) -> bool: ...
     def list_followers(self, player_id: str) -> list[FollowRecord]: ...
     def list_following(self, player_id: str) -> list[FollowRecord]: ...
+    def list_pending_following(self, player_id: str) -> list[FollowRecord]: ...
     def save_search_document(self, document: SearchDocument) -> SearchDocument: ...
     def delete_search_document(self, document_id: str) -> None: ...
     def list_search_documents(self) -> list[SearchDocument]: ...
@@ -261,6 +262,9 @@ class InMemoryRepository:
 
     def list_following(self, player_id: str) -> list[FollowRecord]:
         return [follow for follow in self.follows.values() if follow.follower_id == player_id and follow.status == "accepted"]
+
+    def list_pending_following(self, player_id: str) -> list[FollowRecord]:
+        return [follow for follow in self.follows.values() if follow.follower_id == player_id and follow.status == "pending"]
 
     def save_search_document(self, document: SearchDocument) -> SearchDocument:
         self.search_documents[document.id] = document
@@ -556,6 +560,10 @@ class FirestoreRepository:
     def list_following(self, player_id: str) -> list[FollowRecord]:
         documents = self.client.collection("follows").where(filter=self._FieldFilter("follower_id", "==", player_id)).limit(self.max_player_reads).stream()
         return [FollowRecord.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents if (document.to_dict() or {}).get("status", "accepted") == "accepted"]
+
+    def list_pending_following(self, player_id: str) -> list[FollowRecord]:
+        documents = self.client.collection("follows").where(filter=self._FieldFilter("follower_id", "==", player_id)).limit(self.max_player_reads).stream()
+        return [FollowRecord.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents if (document.to_dict() or {}).get("status") == "pending"]
 
     def save_search_document(self, document: SearchDocument) -> SearchDocument:
         from google.cloud.firestore_v1.vector import Vector

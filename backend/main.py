@@ -333,7 +333,16 @@ def recommended_players(player: Player = Depends(get_current_player)) -> PublicP
         score = (5 if shared_area else 0) + shared_sports * 2 + (3 if shared_sessions else 0) + min(activity, 5) * .1
         candidates.append((score, candidate.display_name.lower(), candidate))
     candidates.sort(key=lambda item: (-item[0], item[1]))
-    return _cache_read_view(cache_key, PublicPlayerProfilesResponse(profiles=[_public_profile(candidate, player.id, all_sessions) for _, _, candidate in candidates[:8]]))
+    profiles = []
+    viewer_following_ids = {record.following_id for record in repository.list_following(player.id)}
+    for _, _, candidate in candidates[:8]:
+        mutual_ids = viewer_following_ids & {record.following_id for record in repository.list_following(candidate.id)}
+        mutual_names = sorted(
+            (mutual.display_name for mutual in repository.list_players() if mutual.id in mutual_ids),
+            key=str.lower,
+        )[:3]
+        profiles.append(_public_profile(candidate, player.id, all_sessions).model_copy(update={"mutual_connections": mutual_names}))
+    return _cache_read_view(cache_key, PublicPlayerProfilesResponse(profiles=profiles))
 
 
 @app.get("/v1/players/{player_id}", response_model=PublicPlayerProfile)
@@ -401,6 +410,8 @@ def unfollow_player(player_id: str, player: Player = Depends(get_current_player)
 
 def _social_profiles(player: Player, following: bool) -> PublicPlayerProfilesResponse:
     records = repository.list_following(player.id) if following else repository.list_followers(player.id)
+    if following:
+        records += repository.list_pending_following(player.id)
     sessions = repository.list_sessions()
     profiles = []
     for record in records:
@@ -1626,7 +1637,12 @@ def join_session(session_id: str, request: JoinRequestRequest | None = None, pla
     if previous:
         raise HTTPException(status_code=409, detail=f"Join request is already {previous.status}")
     status = "pending"
-    if session.open_slots < 1:
+    if session.visibility == "private" and session.open_slots > 0:
+        session.confirmed_player_ids.append(player.id)
+        saved_session = repository.save_session(session)
+        _index_session_best_effort(saved_session)
+        status = "approved"
+    elif session.open_slots < 1:
         session.waitlist_player_ids.append(player.id)
         repository.save_session(session)
         _index_session_best_effort(session)
@@ -1813,7 +1829,7 @@ def join_requests(session_id: str, player: Player = Depends(get_current_player))
 
 
 @app.post("/v1/sessions/{session_id}/join-requests/{request_id}/decision", response_model=JoinRequest)
-def decide_join_request(session_id: str, request_id: str, request: JoinRequestDecisionRequest, player: Player = Depends(get_current_player)) -> JoinRequest:
+def decide_join_request(session_id: str, request_id: str, request: JoinRequestDecisionRequest, background_tasks: BackgroundTasks, player: Player = Depends(get_current_player)) -> JoinRequest:
     session = _get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1830,7 +1846,7 @@ def decide_join_request(session_id: str, request_id: str, request: JoinRequestDe
             if join_request.player_id not in session.waitlist_player_ids:
                 session.waitlist_player_ids.append(join_request.player_id)
                 repository.save_session(session)
-                _index_session_best_effort(session)
+                background_tasks.add_task(_index_session_best_effort, session)
             join_request.status = "waitlisted"
             saved_request = repository.save_join_request(join_request)
             _notify_request_update(saved_request, session)
@@ -1839,7 +1855,7 @@ def decide_join_request(session_id: str, request_id: str, request: JoinRequestDe
         if join_request.player_id not in session.confirmed_player_ids:
             session.confirmed_player_ids.append(join_request.player_id)
             repository.save_session(session)
-            _index_session_best_effort(session)
+            background_tasks.add_task(_index_session_best_effort, session)
     join_request.status = request.status
     saved_request = repository.save_join_request(join_request)
     _notify_request_update(saved_request, session)
@@ -1875,6 +1891,16 @@ def mark_notification_read(notification_id: str, player: Player = Depends(get_cu
     if not notification:
         raise HTTPException(status_code=404, detail="Notification not found")
     return notification
+
+
+@app.post("/v1/me/notifications/read-all", response_model=NotificationsResponse)
+def mark_all_notifications_read(player: Player = Depends(get_current_player)) -> NotificationsResponse:
+    """Mark the alerts visible to this player as seen when the panel opens."""
+    for notification in repository.list_notifications_for_player(player.id):
+        if not notification.read:
+            repository.mark_notification_read(notification.id, player.id)
+    items = [_notification_with_action_status(notification, player) for notification in repository.list_notifications_for_player(player.id)]
+    return NotificationsResponse(notifications=items)
 
 
 @app.get("/v1/me/incoming-requests", response_model=IncomingRequestsResponse)
@@ -1918,12 +1944,13 @@ def my_games(player: Player = Depends(get_current_player)) -> MyGamesResponse:
 
 
 @app.get("/v1/me/activity", response_model=MyActivityResponse)
-def my_activity(player: Player = Depends(get_current_player)) -> MyActivityResponse:
+def my_activity(player: Player = Depends(get_current_player), refresh: bool = Query(False)) -> MyActivityResponse:
     """Load all Games tabs from one shared snapshot instead of four separate reads."""
     cache_key = _read_view_cache_key("activity", player.id)
-    cached = _get_cached_read_view(cache_key)
-    if cached is not None:
-        return cached
+    if not refresh:
+        cached = _get_cached_read_view(cache_key)
+        if cached is not None:
+            return cached
 
     sessions = _refresh_all_session_statuses()
     players = repository.list_players()
@@ -2700,6 +2727,26 @@ def local_leaderboard(area: str | None = None, sport: Sport = "pickleball", play
     requested_area = (area or player.area).strip().lower()
     local_players = [candidate for candidate in repository.list_players() if candidate.area.lower() == requested_area]
     return _leaderboard([candidate.id for candidate in local_players], f"local:{area or player.area}:{sport}", sport)
+
+
+@app.get("/v1/me/circle-leaderboard", response_model=LeaderboardResponse)
+def circle_leaderboard(
+    scope: Literal["circle", "locality", "bengaluru"] = "circle",
+    sport: Sport = "pickleball",
+    player: Player = Depends(get_current_player),
+) -> LeaderboardResponse:
+    """Rank the player's accepted circle, locality, or Bengaluru by sport CMR."""
+    players = repository.list_players()
+    if scope == "circle":
+        player_ids = {player.id}
+        player_ids.update(record.following_id for record in repository.list_following(player.id))
+        player_ids.update(record.follower_id for record in repository.list_followers(player.id))
+    elif scope == "locality":
+        requested_area = player.area.strip().lower()
+        player_ids = {candidate.id for candidate in players if candidate.area.strip().lower() == requested_area and (candidate.id == player.id or not candidate.is_profile_private)}
+    else:
+        player_ids = {candidate.id for candidate in players if candidate.id == player.id or not candidate.is_profile_private}
+    return _leaderboard(list(player_ids), f"circle:{scope}:{player.area}:{sport}", sport, players=players)
 
 
 @app.post("/v1/sessions/{session_id}/complete", response_model=Session)

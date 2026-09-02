@@ -51,6 +51,10 @@ function newestFirst(posts: SocialPost[]) {
   });
 }
 
+function hasFeedStateChanged<T>(current: T, next: T) {
+  return JSON.stringify(current) !== JSON.stringify(next);
+}
+
 function socialRecommendationsCacheKey(playerId: string) {
   return `courtmate:social-recommendations:${playerId}`;
 }
@@ -89,6 +93,7 @@ type RecommendedPlayer = {
   cmr_ratings: Record<string, number>;
   followers_count: number;
   is_following: boolean;
+  mutual_connections?: string[];
 };
 
 type SocialFeedProps = {
@@ -102,6 +107,7 @@ type SocialFeedProps = {
   authorizedFetch: (url: string, options?: RequestInit) => Promise<Response>;
   onToast: (message: string) => void;
   onViewProfile: (playerId: string) => void;
+  onInvalidate?: (keys: string[]) => void;
 };
 
 const sports: { value: Sport; label: string }[] = [
@@ -403,7 +409,7 @@ function recentStreakDays(activityByDate: Record<string, number> = {}) {
   });
 }
 
-export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProfileImage, weeklyStreak = 0, weeklyStreakActive = false, activityByDate = {}, authorizedFetch, onToast, onViewProfile, initialFilter = "all" }: SocialFeedProps & { initialFilter?: FeedFilter }) {
+export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProfileImage, weeklyStreak = 0, weeklyStreakActive = false, activityByDate = {}, authorizedFetch, onToast, onViewProfile, onInvalidate, initialFilter = "all" }: SocialFeedProps & { initialFilter?: FeedFilter }) {
   const [posts, setPosts] = useState<SocialPost[]>([]);
   const [feedFilter, setFeedFilter] = useState<FeedFilter>(initialFilter);
   const [loading, setLoading] = useState(true);
@@ -424,7 +430,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
     }
   }
 
-  async function loadFeed(nextFilter = feedFilter, force = false) {
+  async function loadFeed(nextFilter = feedFilter, force = false, silent = false) {
     const key = socialFeedCacheKey(currentUserId, nextFilter);
     if (!force) {
       try {
@@ -442,8 +448,10 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       }
     }
     try {
-      setLoading(true);
-      setLoadError("");
+      if (!silent) {
+        setLoading(true);
+        setLoadError("");
+      }
       let request = socialFeedRequests.get(key);
       if (!request) {
         request = authorizedFetch(`${apiUrl}/v1/social/feed?feed=${nextFilter}`)
@@ -458,17 +466,20 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       }
       const nextPosts = await request;
       const orderedPosts = newestFirst(nextPosts);
-      setPosts(orderedPosts);
+      setPosts((current) => hasFeedStateChanged(current, orderedPosts) ? orderedPosts : current);
+      if (silent) setLoadError("");
       try {
         window.sessionStorage.setItem(key, JSON.stringify({ cachedAt: Date.now(), posts: orderedPosts }));
       } catch {
         // A disabled or full session storage should never block the feed.
       }
     } catch (error) {
-      setPosts([]);
-      setLoadError(error instanceof Error ? error.message : "Could not load the social feed");
+      if (!silent) {
+        setPosts([]);
+        setLoadError(error instanceof Error ? error.message : "Could not load the social feed");
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
@@ -479,6 +490,22 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
   }, [currentUserId]);
 
   useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      void loadFeed(feedFilter, true, true);
+      if (feedFilter === "all") void loadRecommendedPlayers(true, true);
+    };
+    const timer = window.setInterval(refresh, 5000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [currentUserId, feedFilter]);
+
+  useEffect(() => {
     if (loading || !window.location.hash.startsWith("#social-post-")) return;
     const timer = window.setTimeout(() => {
       document.getElementById(window.location.hash.slice(1))?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -486,7 +513,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
     return () => window.clearTimeout(timer);
   }, [loading, posts]);
 
-  async function loadRecommendedPlayers(force = false) {
+  async function loadRecommendedPlayers(force = false, silent = false) {
     const key = socialRecommendationsCacheKey(currentUserId);
     if (!force) {
       try {
@@ -502,7 +529,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       }
     }
     try {
-      setRecommendationsLoading(true);
+      if (!silent) setRecommendationsLoading(true);
       let request = socialRecommendationRequests.get(key);
       if (!request) {
         request = authorizedFetch(`${apiUrl}/v1/players/recommended`)
@@ -515,16 +542,17 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
         socialRecommendationRequests.set(key, request);
       }
       const profiles = await request;
-      setRecommendedPlayers(profiles.filter((profile) => !profile.is_following));
+      const nextPlayers = profiles.filter((profile) => !profile.is_following);
+      setRecommendedPlayers((current) => hasFeedStateChanged(current, nextPlayers) ? nextPlayers : current);
       try {
         window.sessionStorage.setItem(key, JSON.stringify({ cachedAt: Date.now(), profiles }));
       } catch {
         // Recommendations are optional, so storage failures stay silent.
       }
     } catch {
-      setRecommendedPlayers([]);
+      if (!silent) setRecommendedPlayers([]);
     } finally {
-      setRecommendationsLoading(false);
+      if (!silent) setRecommendationsLoading(false);
     }
   }
 
@@ -535,6 +563,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       if (!response.ok) throw new Error("Follow failed");
       setRecommendedPlayers((current) => current.filter((item) => item.id !== player.id));
       clearFeedCache();
+      onInvalidate?.(["connections", "social-profile", "feed", "recommendations"]);
       try {
         window.sessionStorage.removeItem(socialRecommendationsCacheKey(currentUserId));
       } catch {
@@ -554,7 +583,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       liked_by_me: !post.liked_by_me,
       like_count: post.liked_by_me ? Math.max(0, post.like_count - 1) : post.like_count + 1,
     };
-    setPosts((current) => current.map((item) => item.id === post.id ? optimisticPost : item));
+      setPosts((current) => current.map((item) => item.id === post.id ? optimisticPost : item));
     try {
       setBusyAction(`fire-${post.id}`);
       const response = await authorizedFetch(`${apiUrl}/v1/social/posts/${post.id}/like`, { method: "POST" });
@@ -562,6 +591,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       const updated = await response.json() as SocialPost;
       setPosts((current) => current.map((item) => item.id === updated.id ? updated : item));
       clearFeedCache();
+      onInvalidate?.(["feed"]);
     } catch {
       setPosts((current) => current.map((item) => item.id === post.id ? post : item));
       onToast("Could not update the fire reaction");
@@ -583,6 +613,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
         return next;
       });
       clearFeedCache();
+      onInvalidate?.(["feed"]);
       onToast("Post deleted");
     } catch {
       onToast("Could not delete this post");
@@ -628,6 +659,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       setPosts((current) => current.map((post) => post.id === postId ? { ...post, comment_count: post.comment_count + 1 } : post));
       setCommentDrafts((current) => ({ ...current, [postId]: "" }));
       clearFeedCache();
+      onInvalidate?.(["feed"]);
     } catch {
       onToast("Could not add your comment");
     } finally {
@@ -644,6 +676,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       const updated = await response.json() as SocialPost;
       setPosts((current) => current.map((item) => item.id === updated.id ? updated : item));
       clearFeedCache();
+      onInvalidate?.(["feed"]);
       if (navigator.share) {
         await navigator.share({ title: `${post.player_display_name} on CourtMate`, text: post.caption, url: shareUrl });
       } else {
@@ -691,7 +724,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
 
     {feedFilter === "all" && !recommendationsLoading && recommendedPlayers.length > 0 && <section className="social-recommendations" aria-labelledby="social-recommendations-title">
       <div className="social-recommendations-heading"><div><h2 id="social-recommendations-title">People worth playing with</h2></div><span>Nearby and active</span></div>
-      <div className="social-recommendations-list">{recommendedPlayers.map((player) => { const ratedSports = Object.keys(player.cmr_ratings); const ratingLabel = ratedSports.length ? `${sportLabel(ratedSports[0] as Sport)} ${player.cmr_ratings[ratedSports[0]].toFixed(2)} CMR` : "New to CMR"; return <article className="social-recommendation-card" key={player.id}><button type="button" className="social-recommendation-profile" onClick={() => onViewProfile(player.id)}><Avatar name={player.display_name} imageUrl={player.profile_image_url} large /><span><strong>{player.display_name}</strong><small>{player.area} · {ratingLabel}</small></span></button><button type="button" className="social-follow-button" onClick={() => void followRecommendedPlayer(player)} disabled={busyAction === `follow-${player.id}`}>{busyAction === `follow-${player.id}` ? "..." : "+ Follow"}</button></article>; })}</div>
+      <div className="social-recommendations-list">{recommendedPlayers.map((player) => { const ratings = Object.values(player.cmr_ratings).filter((rating) => typeof rating === "number" && Number.isFinite(rating)); const highestCmr = ratings.length ? Math.max(...ratings) : null; const mutuals = player.mutual_connections ?? []; const mutualLabel = mutuals.length === 1 ? `1 mutual · ${mutuals[0]}` : `${mutuals.length} mutuals · ${mutuals.slice(0, 2).join(", ")}`; return <article className="social-recommendation-card" key={player.id}><button type="button" className="social-recommendation-profile" onClick={() => onViewProfile(player.id)}><Avatar name={player.display_name} imageUrl={player.profile_image_url} large /><span><strong>{player.display_name}{highestCmr != null && <b className="social-recommendation-cmr">{highestCmr.toFixed(1)} CMR</b>}</strong><small>{player.area || "Nearby player"}</small>{mutuals.length > 0 && <em>{mutualLabel}</em>}</span></button><button type="button" className="social-follow-button" onClick={() => void followRecommendedPlayer(player)} disabled={busyAction === `follow-${player.id}`}>{busyAction === `follow-${player.id}` ? "..." : "+ Follow"}</button></article>; })}</div>
     </section>}
 
     <div className="social-feed-list" aria-busy={loading}>

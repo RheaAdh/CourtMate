@@ -1172,6 +1172,23 @@ class ApiFlowTests(unittest.TestCase):
         self.assertFalse(unfollowed.json()["is_following"])
         self.assertEqual(unfollowed.json()["followers_count"], 0)
 
+    def test_circle_leaderboard_supports_connection_locality_and_bengaluru_scopes(self):
+        repository.save_follow(FollowRecord(id="p1_p4", follower_id="p1", following_id="p4", status="accepted", created_at=datetime.now()))
+        repository.save_follow(FollowRecord(id="p2_p1", follower_id="p2", following_id="p1", status="accepted", created_at=datetime.now()))
+        private_player = repository.get_player("p3")
+        repository.save_player(private_player.model_copy(update={"is_profile_private": True}))
+
+        circle = self.client.get("/v1/me/circle-leaderboard?scope=circle&sport=pickleball", headers={"X-CourtMate-Player-ID": "p1"})
+        locality = self.client.get("/v1/me/circle-leaderboard?scope=locality&sport=pickleball", headers={"X-CourtMate-Player-ID": "p1"})
+        city = self.client.get("/v1/me/circle-leaderboard?scope=bengaluru&sport=pickleball", headers={"X-CourtMate-Player-ID": "p1"})
+
+        self.assertEqual(circle.status_code, 200)
+        self.assertEqual({entry["player"]["id"] for entry in circle.json()["entries"]}, {"p1", "p2", "p4"})
+        self.assertTrue(all(entry["player"]["area"] == "Whitefield" for entry in locality.json()["entries"]))
+        self.assertNotIn("p3", {entry["player"]["id"] for entry in locality.json()["entries"]})
+        self.assertIn("p4", {entry["player"]["id"] for entry in city.json()["entries"]})
+        self.assertNotIn("p3", {entry["player"]["id"] for entry in city.json()["entries"]})
+
     def test_public_profile_exposes_recent_games_and_activity_heatmap(self):
         played_on = date.today() - timedelta(days=3)
         repository.save_session(

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { PostGameFeedbackPanel } from "./post-game-feedback";
 
 type GroupSpaceSession = {
@@ -149,6 +149,29 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
   const [sharePhotoUrls, setSharePhotoUrls] = useState<string[]>([]);
   const [sharePhotoUploading, setSharePhotoUploading] = useState(false);
   const [sharePublishing, setSharePublishing] = useState(false);
+  const [chatDraft, setChatDraft] = useState("");
+  const [chatPosting, setChatPosting] = useState(false);
+  const refreshChatRef = useRef(onChatPosted);
+  useEffect(() => { refreshChatRef.current = onChatPosted; }, [onChatPosted]);
+
+  useEffect(() => {
+    const refreshChat = () => {
+      if (document.visibilityState !== "visible") return;
+      void authorizedFetch(`${apiUrl}/v1/sessions/${inputGroup.id}/chat`).then(async (response) => {
+        if (!response.ok) return;
+        const payload = await response.json() as { posts?: GroupSpacePost[] };
+        payload.posts?.forEach((post) => refreshChatRef.current(post));
+      }).catch(() => undefined);
+    };
+    const timer = window.setInterval(refreshChat, 5000);
+    window.addEventListener("focus", refreshChat);
+    document.addEventListener("visibilitychange", refreshChat);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshChat);
+      document.removeEventListener("visibilitychange", refreshChat);
+    };
+  }, [apiUrl, authorizedFetch, inputGroup.id]);
   const currentPlayerIsConfirmed = Boolean(currentUserId && members.some((member) => member.id === currentUserId));
   const flexibleTime = group.time_finalized === false && Boolean(group.time_window_start && group.time_window_end);
   const openTimePoll = posts.find((post) => post.post_type === "time_poll" && post.poll_status === "open");
@@ -230,6 +253,28 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
       onToast(error instanceof Error ? error.message : "Could not update the match result");
     } finally {
       setDecidingResultId(null);
+    }
+  }
+
+  async function postChat(event: FormEvent) {
+    event.preventDefault();
+    const message = chatDraft.trim();
+    if (!message || chatPosting || !currentPlayerIsConfirmed || completedPhase) return;
+    try {
+      setChatPosting(true);
+      const response = await authorizedFetch(`${apiUrl}/v1/sessions/${group.id}/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+      const payload = await response.json().catch(() => ({})) as GroupSpacePost & { detail?: string };
+      if (!response.ok) throw new Error(payload.detail ?? "Could not post to the common chat");
+      setChatDraft("");
+      onChatPosted(payload);
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : "Could not post to the common chat");
+    } finally {
+      setChatPosting(false);
     }
   }
 
@@ -350,6 +395,11 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
               </article>;
             }) : <p className="activity-empty">No posts yet. Coordinate the session here.</p>}
           </div>
+          {!completedPhase && currentPlayerIsConfirmed && <form className="chat-composer group-space-v2-composer" onSubmit={postChat}>
+            <input value={chatDraft} onChange={(event) => setChatDraft(event.target.value)} placeholder="Message the group..." aria-label="Message the common chat" maxLength={500} />
+            <button className="dark-button" type="submit" disabled={!chatDraft.trim() || chatPosting}>{chatPosting ? "Posting..." : "Post"}</button>
+          </form>}
+          {!completedPhase && !currentPlayerIsConfirmed && <p className="group-space-v2-hint">Only confirmed players can post in the common chat.</p>}
         </section>
         {!feedbackPhase && <section className="workspace-panel group-waitlist-panel group-lineup-panel"><div className="workspace-panel-heading"><div><span className="kicker">THE LINE-UP</span><h3>Players</h3></div>{canRatePlayers ? <button className="group-lineup-rate-button" type="button" onClick={openFeedback}>{feedbackOpen ? "Ratings open" : "Rate players"}</button> : <span>{members.length} confirmed</span>}</div><p className="group-lineup-hint">Current CMR for this sport.</p><div className="group-roster-list">{members.map((member) => { const cmr = member.cmr_ratings?.[group.sport]; return <button type="button" className="group-roster-row group-profile-row" key={member.id} onClick={() => onViewProfile(member.id)} aria-label={`View ${member.display_name}'s profile`}><span className="chat-avatar">{member.profile_image_url ? <img src={member.profile_image_url} alt="" /> : initials(member.display_name)}</span><span><strong>{member.display_name}{member.id === currentUserId ? " (You)" : ""}</strong><small>{cmr != null ? "Current CMR" : "CMR building"}</small></span><b>{cmr != null ? `${cmr.toFixed(1)} CMR` : "-"}</b></button>; })}</div>{canRatePlayers && feedbackOpen && <div className="group-inline-feedback"><PostGameFeedbackPanel key={group.id} mandatory={feedbackRequired} sessionId={group.id} sport={group.sport} ratingMode={group.rating_mode} members={members} currentUserId={currentUserId} apiUrl={apiUrl} authorizedFetch={authorizedFetch} onSaved={() => { setFeedbackOpen(false); setFeedbackRequired(false); onRefresh(); }} onToast={onToast} /></div>}<div className="group-waitlist-heading"><span className="kicker">NEXT UP</span><strong>Waitlist · {waitlist.length}</strong></div>{waitlist.length ? <div className="group-waitlist-list">{waitlist.map((member, index) => <button type="button" className="group-waitlist-row group-profile-row" key={member.id} onClick={() => onViewProfile(member.id)} aria-label={`View ${member.display_name}'s profile`}><span>#{index + 1}</span><div><strong>{member.display_name}</strong><small>{member.area} · {member.style}</small></div><b>{member.cmr_ratings?.[group.sport]?.toFixed(1) ?? "-"}</b></button>)}</div> : <p className="activity-empty">No one is waiting. A player who backs out will release the next spot here.</p>}</section>}
         {feedbackPhase && canRatePlayers && feedbackOpen && <section className="workspace-panel group-inline-feedback group-feedback-only-panel"><PostGameFeedbackPanel key={group.id} mandatory={feedbackRequired} sessionId={group.id} sport={group.sport} ratingMode={group.rating_mode} members={members} currentUserId={currentUserId} apiUrl={apiUrl} authorizedFetch={authorizedFetch} onSaved={() => { setFeedbackRequired(false); }} onToast={onToast} /></section>}

@@ -222,6 +222,7 @@ class PublicPlayerProfile(BaseModel):
     is_following: bool = False
     follow_request_pending: bool = False
     follows_you: bool = False
+    mutual_connections: list[str] = Field(default_factory=list)
     recent_games: list["ProfileGameSummary"] = Field(default_factory=list)
     activity_by_date: dict[str, int] = Field(default_factory=dict)
     weekly_streak: int = Field(default=0, ge=0)
