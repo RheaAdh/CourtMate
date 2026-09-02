@@ -447,7 +447,7 @@ type CMRHistoryPoint = {
   confidence?: number | null;
 };
 
-type AppTab = "home" | "social" | "games" | "profile" | "communities";
+type AppTab = "home" | "social" | "games" | "leaderboard" | "profile" | "communities";
 type GamesViewTab = "explore" | "pending" | "upcoming" | "awaiting_feedback" | "history" | "requested" | "confirmed" | "past" | "incoming";
 type ConnectionsTab = "following" | "followers";
 type CircleLeaderboardScope = "circle" | "locality" | "bengaluru";
@@ -602,6 +602,10 @@ function SocialIcon() {
 
 function ChatIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-4.5 3v-3H5a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z" /><path d="M7 10h10M7 13.5h6" /></svg>;
+}
+
+function LeaderboardIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M5 20v-7h4v7M10 20V5h4v15M15 20v-10h4v10" /><path d="m6.5 8 2-2 2 2 3.5-4 3.5 3" /></svg>;
 }
 
 function ProfileIcon() {
@@ -775,7 +779,6 @@ export default function Home() {
   const [connections, setConnections] = useState<PublicPlayerProfile[]>([]);
   const [connectionsLoading, setConnectionsLoading] = useState(false);
   const [connectionsError, setConnectionsError] = useState("");
-  const [circleLeaderboardOpen, setCircleLeaderboardOpen] = useState(false);
   const [circleLeaderboardScope, setCircleLeaderboardScope] = useState<CircleLeaderboardScope>("circle");
   const [circleLeaderboardSport, setCircleLeaderboardSport] = useState<Sport>("pickleball");
   const [circleLeaderboardEntries, setCircleLeaderboardEntries] = useState<LeaderboardEntry[]>([]);
@@ -824,13 +827,13 @@ export default function Home() {
   }, [theme]);
 
   useEffect(() => {
-    if (!settingsOpen && !notificationsOpen && !connectionsOpen && !circleLeaderboardOpen) return;
+    if (!settingsOpen && !notificationsOpen && !connectionsOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") closeUtilityPage();
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [settingsOpen, notificationsOpen, connectionsOpen, circleLeaderboardOpen]);
+  }, [settingsOpen, notificationsOpen, connectionsOpen]);
 
   useEffect(() => {
     if (!showCreateGame) return;
@@ -848,7 +851,6 @@ export default function Home() {
       setNotificationsOpen(hash === "notifications");
       setCalendarOpen(hash === "profile-calendar");
       setConnectionsOpen(hash === "connections");
-      setCircleLeaderboardOpen(hash === "circle-leaderboard");
       if (!hash.startsWith("group-space-")) setWorkspaceGroup(null);
       if (!hash.startsWith("ranking-")) setRankingGame(null);
       if (!hash.startsWith("group-preview-")) setViewedGroup(null);
@@ -885,7 +887,7 @@ export default function Home() {
         const viewParam = searchParams.get("view");
         if (hasSharedRallyCircle) {
           setActiveTab("games");
-        } else if (tabParam && ["home", "social", "games", "profile", "communities"].includes(tabParam)) {
+        } else if (tabParam && ["home", "social", "games", "leaderboard", "profile", "communities"].includes(tabParam)) {
           setActiveTab(tabParam === "communities" ? "games" : tabParam as AppTab);
           if (tabParam === "communities") setGamesViewTab("explore");
         } else {
@@ -972,14 +974,14 @@ export default function Home() {
   }, [activeTab, user, viewedProfile]);
 
   useEffect(() => {
-    if (!circleLeaderboardOpen || !user) return;
+    if (activeTab !== "leaderboard" || !user) return;
     void loadCircleLeaderboard(circleLeaderboardScope, circleLeaderboardSport, user, true);
     const refresh = () => {
       if (document.visibilityState === "visible") void loadCircleLeaderboard(circleLeaderboardScope, circleLeaderboardSport, user, false);
     };
     const interval = window.setInterval(refresh, 5000);
     return () => window.clearInterval(interval);
-  }, [circleLeaderboardOpen, circleLeaderboardScope, circleLeaderboardSport, user]);
+  }, [activeTab, circleLeaderboardScope, circleLeaderboardSport, user]);
 
   useEffect(() => {
     if (!workspaceGroup && !viewedGroup) return;
@@ -1288,7 +1290,6 @@ export default function Home() {
   async function viewPlayerProfile(playerId: string) {
     if (playerId === user?.uid) {
       setViewedProfile(null);
-      setCircleLeaderboardOpen(false);
       setActiveTab("profile");
       window.history.replaceState({ courtMatePage: "profile" }, "", `${window.location.pathname}${window.location.search}`);
       return;
@@ -1311,7 +1312,6 @@ export default function Home() {
     setWorkspaceGroup(null);
     setViewedGroup(null);
     setConnectionsOpen(false);
-    setCircleLeaderboardOpen(false);
     setProfileReturnTab(activeTab);
     setViewedProfile(playerProfile);
     setActiveTab("profile");
@@ -3057,8 +3057,7 @@ export default function Home() {
     setWorkspaceGroup(null);
     setRankingGame(null);
     setViewedGroup(null);
-    setCircleLeaderboardOpen(false);
-    if (window.location.hash.startsWith("#group-space-") || window.location.hash.startsWith("#group-preview-") || window.location.hash.startsWith("#ranking-") || window.location.hash === "#circle-leaderboard") {
+    if (window.location.hash.startsWith("#group-space-") || window.location.hash.startsWith("#group-preview-") || window.location.hash.startsWith("#ranking-")) {
       window.history.replaceState({ courtMatePage: tab }, "", `${window.location.pathname}${window.location.search}`);
     }
     if (tab === "profile") {
@@ -3090,7 +3089,6 @@ export default function Home() {
     setNotificationsOpen(false);
     setCalendarOpen(false);
     setConnectionsOpen(false);
-    setCircleLeaderboardOpen(false);
     setViewedGroup(null);
     setViewedProfile(null);
   }
@@ -3105,7 +3103,6 @@ export default function Home() {
     setSettingsOpen(false);
     setCalendarOpen(false);
     setConnectionsOpen(false);
-    setCircleLeaderboardOpen(false);
     setViewedGroup(null);
     setViewedProfile(null);
     void (async () => {
@@ -3124,7 +3121,6 @@ export default function Home() {
     setCalendarOpen(false);
     setCmrDetailsOpen(false);
     setConnectionsOpen(false);
-    setCircleLeaderboardOpen(false);
     setWorkspaceGroup(null);
     setRankingGame(null);
     setViewedGroup(null);
@@ -3133,7 +3129,6 @@ export default function Home() {
 
   function openCmrDetails() {
     setCmrDetailsOpen(true);
-    setCircleLeaderboardOpen(false);
     setActiveTab("profile");
     setViewedProfile(null);
   }
@@ -3144,7 +3139,6 @@ export default function Home() {
     setSettingsOpen(false);
     setNotificationsOpen(false);
     setConnectionsOpen(false);
-    setCircleLeaderboardOpen(false);
     setViewedGroup(null);
     setViewedProfile(null);
   }
@@ -3153,7 +3147,6 @@ export default function Home() {
     setConnectionsTab(tab);
     window.history.pushState({ courtMatePage: "connections" }, "", "#connections");
     setConnectionsOpen(true);
-    setCircleLeaderboardOpen(false);
     setSettingsOpen(false);
     setNotificationsOpen(false);
     setCalendarOpen(false);
@@ -3165,13 +3158,7 @@ export default function Home() {
     const preferredSport = profileStatsSport ?? activeSports[0]?.value ?? "pickleball";
     setCircleLeaderboardSport(preferredSport);
     setCircleLeaderboardScope("circle");
-    window.history.pushState({ courtMatePage: "circle-leaderboard" }, "", "#circle-leaderboard");
-    setCircleLeaderboardOpen(true);
-    setConnectionsOpen(false);
-    setSettingsOpen(false);
-    setNotificationsOpen(false);
-    setCalendarOpen(false);
-    setViewedProfile(null);
+    selectTab("leaderboard");
   }
 
   const requestedGames = myRequests.filter(({ request }) => request.status === "pending" || request.status === "waitlisted");
@@ -3245,7 +3232,7 @@ export default function Home() {
   }
 
   return (
-    <main className={`shell ${settingsOpen || notificationsOpen || calendarOpen || connectionsOpen || circleLeaderboardOpen || cmrDetailsOpen ? "utility-page-open" : ""} ${workspaceGroup || viewedGroup ? "detail-page-open" : ""} ${rankingGame ? "ranking-page-open" : ""}`}>
+    <main className={`shell ${settingsOpen || notificationsOpen || calendarOpen || connectionsOpen || cmrDetailsOpen ? "utility-page-open" : ""} ${workspaceGroup || viewedGroup ? "detail-page-open" : ""} ${rankingGame ? "ranking-page-open" : ""}`}>
       <nav className="nav">
         <div className="brand" aria-label="CourtMate"><img className="brand-icon brand-logo-light" src="/courtmate-header-logo-light.png" alt="CourtMate" /><img className="brand-icon brand-logo-dark" src="/courtmate-header-logo-dark.png" alt="" aria-hidden="true" /></div>
         <div className="nav-right"><button className="about-link" onClick={() => { if (!user) document.querySelector(".guest-story")?.scrollIntoView({ behavior: "smooth" }); else selectTab("home"); }}>How it works</button><span className="location-pill"><span className="dot" /> Whitefield, Bengaluru</span><button className="theme-toggle" type="button" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}><ThemeIcon dark={theme === "dark"} /></button>{user ? <><button className={`settings-button ${settingsOpen ? "active" : ""}`} type="button" onClick={openSettings} aria-label="Open preferences" title="Preferences"><SettingsIcon /></button><div className="notification-wrap">
@@ -3256,7 +3243,8 @@ export default function Home() {
       {user && <nav className="app-tabs" aria-label="CourtMate sections">
         <button className={activeTab === "social" ? "active" : ""} onClick={() => { setSocialFeedEntry("all"); selectTab("social"); }} title="Home"><span className="app-tab-icon"><HomeIcon /></span><span>Home</span></button>
         <button className={activeTab === "games" ? "active" : ""} onClick={() => selectTab("games")} title="Your games"><span className="app-tab-icon"><PickleballPaddleIcon /></span><span>Games</span></button>
-        <button className={activeTab === "home" ? "active" : ""} onClick={() => selectTab("home")} title="Assistant"><span className="app-tab-icon"><ChatIcon /></span><span>Assistant</span></button>
+        <button className={activeTab === "home" ? "active" : ""} onClick={() => selectTab("home")} title="Ask CourtMate"><span className="app-tab-icon"><ChatIcon /></span><span>Ask</span></button>
+        <button className={activeTab === "leaderboard" ? "active" : ""} onClick={openCircleLeaderboard} title="Leaderboard"><span className="app-tab-icon"><LeaderboardIcon /></span><span>Leaderboard</span></button>
         <button className={activeTab === "profile" ? "active" : ""} onClick={() => selectTab("profile")} title="Profile"><span className="app-tab-icon"><ProfileIcon /></span><span>Profile</span></button>
       </nav>}
       {activeTab === "home" && !user && <>
@@ -3400,7 +3388,6 @@ export default function Home() {
           <div className="player-profile-metrics"><span><b>{totalGames}</b><small>Games</small></span>{socialProfile && <span className={`player-profile-streak ${socialProfile.weekly_streak_active ? "active" : "at-risk"}`} title={socialProfile.weekly_streak_active ? "You completed a game this week." : "Complete a game this week to start a streak."}><i className="player-profile-streak-fire" aria-hidden="true"><StreakFireIcon /></i><b>{socialProfile.weekly_streak}</b><small>Weekly streak</small></span>}<span><b>{Math.round(profile.reliability * 100)}%</b><small>Reliable</small></span></div>
         </section>}
         {user && profile && <ProfileSportOverview profile={profile} sports={sportOptions} selectedSport={profileStatsSport} onSelect={(sport) => { setProfileStatsSport(sport); setProfileSport(sport); }} />}
-        {user && profile && <button type="button" className="circle-leaderboard-launch" onClick={openCircleLeaderboard}><span className="circle-leaderboard-launch-mark" aria-hidden="true">#</span><span><small>YOUR COMPETITIVE CIRCLE</small><strong>Circle leaderboard</strong><em>See where you rank among friends, {profile.area || "your locality"}, and Bengaluru.</em></span><b>View ranks <span>→</span></b></button>}
         {user && profile && totalGames === 0 && <section className="profile-cmr-setup-card" aria-labelledby="profile-cmr-setup-title"><div><span className="kicker">STARTING CMR</span><h2 id="profile-cmr-setup-title">Your rating starts at 1.0</h2><p>Play completed games and rate your lineup to build your CMR over time. No self-assessment is needed.</p></div><strong className="profile-cmr-baseline">1.00</strong></section>}
         {user && profile && <section className={`profile-insights ${profileStatsSport ? "sport-focused" : "all-sports"}`}>
           {!ratedSports.length && <div className="cmr-no-ratings"><strong>Choose a sport level to begin.</strong><span>Your confirmed 1–10 level becomes the starting CMR for that sport.</span></div>}
@@ -3417,9 +3404,8 @@ export default function Home() {
 
       {cmrDetailsOpen && user && profile && <section className="utility-page cmr-details-page" aria-labelledby="cmr-details-title"><div className="utility-page-header"><button className="utility-back-button" type="button" onClick={closeUtilityPage} aria-label="Back to profile">←</button><div><span className="kicker">COURTMATE RATING</span><h1 id="cmr-details-title">How CMR works</h1><p>A clearer skill signal for every sport you play.</p></div></div><div className="cmr-details-content"><div className="cmr-details-score"><span>{sportLabel(profileSelectedSport)} CMR</span><strong>{currentCmr?.toFixed(2) ?? "--"}</strong><small>{currentCmrGames} confirmed game{currentCmrGames === 1 ? "" : "s"}</small></div><p><strong>CMR means CourtMate Rating.</strong> It starts with your simple 1–10 level, then becomes more precise as confirmed competitive games are played.</p><section><h2>What affects your rating</h2><dl><div><dt>Starting level</dt><dd>Your selected level is the starting point for that sport.</dd></div><div><dt>Opponent and team strength</dt><dd>The expected result considers the combined strength on both sides.</dd></div><div><dt>Result and score margin</dt><dd>Wins, losses, draws, and a small bounded score-margin adjustment move the rating.</dd></div><div><dt>Confirmed results</dt><dd>Every player must confirm the final score in the Rally Circle before it changes CMR.</dd></div></dl></section><section><h2>What does not affect CMR</h2><p>Locality, followers, streaks, attendance, reliability, fun, fairness, and private player feedback are tracked separately.</p></section><small className="cmr-details-note">CMR is a CourtMate compatibility signal, not an official DUPR or tournament ranking.</small></div></section>}
 
-      {circleLeaderboardOpen && user && profile && <section className="utility-page circle-leaderboard-page" aria-labelledby="circle-leaderboard-title">
-        <div className="utility-page-header circle-leaderboard-header"><button className="utility-back-button" type="button" onClick={closeUtilityPage} aria-label="Back to profile">←</button><div><span className="kicker">CMR BY SPORT</span><h1 id="circle-leaderboard-title">Circle leaderboard</h1><p>Compare your game-built rating at every level of your community.</p></div></div>
-        <div className="circle-leaderboard-sports" role="tablist" aria-label="Choose leaderboard sport">{sportOptions.map((sport) => <button type="button" className={circleLeaderboardSport === sport.value ? "active" : ""} onClick={() => setCircleLeaderboardSport(sport.value)} role="tab" aria-selected={circleLeaderboardSport === sport.value} key={sport.value}>{sport.label}</button>)}</div>
+      {activeTab === "leaderboard" && user && profile && <section className="page-view circle-leaderboard-page" aria-label="Leaderboard">
+        <label className="circle-leaderboard-sport-select"><span>Sport</span><select value={circleLeaderboardSport} onChange={(event) => setCircleLeaderboardSport(event.target.value as Sport)} aria-label="Leaderboard sport">{sportOptions.map((sport) => <option value={sport.value} key={sport.value}>{sport.label}</option>)}</select></label>
         <div className="circle-leaderboard-tabs" role="tablist" aria-label="Leaderboard scope"><button type="button" className={circleLeaderboardScope === "circle" ? "active" : ""} onClick={() => setCircleLeaderboardScope("circle")} role="tab" aria-selected={circleLeaderboardScope === "circle"}><strong>Core circle</strong><small>Your connections</small></button><button type="button" className={circleLeaderboardScope === "locality" ? "active" : ""} onClick={() => setCircleLeaderboardScope("locality")} role="tab" aria-selected={circleLeaderboardScope === "locality"}><strong>Your locality</strong><small>{profile.area || "Nearby"}</small></button><button type="button" className={circleLeaderboardScope === "bengaluru" ? "active" : ""} onClick={() => setCircleLeaderboardScope("bengaluru")} role="tab" aria-selected={circleLeaderboardScope === "bengaluru"}><strong>Bengaluru</strong><small>City-wide</small></button></div>
         <div className="circle-leaderboard-summary"><div><span className="kicker">{sportLabel(circleLeaderboardSport).toUpperCase()}</span><h2>{circleLeaderboardScope === "circle" ? "Your people" : circleLeaderboardScope === "locality" ? profile.area || "Your locality" : "Across Bengaluru"}</h2></div><span>{circleLeaderboardEntries.length} ranked</span></div>
         {circleLeaderboardLoading ? <div className="connections-loader"><TennisBallLoader label="Building the table" detail={`Ranking ${sportLabel(circleLeaderboardSport)} CMR...`} /></div> : circleLeaderboardError ? <div className="utility-empty"><h2>Leaderboard unavailable</h2><p>{circleLeaderboardError}. Try again in a moment.</p><button className="dark-button" type="button" onClick={() => void loadCircleLeaderboard(circleLeaderboardScope, circleLeaderboardSport)}>Try again <span>→</span></button></div> : circleLeaderboardEntries.length ? <div className="circle-leaderboard-list" role="tabpanel">{circleLeaderboardEntries.map((entry) => <button type="button" className={`circle-leaderboard-row ${entry.player.id === user.uid ? "current" : ""}`} onClick={() => void viewPlayerProfile(entry.player.id)} key={entry.player.id}><span className="circle-leaderboard-rank">{entry.rank}</span><span className="circle-leaderboard-avatar">{entry.player.profile_image_url ? <img src={entry.player.profile_image_url} alt="" /> : initials(entry.player.display_name)}</span><span className="circle-leaderboard-player"><strong>{entry.player.display_name}{entry.player.id === user.uid && <em>You</em>}</strong><small>{entry.player.area || "Bengaluru"} · {entry.ratings_count} rated game{entry.ratings_count === 1 ? "" : "s"}</small></span><span className="circle-leaderboard-score"><b>{entry.score.toFixed(2)}</b><small>CMR</small></span></button>)}</div> : <div className="utility-empty circle-leaderboard-empty"><h2>No {sportLabel(circleLeaderboardSport)} ratings here yet</h2><p>{circleLeaderboardScope === "circle" ? "Connect with players and complete rated games to build this circle." : "Completed rated games will place players on this leaderboard."}</p></div>}

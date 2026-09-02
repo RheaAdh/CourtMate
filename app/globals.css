@@ -848,10 +848,10 @@ html[data-theme="dark"] .game-row-status.completed {
 
 .circle-leaderboard-page { width: min(100%, 720px); }
 .circle-leaderboard-header { grid-template-columns: 42px minmax(0, 1fr); }
-.circle-leaderboard-sports { display: flex; gap: 7px; margin: 18px 0 12px; padding-bottom: 3px; overflow-x: auto; scrollbar-width: none; }
-.circle-leaderboard-sports::-webkit-scrollbar { display: none; }
-.circle-leaderboard-sports button { flex: none; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--muted); padding: 8px 12px; font: 700 9px "DM Mono", monospace; }
-.circle-leaderboard-sports button.active { border-color: var(--lime); background: var(--lime); color: #14221f; }
+.circle-leaderboard-sport-select { display: grid; grid-template-columns: auto minmax(0, 180px); align-items: center; justify-content: end; gap: 10px; margin: 0 0 14px; }
+.circle-leaderboard-sport-select span { color: var(--muted); font: 700 9px "DM Mono", monospace; letter-spacing: .12em; text-transform: uppercase; }
+.circle-leaderboard-sport-select select { width: 100%; min-height: 38px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--paper) 92%, var(--lime)); color: var(--ink); padding: 0 34px 0 12px; font: 700 11px "DM Mono", monospace; }
+.circle-leaderboard-sport-select select:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
 
 .circle-leaderboard-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .circle-leaderboard-tabs button { display: grid; gap: 4px; min-width: 0; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--paper) 92%, var(--lime)); color: var(--ink); padding: 12px; text-align: left; }
@@ -12461,4 +12461,10 @@ html[data-theme="dark"] .feedback-quality-rating button:focus-visible {
   .social-streak-total strong { font-size: 25px; }
   .social-streak-days { gap: 3px; }
   .social-streak-days i { width: 25px; height: 25px; font-size: 9px; }
+}
+
+/* The leaderboard is a first-class destination, so mobile navigation has five equal slots. */
+@media (max-width: 600px) {
+  .app-tabs { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .app-tabs button { min-width: 0; }
 }
