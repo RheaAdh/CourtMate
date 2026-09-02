@@ -2,12 +2,12 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  async redirects() {
+  async rewrites() {
     return [
       {
         source: '/__/auth/:path*',
-        destination: 'https://firebaseapp.com*',
-        permanent: true,
+        // Fixed: Switched from firebaseapp.com to web.app to prevent Vercel 502/DNS errors
+        destination: 'https://web.app*',
       },
     ];
   },
