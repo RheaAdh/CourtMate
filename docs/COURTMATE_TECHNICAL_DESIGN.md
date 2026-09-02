@@ -1,96 +1,224 @@
 # CourtMate Technical Design
 
-**Status:** Hackathon MVP
-**Frontend:** Next.js 15, React 19, TypeScript, responsive PWA
-**Backend:** Python FastAPI on Cloud Run
-**Data:** Firebase Auth, Firestore, Cloud Storage, Gemini, optional Firestore vector search
+**Status:** Implemented hackathon MVP
+**Frontend:** Next.js 16, React 19, TypeScript, responsive web app
+**Backend:** Python FastAPI, deployable to Cloud Run
+**Data and AI:** Firebase Authentication, Firestore or in-memory repository, Cloud Storage, Gemini, optional Firestore vector search
 
-## 1. Architecture And Boundaries
+## 1. System Boundaries
 
-The Next.js client owns presentation, browser history, voice input, optimistic reactions, image previews, share-card rendering, theme state, and responsive navigation. FastAPI is authoritative for authentication, authorization, visibility, matching, capacity, lifecycle, feedback, CMR, notifications, and derived community scores. Gemini parses and explains verified records; it does not decide access or mutate Firestore directly.
+The Next.js client owns presentation, navigation history, browser sharing, voice input, optimistic state, media previews, theme, maps, and responsive behavior. FastAPI is authoritative for authentication, authorization, session visibility, capacity, membership, lifecycle, feedback, CMR, notifications, social records, and rankings. Gemini parses intent and explains retrieved records; it cannot bypass API authorization or mutate Firestore directly.
 
-The authenticated shell has four primary areas: **Home**, **Games**, **Profile**, and **Assistant**. Games → **Explore** is the map-led community discovery surface; Communities is retained only as a legacy routing alias that resolves to Games → Explore. Profile and utility pages are history-aware. The client uses the same repository protocol against Firestore in deployment and an in-memory repository in local tests.
+The authenticated shell has five primary destinations: **Home**, **Games**, **Ask**, **Leaderboard**, and **Profile**. Utility panels include notifications, preferences, connections, activity history, and CMR explanation. A shared Rally Circle deep link can open a session preview without changing the authorization rules for member-only data.
 
-## 2. Game Discovery And Creation
+The repository protocol supports Firestore in deployment and an in-memory implementation for local development and tests. Derived views must not become a second source of truth for sessions, membership, or CMR.
 
-`POST /v1/sessions/search` parses a natural-language request, applies deterministic hard constraints, and ranks verified records. Hard constraints include sport, lifecycle, visibility, capacity, date/time, CMR/skill compatibility, area or travel radius, and authorization. Similarity is never an authorization boundary.
+## 2. Google Cloud Architecture
 
-`GET /v1/me/explore` returns public or follower-visible open/full sessions that the current player is eligible to request. Private sessions are excluded unless the current player is already the organizer or a confirmed participant. Games → Explore loads `GET /v1/me/community-map?sport=all` by default around the player's approximate location and five-kilometre radius, then applies map filters for sport, radius, area, visibility, CMR fit, exact date, and time of day. Selecting a cluster or map point filters the returned game list to that location; the client never exposes individual player records.
+### Request and data flow
 
-`POST /v1/groups` creates a session. `CreateGroupRequest.visibility` accepts `public`, `followers`, or `private`; when omitted, the player’s `default_session_visibility` is used. Game creation validates future start time, end after start, CMR bounds, format, and capacity.
+```text
+Next.js web app
+  |-- Firebase Authentication: Google Sign-In and Firebase ID token
+  |-- Google Maps JavaScript API: interactive game discovery
+  |-- Google Calendar: prefilled upcoming-game event
+  |
+  +--> Cloud Run: FastAPI container
+         |-- Firebase Admin: verify ID token
+         |-- Cloud Firestore: authoritative application records
+         |-- Cloud Storage: authorized media and activity evidence
+         |-- Gemini: structured intent, grounded answers, multimodal analysis
+         |-- Vertex AI embeddings: semantic query and document vectors
+         +-- Firestore Vector Search: bounded candidate retrieval
+```
 
-Private sessions are not sent through `_notify_players_about_game` and are not included in Explore or discovery indexing. The Group Space link uses the session ID, while the API still enforces authentication, capacity, approval, membership, and lifecycle rules. The shared preview can be opened before membership so a friend can submit a join request.
+Every AI or vector result returns to deterministic server validation before it reaches the client. A semantic match cannot override authentication, visibility, capacity, time, CMR bounds, or session lifecycle.
 
-## 3. Group Lifecycle And CMR Loop
+### Technology responsibilities
 
-Relevant session states are `open`, `full`, `in_progress`, `awaiting_feedback`, `completed`, and `cancelled`. Join requests are `pending`, `approved`, `declined`, `waitlisted`, or `withdrawn`.
+| Service | Runtime responsibility | Implementation evidence and fallback |
+| --- | --- | --- |
+| Firebase Authentication | Google Sign-In and player identity. | The Next.js client uses `GoogleAuthProvider`; FastAPI verifies bearer tokens with Firebase Admin. Local test headers are available only when authentication is explicitly relaxed. |
+| Cloud Firestore | Primary operational database. | `FirestoreRepository` stores all core records. `COURTMATE_DATASTORE=memory` selects the test and offline fallback. |
+| Cloud Storage for Firebase / Google Cloud Storage | User-owned image and activity files. | The API creates authorized upload paths and validates bucket URL, owner, content type, and size. Storage rules are included in `storage.rules`. |
+| Gemini API | Natural-language and multimodal intelligence. | `google-genai` produces schema-bound `SearchIntent`, optional grounded prose, performance explanations, wearable extraction, and avatar options. Deterministic parsing and responses remain available if generation fails. |
+| Vertex AI | Google Cloud-hosted Gemini and embeddings. | `GOOGLE_GENAI_USE_VERTEXAI=true` uses project and location credentials. `gemini-embedding-001` creates 768-dimensional search vectors. |
+| Firestore Vector Search | Semantic candidate retrieval. | Sanitized projections are stored in `search_documents`; candidate IDs are re-read from authoritative collections and filtered again. Deterministic retrieval is the fallback. |
+| Google Maps JavaScript API | Client-side map, markers, clusters, radius, and camera controls. | Loaded lazily with a restricted public browser key. The internal density illustration and game list remain usable if Maps cannot load. |
+| Google Maps Geocoding API | Server-side locality-to-coordinate lookup. | A separately restricted server key enables geocoding; textual locality matching remains the fallback. |
+| Cloud Run | Managed serverless API runtime. | The repository includes a Python 3.12 Docker image and a scale-to-zero `gcloud run deploy` profile. Secrets and service-account permissions remain server-side. |
+| Google Calendar | Calendar handoff for confirmed sessions. | The client constructs a `calendar.google.com/calendar/render` URL from verified session details; no calendar write token is stored. |
 
-Group Space routes provide the session preview, member profiles, chat, join requests, leaderboard, feedback, and completion. A confirmed player can call `POST /v1/sessions/{id}/complete`. The server moves the session to `awaiting_feedback`; after the required feedback is collected, it marks the session completed and publishes the stable Home activity record. A competitive session may record one final two-sided score in chat. Every player in that result must confirm it before the server recalculates sport-specific CMR; casual sessions cannot update CMR.
+### Gemini capabilities and grounding
 
-Feedback stores match quality, satisfaction, optional return intent, and private ratings from each player for every other confirmed player. It contributes to community quality and trust signals, never directly to CMR. CMR replay is deterministic: each confirmed competitive result uses combined partner strength, opponent strength, win/loss/draw, and a bounded score-margin factor. Per-sport CMR confidence rises from confirmed result count, reducing the adjustment factor for established players. CMR history records the session, rating, delta, resulting game rating, confidence, and date. Home renders the session leaderboard and attached session media after publication.
+`GeminiIntentParser` uses the configured Gemini model for four implemented workloads:
 
-### CMR Scale And Migration
+1. Convert natural-language game queries into a validated `SearchIntent` JSON schema.
+2. Produce short grounded responses using only verified records supplied by the API.
+3. Analyze an uploaded wearable screenshot and extract only visible duration, calories, distance, steps, and heart-rate evidence.
+4. Generate optional sport-themed avatar choices from an authenticated player image.
 
-The canonical CMR representation is a float in the inclusive `1.00–10.00` range. `Player.self_assessed_levels` stores an integer `1–10` selected by the player as an onboarding estimate, `cmr_starting_ratings` stores the stable per-sport seed, and `cmr_ratings` stores the current two-decimal value after confirmed results. A profile is **Starting level** at zero confirmed competitive games, **Provisional** below three, and **Verified** at three or more. The count comes from deterministic competitive-result replay, not casual attendance, private feedback, or the user-entered level. New-game and matching bands default to the player's CMR plus or minus `1.8`.
+The performance assistant may summarize the signed-in player's stored games, CMR trajectory, and activity evidence. It is restricted to CourtMate data and cannot perform real-time discovery unless the request enters the session-search flow.
 
-Legacy persisted values are versioned by `Player.cmr_scale` and `Session.skill_scale`. The migration accepts the historic `1–8` and `0–100` CMR formats and converts them deterministically to the canonical range; it is idempotent and touches only CourtMate `players` and `sessions` Firestore documents. Run `PYTHONPATH=. python -m backend.migrate_cmr_to_10`. Authentication records and raw external ratings are not mutated.
+### Vertex AI and vector retrieval
 
-Competitive replay uses an expected-result denominator of `1.8` CMR points and a confidence-adjusted K factor from `0.90` for a new record to `0.36` for an established record. Only a valid, two-sided result confirmed by every named participant is replayed. Casual results and private feedback never modify CMR.
+`GeminiEmbeddingProvider` embeds sanitized search documents and user queries with `gemini-embedding-001`. Firestore native vector search retrieves a bounded set of candidate document IDs. The API then:
 
-## 4. Communities And Aggregated Density
+1. re-reads the current source record from Firestore;
+2. applies visibility and lifecycle rules;
+3. enforces sport, date, time, distance, capacity, and CMR constraints;
+4. ranks valid results with deterministic matching signals;
+5. returns a retrieval trace indicating vector or fallback mode.
 
-`GET /v1/me/player-density` accepts sport, latitude, longitude, radius, and optional CMR bounds. The default client radius is 5 km. `GET /v1/me/community-map` accepts `sport=all` as well as a specific sport and returns nearby public game markers/clusters, aggregated density, and activity in one response. The server returns aggregated neighbourhood points only, with player count, intensity, CMR range, coordinates suitable for a neighbourhood marker, and distance. It must:
+This is retrieval-augmented generation without granting the model direct database authority.
 
-- omit groups with fewer than three visible players;
-- avoid individual player IDs and exact home coordinates;
-- respect private profiles and the caller’s matching scope;
-- fall back to saved locality or the Whitefield coordinates when GPS is unavailable.
+## 3. Implemented Domain Model
 
-The frontend renders Google Maps when the browser key and SDK are available, with an SVG/CSS fallback when they are not. Google Maps loading is client-only and lazy; map markers are public-game or privacy-safe aggregation markers. Latitude/longitude differences are converted to approximate kilometres using the latitude cosine correction. The 5 km radius is represented by the base map ring; zoom, pan, pinch, and reset update the map without changing the selected filters.
+Core collections are:
 
-`GET /v1/me/community-leaderboard` accepts sport and optional area. It groups completed sessions by community, calculates quality signals, and returns entries only after three completed games and five ratings. Results are sorted deterministically by quality score and stable community identity. The client shows the leaderboard near the top of Communities, before the map, so it is visible on mobile. The optional facility directory is collapsed and fetches only when opened.
+- `players`
+- `sessions`
+- `join_requests`
+- `chat_posts`
+- `feedback`
+- `notifications`
+- `follows`
+- `social_posts`
+- `social_comments`
+- `activity_proofs`
+- `community_memberships`
+- `search_documents`
 
-## 5. Data Model And Privacy
+`Session.status` is `open`, `full`, `in_progress`, `awaiting_feedback`, `completed`, or `cancelled`. `JoinRequest.status` is `pending`, `approved`, `declined`, `waitlisted`, or `withdrawn`. Session capacity is derived from confirmed player IDs; waitlisted player IDs remain ordered for promotion.
 
-Core Firestore collections are `players`, `sessions`, `join_requests`, `chat_posts`, `feedback`, `notifications`, `follows`, `social_posts`, `social_comments`, `activity_proofs`, `community_memberships`, and `search_documents`.
+`Session.visibility` is `public`, `followers`, or `private`:
 
-`Session.visibility` is `public`, `followers`, or `private`. `_session_visible_to_player` permits the organizer and confirmed members, permits public sessions to discovery, permits follower sessions to the organizer’s followers, and excludes private sessions from discovery. `_member_session` protects member-only Group Space actions.
+- public sessions may appear in Explore and notify compatible nearby players;
+- follower sessions are discoverable only to eligible followers;
+- private sessions are excluded from discovery and nearby notifications;
+- organizers and confirmed members retain access regardless of discovery visibility.
 
-Player records include locality, optional latitude/longitude, travel radius, sport ratings, sport-specific CMR histories, reliability, profile visibility, and default session visibility. A future PIN/ZIP field may replace or supplement GPS as an approximate location input; it must never be returned as an exact player location in density responses.
+The API requires Firebase identity for protected operations. `_member_session` protects member-only actions, while session preview access returns only the information needed to decide whether to join.
 
-Cloud Storage uploads use approved MIME types and size limits. Profile images, sporty-avatar source/output images, and session media are authorized separately. Session media requires a completed-game context and organizer or confirmed-player permission.
+## 4. Discovery, Creation, And Registration
 
-## 6. Social Feed And Notifications
+`POST /v1/sessions/search` parses natural-language requests and ranks verified session records. Deterministic filters enforce sport, lifecycle, visibility, capacity, date and time, CMR compatibility, locality or distance, and authorization. Vector retrieval can propose candidates but is never an access-control boundary.
 
-`GET /v1/social/feed` supports all, following, and personal Rally Circles views. Session activity is visibility-filtered and includes session metadata, lineup, CMR leaderboard, reactions, comments, and media. Home posts are derived from completed sessions rather than generic free-form posts.
+`POST /v1/groups` creates a validated session from either an Ask proposal or the structured form. Supported fields include sport, area and optional coordinates, date, time or flexible window, duration, CMR band, style, rating mode, format, capacity, and visibility.
 
-Notifications cover join requests, request decisions, follow requests and acceptance, upcoming booking reminders, and game completion/feedback prompts. Unread counts are returned by `/v1/me/notifications` and rendered on the top-right bell.
+`GET /v1/me/explore` and `GET /v1/me/community-map` power list and map discovery. The map returns eligible game markers or clusters plus privacy-safe density. It uses Google Maps when the browser API is configured and an internal visual fallback otherwise. Search remains functional if the map provider is unavailable.
 
-The client uses optimistic fire reactions, loads comments per post, and shares a formatted deep link or branded leaderboard image. Shared game text identifies the sport, date, time, area, and Group Space URL.
+`POST /v1/sessions/{id}/join` enforces idempotent active membership behavior:
 
-## 7. Performance And Operations
+- an existing pending, approved, or waitlisted request returns a conflict rather than creating a duplicate;
+- a private-link player is approved immediately when a seat is open;
+- a full session places the player on the waitlist;
+- other discoverable sessions create an organizer-reviewed request.
 
-Reads should be bounded and cached where safe. Short-lived read caches are cleared after session, feedback, social, and community-score writes. CMR refreshes, notifications, and best-effort indexing may run as FastAPI background tasks so creation, completion, and feedback submissions do not wait for every derived view.
+`POST /v1/sessions/{id}/leave` withdraws pending requests or removes confirmed and waitlisted players. If a confirmed player leaves, the server promotes the first waitlisted player and reopens a previously full session when appropriate.
 
-Every response includes `X-Response-Time-Ms` for diagnostics. The client uses contextual loaders and renders cached/stale Group Space data immediately while refreshing chat, players, waitlist, and leaderboard data in parallel. API failures show retryable inline states or concise toasts.
+`GET /v1/sessions/{id}/replacement` ranks possible substitutes by sport skill fit, distance or area, reliability, style, and player preferences.
 
-## 8. Verification
+## 5. Rally Circle, Completion, And CMR
+
+`GET /v1/sessions/{id}/group` returns the authorized session view, confirmed public player profiles, ordered waitlist, and permitted activity proof. Group chat uses `GET/POST /v1/sessions/{id}/chat`. Flexible sessions can create a time poll and collect one vote per confirmed player.
+
+The session lifecycle advances from scheduled states to `in_progress`, then `awaiting_feedback` after the end time or `POST /v1/sessions/{id}/complete`. The client places sessions requiring the current player's response at the top of Completed. Feedback submission is idempotent per player and session.
+
+Feedback stores game quality and private lineup ratings. It contributes to experience and trust signals but does not directly change CMR. A competitive result uses two explicit sides, scores, and confirmation by every named participant. Only a valid fully confirmed result enters deterministic CMR replay. Casual sessions never change CMR.
+
+CMR uses a canonical per-sport float in `1.00-10.00`. Unplayed sports display a locked `1.00` baseline. Confirmed competitive replay considers expected team strength, result, a bounded score-margin adjustment, and confidence. Earlier results can be replayed in stable date order, and the history stores session ID, rating, delta, game rating, confidence, and date.
+
+Legacy `1-8` and `0-100` values are versioned by player and session scale fields and converted idempotently with:
+
+```bash
+PYTHONPATH=. python -m backend.migrate_cmr_to_10
+```
+
+## 6. Social, Profiles, And Leaderboards
+
+`GET /v1/social/feed?feed=all|following|personal` returns visibility-filtered session activities and authored session posts. Social endpoints support media upload, creation, deletion by the author, likes, comments, and share-count updates. A shared post URL resolves back to the specific post; sharing does not generate a leaderboard image.
+
+Media rendering preserves aspect ratio and uses cover or containment rules appropriate to the card instead of stretching the source. Uploads are restricted by MIME type, size, authenticated ownership, and session context.
+
+Public player APIs expose a reusable profile view, follow state, request state, follower and following counts, activity, sport CMR, and privacy. A private profile returns the minimal identity card and relationship action but withholds detailed activity and ratings. Mutations update both the viewed profile and connections cache.
+
+`GET /v1/me/circle-leaderboard?scope={circle|locality|bengaluru}&sport={sport}` powers the Leaderboard destination. The frontend preserves the scope tabs and changes sport through a compact selector. Rankings are sport-specific and link each row to the corresponding public profile.
+
+## 7. Notifications And Client Synchronization
+
+Notifications cover join requests, join decisions, follow requests and decisions, reminders, and completion or feedback actions. `GET /v1/me/notifications` includes unread count and source-derived action status; read and decision endpoints resolve the corresponding alert so stale actions are not displayed.
+
+The client synchronization layer combines:
+
+- immediate optimistic or successful-response state updates;
+- targeted cache invalidation after every mutation;
+- session-storage snapshots for initial rendering only;
+- request deduplication per resource;
+- five-second silent polling while the document is visible;
+- refresh on focus and `visibilitychange`;
+- no full-page reload for application state changes.
+
+Refresh domains include activity, notifications, connections, social profile, feed, recommendations, leaderboard, and the open Rally Circle. If invalidation occurs during an active request, one follow-up refresh is queued. Equality guards prevent unchanged responses from triggering visible rerenders. Failed optimistic mutations roll back and show one automatically dismissing toast.
+
+This polling baseline keeps cross-user chat, request, notification, profile, feed, and lineup state current without full-page reloads.
+
+## 8. Privacy And Reliability
+
+- Individual home coordinates are never rendered as public player pins.
+- Density responses omit groups below the configured anonymity threshold.
+- Location falls back from browser coordinates to saved profile locality and finally the Whitefield demo origin.
+- Private sessions never enter public discovery or compatible-player broadcasts.
+- Capacity, lifecycle, and visibility are rechecked on every mutation, not trusted from client state.
+- Notification and social visibility is derived from the underlying source records.
+- CMR updates are deterministic and cannot be triggered by likes, follows, private ratings, attendance, or casual sessions.
+- Firebase ID tokens are verified on the server before protected reads or writes.
+- Browser and server Maps keys are separated and restricted to their required APIs and origins.
+- Gemini and Cloud credentials stay on Cloud Run; they are never embedded in the browser bundle.
+- Cloud Run uses Application Default Credentials and least-privilege service-account roles for Firestore, Storage, and Vertex AI.
+
+Every API response includes `X-Response-Time-Ms`. Slow derived work such as indexing and broad notifications may run as background tasks after the authoritative write. Client loaders are scoped to the affected component so polling never causes full-page loading screens.
+
+## 9. Deployment Configuration
+
+The implemented Google Cloud path uses these environment groups:
+
+| Layer | Configuration |
+| --- | --- |
+| Firebase web client | `NEXT_PUBLIC_FIREBASE_*` |
+| Browser Maps | `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` |
+| API origin and allowed web origins | `NEXT_PUBLIC_API_URL`, `COURTMATE_ALLOWED_ORIGINS` |
+| Firestore and Cloud Run project | `COURTMATE_DATASTORE`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` |
+| Gemini generation | `GEMINI_API_KEY`, `GEMINI_MODEL` |
+| Vertex AI mode | `COURTMATE_USE_VERTEX_AI` or `GOOGLE_GENAI_USE_VERTEXAI` |
+| Semantic search | `COURTMATE_VECTOR_SEARCH_ENABLED`, `GEMINI_EMBEDDING_MODEL`, `COURTMATE_VECTOR_DIMENSIONS` |
+| Server Maps geocoding | `GOOGLE_MAPS_API_KEY` |
+| Storage | `COURTMATE_PROFILE_BUCKET` or the Firebase project bucket |
+
+Public `NEXT_PUBLIC_*` values are build-time browser configuration and must be domain-restricted. Gemini keys, Google Cloud credentials, signing identities, and server Maps keys belong only in Cloud Run configuration or its secret-management path.
+
+## 10. Verification
 
 Run:
 
 ```bash
+npm run typecheck
+npm run lint
 npm run build
 python -m compileall -q backend
-git diff --check
 PYTHONPATH=. pytest -q
+git diff --check
 ```
 
-Tests must cover private games being absent from Explore, shared-link preview and join requests, visibility authorization, lifecycle transitions, all-player feedback, CMR updates, Home publication, community density privacy and five-kilometre filtering, location fallback, minimum leaderboard thresholds, stable ranking, map zoom/pan/reset, mobile layout, and existing search, social, media, notification, and profile flows.
+Tests must cover:
 
-## 8. Future Integration: DUPR
-
-DUPR is a future, pickleball-only enrichment integration. It requires an approved DUPR partner relationship and a player-scoped consent/token flow. The public read-only contract can support a connected player's DUPR identity and rating sync; official match reporting requires separate partner or club authorization.
-
-When enabled, store only the data required for matching and display: DUPR ID, singles/doubles rating, verified rating, provisional flags, reliability score, sync timestamp, and token metadata required for server-side refresh. Encrypt or otherwise protect partner credentials and refresh tokens, never expose them to the browser, and support disconnect/revocation.
-
-`cmr_ratings["pickleball"]` remains CourtMate's own confirmed-result-derived rating. DUPR data is a separately labeled source that may seed new-player matching or serve as an additional ranking signal; it must not overwrite CMR, be used for non-pickleball sports, or be accessed through scraped or undocumented endpoints.
+- discovery visibility and map fallback;
+- private-link direct join, duplicate prevention, capacity, and waitlist promotion;
+- public request approval, decline, withdrawal, and notification resolution;
+- lifecycle transitions and Completed warning counts;
+- feedback persistence and interactive selected ratings;
+- competitive-only CMR replay and casual-game exclusion;
+- social post ownership, media aspect ratio, comments, likes, deletion, and deep-link sharing;
+- private and public profile behavior, follows, connections, and leaderboard scopes;
+- optimistic mutation updates, polling deduplication, hidden-tab pause, focus refresh, and rollback;
+- mobile time inputs, navigation, dark-theme contrast, and absence of horizontal page gaps.
