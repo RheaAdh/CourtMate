@@ -43,7 +43,7 @@ class SearchIntent(BaseModel):
 class Player(BaseModel):
     id: str
     display_name: str
-    bio: str = Field(default="", max_length=240)
+    bio: str = Field(default="", max_length=500)
     is_profile_private: bool = False
     default_session_visibility: SessionVisibility = "public"
     profile_image_url: str | None = None
@@ -120,7 +120,7 @@ def rating_for_sport(player: Player, sport: Sport) -> float | None:
         return clamp_cmr(float(player.self_assessed_levels[sport]))
     if sport in player.skill_levels:
         return LEGACY_SKILL_LEVEL_CMR[player.skill_levels[sport]]
-    return external_cmr_suggestion(player, sport)
+    return external_cmr_suggestion(player, sport) or 1.0
 
 
 def normalize_cmr_player(player: Player) -> Player:
@@ -179,7 +179,7 @@ def baseline_rating_for_sport(player: Player, sport: Sport) -> float | None:
         return clamp_cmr(player.cmr_starting_ratings[sport])
     if sport in player.self_assessed_levels:
         return clamp_cmr(float(player.self_assessed_levels[sport]))
-    return external_cmr_suggestion(player, sport)
+    return external_cmr_suggestion(player, sport) or 1.0
 
 
 class ProfileGameSummary(BaseModel):
@@ -196,6 +196,7 @@ class PublicPlayerProfile(BaseModel):
     id: str
     display_name: str
     bio: str = ""
+    is_profile_private: bool = False
     profile_image_url: str | None = None
     area: str
     dupr_rating: float | None = Field(default=None, ge=1, le=8)
@@ -240,7 +241,7 @@ class PublicPlayerProfilesResponse(BaseModel):
 
 
 class ProfileUpdateRequest(BaseModel):
-    bio: str | None = Field(default=None, max_length=240)
+    bio: str | None = Field(default=None, max_length=500)
     is_profile_private: bool | None = None
     default_session_visibility: SessionVisibility | None = None
     area: str | None = None

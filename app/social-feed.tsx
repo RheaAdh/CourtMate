@@ -96,6 +96,9 @@ type SocialFeedProps = {
   currentUserId: string;
   currentUserName: string;
   currentProfileImage?: string | null;
+  weeklyStreak?: number;
+  weeklyStreakActive?: boolean;
+  activityByDate?: Record<string, number>;
   authorizedFetch: (url: string, options?: RequestInit) => Promise<Response>;
   onToast: (message: string) => void;
   onViewProfile: (playerId: string) => void;
@@ -114,6 +117,10 @@ const sportLabel = (sport: Sport) => sports.find((item) => item.value === sport)
 
 function initials(name: string) {
   return name.trim().slice(0, 1).toUpperCase() || "C";
+}
+
+function StreakIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.4 2.5c.4 3.5-1.8 4.8-3.1 6.7-.8 1.1-.9 2.2-.5 3.2.4-1 1.2-1.8 2.3-2.4-.2 2.3.8 3.1 1.9 4.1.8.7 1.3 1.5 1.3 2.5 0 .5-.1.9-.3 1.3 1.9-.8 3.2-2.6 3.2-4.8 0-1.3-.5-2.7-1.6-4.2 3.1 1.9 4.8 4.5 4.8 7.4 0 4.3-3.5 7.5-8 7.5s-8-3.1-8-7.5c0-3.8 2.4-6.8 6.6-9.2-.1 1.4.2 2.4.8 3.1.7-2.1 1.3-4.4.6-7.7Z" fill="currentColor" /></svg>;
 }
 
 function relativeTime(value: string) {
@@ -218,7 +225,6 @@ function PlayerPostCard({ post, currentUserName, currentProfileImage, comments, 
   return <article className="social-post-card social-player-post-card" id={`social-post-${post.id}`}>
     <header className="social-post-header"><button type="button" className="social-profile-trigger" onClick={() => onViewProfile(post.player_id)} aria-label={`View ${post.player_display_name}'s profile`}><Avatar name={post.player_display_name} imageUrl={post.profile_image_url} large /><span><strong>{post.player_display_name}{post.player_cmr != null && <em className={`social-player-post-cmr ${post.player_cmr_delta != null && post.player_cmr_delta < 0 ? "negative" : ""}`}>{post.player_cmr.toFixed(1)} CMR{post.player_cmr_delta != null && ` ${post.player_cmr_delta >= 0 ? "+" : ""}${post.player_cmr_delta.toFixed(1)}`}</em>}</strong><small>{postDate(post.created_at)}</small></span></button>{canDelete && <><button type="button" className="social-post-more" onClick={() => setMenuOpen((open) => !open)} aria-label="Post options" aria-expanded={menuOpen}><MoreIcon /></button>{menuOpen && <div className="social-post-menu" role="menu"><button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onDelete(post); }}>Delete post</button></div>}</>}</header>
     <div className="social-player-post-content">
-      {post.session_name && <span className="social-player-post-source">From game</span>}
       <h2 className="social-player-post-caption">{post.caption}</h2>
       <dl className="social-player-post-stats"><div><dt>Sport</dt><dd>{sportLabel(post.sport)}</dd></div>{post.session_name && <div><dt>Game</dt><dd>{post.session_name}</dd></div>}</dl>
     </div>
@@ -387,7 +393,17 @@ async function createShareCard(post: SocialPost): Promise<File | null> {
   return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob ? new File([blob], "courtmate-share.png", { type: "image/png" }) : null), "image/png"));
 }
 
-export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProfileImage, authorizedFetch, onToast, onViewProfile, initialFilter = "all" }: SocialFeedProps & { initialFilter?: FeedFilter }) {
+function recentStreakDays(activityByDate: Record<string, number> = {}) {
+  const today = new Date();
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() - (6 - index));
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    return { key, label: date.toLocaleDateString("en-IN", { weekday: "short" }).slice(0, 1), day: date.getDate(), active: (activityByDate[key] ?? 0) > 0 };
+  });
+}
+
+export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProfileImage, weeklyStreak = 0, weeklyStreakActive = false, activityByDate = {}, authorizedFetch, onToast, onViewProfile, initialFilter = "all" }: SocialFeedProps & { initialFilter?: FeedFilter }) {
   const [posts, setPosts] = useState<SocialPost[]>([]);
   const [feedFilter, setFeedFilter] = useState<FeedFilter>(initialFilter);
   const [loading, setLoading] = useState(true);
@@ -461,6 +477,14 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
     const timer = window.setTimeout(() => void loadRecommendedPlayers(), 250);
     return () => window.clearTimeout(timer);
   }, [currentUserId]);
+
+  useEffect(() => {
+    if (loading || !window.location.hash.startsWith("#social-post-")) return;
+    const timer = window.setTimeout(() => {
+      document.getElementById(window.location.hash.slice(1))?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+    return () => window.clearTimeout(timer);
+  }, [loading, posts]);
 
   async function loadRecommendedPlayers(force = false) {
     const key = socialRecommendationsCacheKey(currentUserId);
@@ -612,7 +636,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
   }
 
   async function sharePost(post: SocialPost) {
-    const shareUrl = `${window.location.origin}/#social-post-${post.id}`;
+    const shareUrl = `${window.location.origin}/home#social-post-${post.id}`;
     try {
       setBusyAction(`share-${post.id}`);
       const response = await authorizedFetch(`${apiUrl}/v1/social/posts/${post.id}/share`, { method: "POST" });
@@ -620,22 +644,11 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       const updated = await response.json() as SocialPost;
       setPosts((current) => current.map((item) => item.id === updated.id ? updated : item));
       clearFeedCache();
-      const image = await createShareCard(post);
-      if (navigator.share && image && (!navigator.canShare || navigator.canShare({ files: [image] }))) {
-        await navigator.share({ title: `${post.player_display_name} on CourtMate`, text: post.caption, url: shareUrl, files: [image] });
-      } else if (navigator.share) {
+      if (navigator.share) {
         await navigator.share({ title: `${post.player_display_name} on CourtMate`, text: post.caption, url: shareUrl });
       } else {
         await navigator.clipboard?.writeText(shareUrl);
-        if (image) {
-          const downloadUrl = URL.createObjectURL(image);
-          const link = document.createElement("a");
-          link.href = downloadUrl;
-          link.download = "courtmate-share.png";
-          link.click();
-          URL.revokeObjectURL(downloadUrl);
-        }
-        onToast("Share card downloaded and link copied");
+        onToast("Post link copied");
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
@@ -646,27 +659,15 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
   }
 
   async function shareSessionLeaderboard(post: SocialPost) {
-    const shareUrl = `${window.location.origin}/#social-session-${post.session_id}`;
-    const leaderboardText = (post.session_leaderboard ?? []).slice(0, 5).map((entry) => `${entry.rank}. ${entry.display_name}${entry.cmr_rating != null ? ` (${entry.cmr_rating.toFixed(1)} CMR)` : ""}`).join("\n");
-    const text = `${post.session_name ?? "CourtMate game"} leaderboard\n${leaderboardText}`;
+    const shareUrl = `${window.location.origin}/home#social-post-${post.id}`;
+    const text = `${post.session_name ?? "CourtMate game"} on CourtMate`;
     try {
       setBusyAction(`share-${post.id}`);
-      const image = await createShareCard(post);
-      if (navigator.share && image && (!navigator.canShare || navigator.canShare({ files: [image] }))) {
-        await navigator.share({ title: `${post.session_name ?? "CourtMate game"} leaderboard`, text, url: shareUrl, files: [image] });
-      } else if (navigator.share) {
-        await navigator.share({ title: `${post.session_name ?? "CourtMate game"} leaderboard`, text, url: shareUrl });
+      if (navigator.share) {
+        await navigator.share({ title: text, text, url: shareUrl });
       } else {
-        await navigator.clipboard?.writeText(`${text}\n${shareUrl}`);
-        if (image) {
-          const downloadUrl = URL.createObjectURL(image);
-          const link = document.createElement("a");
-          link.href = downloadUrl;
-          link.download = "courtmate-leaderboard.png";
-          link.click();
-          URL.revokeObjectURL(downloadUrl);
-        }
-        onToast("Leaderboard card downloaded and link copied");
+        await navigator.clipboard?.writeText(shareUrl);
+        onToast("Post link copied");
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
@@ -681,8 +682,12 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
     void loadFeed(nextFilter);
   }
 
+  const streakDays = recentStreakDays(activityByDate);
+
   return <section className="social-page" aria-label="Rally Circles">
     <div className="social-feed-tabs" role="tablist" aria-label="Rally feed"><button className={feedFilter === "all" ? "active" : ""} type="button" onClick={() => changeFilter("all")} role="tab" aria-selected={feedFilter === "all"}>Discover</button><button className={feedFilter === "following" ? "active" : ""} type="button" onClick={() => changeFilter("following")} role="tab" aria-selected={feedFilter === "following"}>Following</button><button className={feedFilter === "personal" ? "active" : ""} type="button" onClick={() => changeFilter("personal")} role="tab" aria-selected={feedFilter === "personal"}>My rallies</button></div>
+
+    {feedFilter === "personal" && <section className={`social-streak-card ${weeklyStreakActive ? "active" : ""}`} aria-label="Your streak"><div className="social-streak-heading"><div><span className="kicker">YOUR STREAK</span><h2>Keep showing up</h2></div><span className="social-streak-share" aria-hidden="true">↗</span></div><div className="social-streak-content"><div className="social-streak-total"><span className="social-streak-flame" aria-hidden="true"><StreakIcon /></span><strong>{weeklyStreak}</strong><small>WEEK{weeklyStreak === 1 ? "" : "S"}</small></div><div className="social-streak-days">{streakDays.map((day) => <span className={day.active ? "active" : ""} key={day.key}><b>{day.label}</b><i>{day.day}</i></span>)}</div></div><p>{weeklyStreakActive ? "You have played this week. Keep your rally going." : "Complete a game this week to start your streak."}</p></section>}
 
     {feedFilter === "all" && !recommendationsLoading && recommendedPlayers.length > 0 && <section className="social-recommendations" aria-labelledby="social-recommendations-title">
       <div className="social-recommendations-heading"><div><h2 id="social-recommendations-title">People worth playing with</h2></div><span>Nearby and active</span></div>

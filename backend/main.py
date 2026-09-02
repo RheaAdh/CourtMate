@@ -341,8 +341,6 @@ def public_player_profile(player_id: str, player: Player = Depends(get_current_p
     target = repository.get_player(player_id)
     if not target:
         raise HTTPException(status_code=404, detail="Player not found")
-    if target.is_profile_private and target.id != player.id and not repository.is_following(player.id, target.id):
-        raise HTTPException(status_code=403, detail="This profile is private")
     return _public_profile(target, player.id)
 
 
@@ -895,6 +893,12 @@ def _public_profile(
     follow_request_pending: bool | None = None,
     follows_you: bool | None = None,
 ) -> PublicPlayerProfile:
+    private_view = bool(
+        player.is_profile_private
+        and viewer_id
+        and viewer_id != player.id
+        and not repository.is_following(viewer_id, player.id)
+    )
     if include_activity:
         profile_sessions = sessions if sessions is not None else repository.list_sessions()
         recent_games, activity_by_date = _profile_activity(player.id, profile_sessions)
@@ -916,30 +920,70 @@ def _public_profile(
         resolved_follow_request_pending = bool(follow_request_pending)
         resolved_follows_you = bool(follows_you)
 
+    if private_view:
+        bio = ""
+        area = ""
+        sport_ratings = {}
+        rating_sources = {}
+        cmr_ratings = {}
+        cmr_game_counts = {}
+        cmr_confidence = {}
+        recent_games = []
+        activity_by_date = {}
+        weekly_streak = 0
+        weekly_streak_active = False
+        reliability = 0.75
+        on_time_check_in_count = 0
+        late_check_in_count = 0
+        withdrawal_count = 0
+        late_withdrawal_count = 0
+        community_score = None
+        community_rating_count = 0
+        community_scores = {}
+        community_rating_counts = {}
+    else:
+        bio = player.bio
+        area = player.area
+        sport_ratings = player.sport_ratings
+        rating_sources = player.rating_sources
+        cmr_ratings = player.cmr_ratings
+        cmr_game_counts = player.cmr_game_counts
+        cmr_confidence = player.cmr_confidence
+        reliability = player.reliability
+        on_time_check_in_count = player.on_time_check_in_count
+        late_check_in_count = player.late_check_in_count
+        withdrawal_count = player.withdrawal_count
+        late_withdrawal_count = player.late_withdrawal_count
+        community_score = player.community_score
+        community_rating_count = player.community_rating_count
+        community_scores = player.community_scores
+        community_rating_counts = player.community_rating_counts
+
     return PublicPlayerProfile(
         id=player.id,
         display_name=player.display_name,
-        bio=player.bio,
+        bio=bio,
+        is_profile_private=player.is_profile_private,
         profile_image_url=player.profile_image_url,
-        area=player.area,
+        area=area,
         dupr_rating=player.dupr_rating,
         rating_source=player.rating_source,
         rating_confidence=player.rating_confidence,
-        sport_ratings=player.sport_ratings,
-        rating_sources=player.rating_sources,
+        sport_ratings=sport_ratings,
+        rating_sources=rating_sources,
         style=player.style,
-        reliability=player.reliability,
-        on_time_check_in_count=player.on_time_check_in_count,
-        late_check_in_count=player.late_check_in_count,
-        withdrawal_count=player.withdrawal_count,
-        late_withdrawal_count=player.late_withdrawal_count,
-        community_score=player.community_score,
-        community_rating_count=player.community_rating_count,
-        community_scores=player.community_scores,
-        community_rating_counts=player.community_rating_counts,
-        cmr_ratings=player.cmr_ratings,
-        cmr_game_counts=player.cmr_game_counts,
-        cmr_confidence=player.cmr_confidence,
+        reliability=reliability,
+        on_time_check_in_count=on_time_check_in_count,
+        late_check_in_count=late_check_in_count,
+        withdrawal_count=withdrawal_count,
+        late_withdrawal_count=late_withdrawal_count,
+        community_score=community_score,
+        community_rating_count=community_rating_count,
+        community_scores=community_scores,
+        community_rating_counts=community_rating_counts,
+        cmr_ratings=cmr_ratings,
+        cmr_game_counts=cmr_game_counts,
+        cmr_confidence=cmr_confidence,
         followers_count=resolved_followers_count,
         following_count=resolved_following_count,
         is_following=resolved_is_following,

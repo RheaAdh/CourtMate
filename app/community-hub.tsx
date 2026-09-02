@@ -78,6 +78,7 @@ export type CommunityHubProps = {
   authorizedFetch: (input: string, init?: RequestInit) => Promise<Response>;
   gamesLogged: number;
   requestedSessionIds?: string[];
+  recentlyRequestedSessionId?: string | null;
   joinedSessionIds?: string[];
   onOpenExistingGame?: (sessionId: string, status: "pending" | "joined") => void;
   onOpenRallyCircle?: (sessionId: string) => void;
@@ -484,6 +485,7 @@ export function CommunityHub({
   apiUrl,
   authorizedFetch,
   requestedSessionIds = [],
+  recentlyRequestedSessionId = null,
   joinedSessionIds = [],
   onOpenExistingGame,
   onOpenRallyCircle,
@@ -652,8 +654,15 @@ export function CommunityHub({
   const center = mapQuery.location;
   const noGamesFound = hasSearched && mapLoaded && !densityLoading && !densityError && nearbyGamesState.length === 0;
 
-  const isRequested = (sessionId: string) => requestedSessionIds.includes(sessionId);
+  const isRequested = (sessionId: string) =>
+    sessionId === recentlyRequestedSessionId || requestedSessionIds.includes(sessionId);
   const isJoined = (sessionId: string) => joinedSessionIds.includes(sessionId);
+
+  const revealSelectedGames = () => {
+    window.requestAnimationFrame(() => {
+      document.getElementById("nearby-games-title")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
 
   const handleSelectCluster = (cluster: MapCluster) => {
     if (isGuest) {
@@ -666,6 +675,7 @@ export function CommunityHub({
     setSelectedGameState(firstGame);
     const point = densityPoints.find((p) => p.area.toLowerCase() === cluster.area.toLowerCase()) ?? null;
     setSelectedPoint(point);
+    revealSelectedGames();
   };
 
   const handleSelectGame = (game: NearbyGame, gameIds: string[] = [game.id]) => {
@@ -676,6 +686,7 @@ export function CommunityHub({
     setSelectedGameState(game);
     setSelectedMapArea(game.area);
     setSelectedGameIds(gameIds);
+    revealSelectedGames();
   };
 
   const handleGameAction = async (game: NearbyGame) => {
@@ -1073,14 +1084,14 @@ export function CommunityHub({
                             : "is-open"
                         }
                         onClick={() => void handleGameAction(game)}
-                        disabled={requestingGameId === game.id}
+                        disabled={requestingGameId === game.id || isRequested(game.id)}
                       >
                         {isGuest
                           ? "Log in to join →"
                           : requestingGameId === game.id
                           ? "Requesting..."
                           : isRequested(game.id)
-                          ? "Pending request →"
+                          ? "Requested"
                           : isJoined(game.id)
                           ? "In your games →"
                           : game.open_slots > 0

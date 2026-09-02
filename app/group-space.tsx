@@ -91,7 +91,8 @@ function clock(time: string) {
   return time.slice(0, 5);
 }
 
-const SOCIAL_PHOTO_TARGET_BYTES = 72 * 1024;
+// Keep uploads light enough for mobile while avoiding visible JPEG-like artifacts.
+const SOCIAL_PHOTO_TARGET_BYTES = 900 * 1024;
 
 function canvasToWebp(canvas: HTMLCanvasElement, quality: number): Promise<Blob | null> {
   return new Promise((resolve) => canvas.toBlob(resolve, "image/webp", quality));
@@ -109,8 +110,8 @@ async function compactSocialPhoto(file: File): Promise<File> {
       nextImage.src = sourceUrl;
     });
     const longestSide = Math.max(image.naturalWidth, image.naturalHeight);
-    let largestDimension = Math.min(1280, longestSide);
-    let quality = 0.82;
+    let largestDimension = Math.min(1800, longestSide);
+    let quality = 0.9;
     let smallest: Blob | null = null;
     for (let attempt = 0; attempt < 6; attempt += 1) {
       const scale = largestDimension / longestSide;
@@ -123,7 +124,7 @@ async function compactSocialPhoto(file: File): Promise<File> {
       if (!smallest || compressed.size < smallest.size) smallest = compressed;
       if (compressed.size <= SOCIAL_PHOTO_TARGET_BYTES) break;
       largestDimension = Math.max(320, Math.round(largestDimension * 0.75));
-      quality = Math.max(0.45, quality - 0.08);
+      quality = Math.max(0.62, quality - 0.05);
     }
     if (!smallest) throw new Error("Could not prepare this photo");
     return new File([smallest], `${file.name.replace(/\.[^.]+$/, "") || "game-photo"}.webp`, { type: "image/webp" });
@@ -134,13 +135,14 @@ async function compactSocialPhoto(file: File): Promise<File> {
 
 export function GroupSpace({ group: inputGroup, members, waitlist, posts, currentUserId, apiUrl, authorizedFetch, initialFeedbackRequired = false, onClose, onRefresh, onMarkDone, onOpenPersonalRally, onChatPosted, onToast, onViewProfile }: GroupSpaceProps) {
   const feedbackPhase = inputGroup.status === "awaiting_feedback";
+  const completedPhase = feedbackPhase || inputGroup.status === "completed";
   // Reuse the compact completed-state feedback UI while keeping the phase
   // visually distinct and withholding the Home activity card until final save.
   const group = feedbackPhase ? { ...inputGroup, status: "completed" } : inputGroup;
   const [markingDone, setMarkingDone] = useState(false);
   const [timePolling, setTimePolling] = useState(false);
   const [decidingResultId, setDecidingResultId] = useState<string | null>(null);
-  const [feedbackOpen, setFeedbackOpen] = useState(initialFeedbackRequired);
+  const [feedbackOpen, setFeedbackOpen] = useState(initialFeedbackRequired || inputGroup.status === "completed");
   const [feedbackRequired, setFeedbackRequired] = useState(initialFeedbackRequired);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareCaption, setShareCaption] = useState("");
@@ -152,8 +154,8 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
   const openTimePoll = posts.find((post) => post.post_type === "time_poll" && post.poll_status === "open");
   const canStartTimePoll = currentPlayerIsConfirmed && flexibleTime && !openTimePoll && members.length >= 2 && inputGroup.status !== "cancelled" && inputGroup.status !== "awaiting_feedback" && inputGroup.status !== "completed";
   const canMarkGameDone = currentPlayerIsConfirmed && group.time_finalized !== false && inputGroup.status !== "cancelled" && inputGroup.status !== "awaiting_feedback" && inputGroup.status !== "completed";
-  const canRatePlayers = currentPlayerIsConfirmed && ["awaiting_feedback", "completed"].includes(inputGroup.status);
-  const canPostGame = currentPlayerIsConfirmed && inputGroup.status !== "cancelled";
+  const canRatePlayers = currentPlayerIsConfirmed && completedPhase;
+  const canPostGame = currentPlayerIsConfirmed && completedPhase;
   const timeDescription = flexibleTime
     ? `${clock(group.time_window_start ?? group.start_time)}–${clock(group.time_window_end ?? group.end_time)} window · ${group.duration_minutes ?? 60}-minute game`
     : `${clock(group.start_time)}–${clock(group.end_time)}`;
