@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 import { PostGameFeedbackPanel } from "./post-game-feedback";
 
 type GroupSpaceSession = {
@@ -18,7 +18,6 @@ type GroupSpaceSession = {
   time_finalized?: boolean;
   rating_mode?: "casual" | "competitive";
   status: string;
-  checked_in_player_ids?: string[];
 };
 
 type GroupSpaceMember = {
@@ -56,9 +55,10 @@ type GroupSpaceProps = {
   currentUserId?: string;
   apiUrl: string;
   authorizedFetch: (url: string, options?: RequestInit) => Promise<Response>;
+  initialFeedbackRequired?: boolean;
   onClose: () => void;
   onRefresh: () => void;
-  onMarkDone: () => Promise<void>;
+  onMarkDone: () => Promise<boolean>;
   onOpenPersonalRally: () => void;
   onChatPosted: (post: GroupSpacePost) => void;
   onToast: (message: string) => void;
@@ -91,11 +91,52 @@ function clock(time: string) {
   return time.slice(0, 5);
 }
 
+const SOCIAL_PHOTO_TARGET_BYTES = 72 * 1024;
+
+function canvasToWebp(canvas: HTMLCanvasElement, quality: number): Promise<Blob | null> {
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/webp", quality));
+}
+
+async function compactSocialPhoto(file: File): Promise<File> {
+  // Keep inline-storage fallbacks safely below Firestore's document limit.
+  if (file.size <= SOCIAL_PHOTO_TARGET_BYTES) return file;
+  const sourceUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const nextImage = new Image();
+      nextImage.onload = () => resolve(nextImage);
+      nextImage.onerror = () => reject(new Error("Could not read this photo"));
+      nextImage.src = sourceUrl;
+    });
+    const longestSide = Math.max(image.naturalWidth, image.naturalHeight);
+    let largestDimension = Math.min(1280, longestSide);
+    let quality = 0.82;
+    let smallest: Blob | null = null;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const scale = largestDimension / longestSide;
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      canvas.getContext("2d")?.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const compressed = await canvasToWebp(canvas, quality);
+      if (!compressed) break;
+      if (!smallest || compressed.size < smallest.size) smallest = compressed;
+      if (compressed.size <= SOCIAL_PHOTO_TARGET_BYTES) break;
+      largestDimension = Math.max(320, Math.round(largestDimension * 0.75));
+      quality = Math.max(0.45, quality - 0.08);
+    }
+    if (!smallest) throw new Error("Could not prepare this photo");
+    return new File([smallest], `${file.name.replace(/\.[^.]+$/, "") || "game-photo"}.webp`, { type: "image/webp" });
+  } finally {
+    URL.revokeObjectURL(sourceUrl);
+  }
+}
+
 function MicrophoneIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="12" rx="4" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" /></svg>;
 }
 
-export function GroupSpace({ group: inputGroup, members, waitlist, posts, currentUserId, apiUrl, authorizedFetch, onClose, onRefresh, onMarkDone, onOpenPersonalRally, onChatPosted, onToast, onViewProfile }: GroupSpaceProps) {
+export function GroupSpace({ group: inputGroup, members, waitlist, posts, currentUserId, apiUrl, authorizedFetch, initialFeedbackRequired = false, onClose, onRefresh, onMarkDone, onOpenPersonalRally, onChatPosted, onToast, onViewProfile }: GroupSpaceProps) {
   const feedbackPhase = inputGroup.status === "awaiting_feedback";
   // Reuse the compact completed-state feedback UI while keeping the phase
   // visually distinct and withholding the Home activity card until final save.
@@ -104,17 +145,23 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
   const [listening, setListening] = useState(false);
   const [posting, setPosting] = useState(false);
   const [markingDone, setMarkingDone] = useState(false);
-  const [checkingIn, setCheckingIn] = useState(false);
   const [timePolling, setTimePolling] = useState(false);
   const [decidingResultId, setDecidingResultId] = useState<string | null>(null);
-  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(initialFeedbackRequired);
+  const [feedbackRequired, setFeedbackRequired] = useState(initialFeedbackRequired);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareCaption, setShareCaption] = useState("");
+  const [sharePhotoUrls, setSharePhotoUrls] = useState<string[]>([]);
+  const [sharePhotoUploading, setSharePhotoUploading] = useState(false);
+  const [sharePublishing, setSharePublishing] = useState(false);
   const composerRef = useRef<HTMLInputElement>(null);
   const currentPlayerIsConfirmed = Boolean(currentUserId && members.some((member) => member.id === currentUserId));
-  const currentPlayerCheckedIn = Boolean(currentUserId && group.checked_in_player_ids?.includes(currentUserId));
   const flexibleTime = group.time_finalized === false && Boolean(group.time_window_start && group.time_window_end);
   const openTimePoll = posts.find((post) => post.post_type === "time_poll" && post.poll_status === "open");
-  const canStartTimePoll = currentUserId === group.organizer_id && flexibleTime && !openTimePoll && members.length >= 2 && group.status !== "cancelled" && group.status !== "completed";
-  const canComplete = currentPlayerIsConfirmed && group.time_finalized !== false && group.status !== "cancelled" && (group.status !== "completed" || feedbackPhase);
+  const canStartTimePoll = currentPlayerIsConfirmed && flexibleTime && !openTimePoll && members.length >= 2 && inputGroup.status !== "cancelled" && inputGroup.status !== "awaiting_feedback" && inputGroup.status !== "completed";
+  const canMarkGameDone = currentPlayerIsConfirmed && group.time_finalized !== false && inputGroup.status !== "cancelled" && inputGroup.status !== "awaiting_feedback" && inputGroup.status !== "completed";
+  const canRatePlayers = currentPlayerIsConfirmed && ["awaiting_feedback", "completed"].includes(inputGroup.status);
+  const canPostGame = currentPlayerIsConfirmed && inputGroup.status !== "cancelled";
   const timeDescription = flexibleTime
     ? `${clock(group.time_window_start ?? group.start_time)}–${clock(group.time_window_end ?? group.end_time)} window · ${group.duration_minutes ?? 60}-minute game`
     : `${clock(group.start_time)}–${clock(group.end_time)}`;
@@ -165,25 +212,13 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
     if (markingDone) return;
     setMarkingDone(true);
     try {
-      await onMarkDone();
+      const markedDone = await onMarkDone();
+      if (markedDone) {
+        setFeedbackRequired(true);
+        setFeedbackOpen(true);
+      }
     } finally {
       setMarkingDone(false);
-    }
-  }
-
-  async function checkIn() {
-    if (checkingIn || currentPlayerCheckedIn) return;
-    setCheckingIn(true);
-    try {
-      const response = await authorizedFetch(`${apiUrl}/v1/sessions/${group.id}/check-in`, { method: "POST" });
-      const payload = await response.json().catch(() => ({})) as { detail?: string };
-      if (!response.ok) throw new Error(payload.detail ?? "Could not check in");
-      onToast("Check-in recorded");
-      onRefresh();
-    } catch (error) {
-      onToast(error instanceof Error ? error.message : "Could not check in");
-    } finally {
-      setCheckingIn(false);
     }
   }
 
@@ -246,15 +281,93 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
     }
   }
 
+  async function addSharePhoto(file: File) {
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      onToast("Choose a JPG, PNG, or WebP photo");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      onToast("Each photo must be smaller than 8 MB");
+      return;
+    }
+    if (sharePhotoUrls.length >= 6) {
+      onToast("You can attach up to 6 photos");
+      return;
+    }
+    try {
+      setSharePhotoUploading(true);
+      const compactedPhoto = await compactSocialPhoto(file);
+      const response = await authorizedFetch(`${apiUrl}/v1/social/media/upload`, {
+        method: "POST",
+        headers: { "content-type": compactedPhoto.type },
+        body: compactedPhoto,
+      });
+      const payload = await response.json().catch(() => ({})) as { media_url?: string; detail?: string };
+      if (!response.ok || !payload.media_url) throw new Error(payload.detail ?? "Could not upload photo");
+      setSharePhotoUrls((current) => [...current, payload.media_url!]);
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : "Could not upload photo");
+    } finally {
+      setSharePhotoUploading(false);
+    }
+  }
+
+  async function publishPersonalPost(event: FormEvent) {
+    event.preventDefault();
+    const caption = shareCaption.trim();
+    if (!caption || sharePublishing) return;
+    try {
+      setSharePublishing(true);
+      const response = await authorizedFetch(`${apiUrl}/v1/social/posts`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          caption,
+          sport: group.sport,
+          session_id: group.id,
+          media_urls: sharePhotoUrls,
+          media_type: sharePhotoUrls.length ? "image" : undefined,
+        }),
+      });
+      const payload = await response.json().catch(() => ({})) as { detail?: string };
+      if (!response.ok) throw new Error(payload.detail ?? "Could not publish your post");
+      try {
+        for (const feed of ["all", "following", "personal"]) {
+          window.sessionStorage.removeItem(`courtmate:social-feed:${currentUserId}:${feed}`);
+        }
+      } catch {
+        // A disabled session storage must not block publishing a post.
+      }
+      setShareCaption("");
+      setSharePhotoUrls([]);
+      setShareOpen(false);
+      onToast("Posted to your feed");
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : "Could not publish your post");
+    } finally {
+      setSharePublishing(false);
+    }
+  }
+
+  function openFeedback() {
+    setFeedbackRequired(false);
+    setFeedbackOpen(true);
+  }
+
+  function closeFeedback() {
+    if (feedbackRequired) return;
+    setFeedbackOpen(false);
+  }
+
   return <section className={`group-space-page group-space-v2 ${feedbackPhase ? "group-feedback-phase" : ""}`} aria-label={`${group.group_name} Rally Circle`}>
       <header className="group-space-v2-header">
         <button className="group-space-back-button" type="button" onClick={onClose} aria-label="Back to games">← <span>Games</span></button>
         <div className="group-space-title"><span className="kicker">RALLY CIRCLE · {group.sport.replaceAll("_", " ").toUpperCase()}</span><h1>{group.group_name}</h1><p>{group.session_date} · {timeDescription} · {group.area} · {group.rating_mode === "competitive" ? "CMR-rated" : "Casual - no CMR"}</p></div>
-        <div className="group-space-header-actions"><span className={`status-badge ${feedbackPhase ? "awaiting_feedback" : group.status}`}>{feedbackPhase ? "Awaiting feedback" : group.status === "completed" ? "Game done" : group.status === "in_progress" ? "Playing now" : flexibleTime ? "Time to confirm" : "Upcoming"}</span>{canStartTimePoll && <button className="group-space-time-poll-button" type="button" onClick={() => void startTimePoll()} disabled={timePolling}>{timePolling ? "Starting..." : "Start time poll"}</button>}{currentPlayerIsConfirmed && !feedbackPhase && group.status !== "completed" && group.time_finalized !== false && <button className="group-space-check-in-button" type="button" onClick={() => void checkIn()} disabled={checkingIn || currentPlayerCheckedIn}>{currentPlayerCheckedIn ? "Checked in" : checkingIn ? "Checking in..." : "Check in"}</button>}{canComplete && <button className="group-space-mark-done-button" type="button" onClick={() => void markDone()} disabled={markingDone}>{markingDone ? "Completing..." : feedbackPhase ? "Finish & publish" : "Complete game"}</button>}</div>
+        <div className="group-space-header-actions"><span className={`status-badge ${feedbackPhase ? "awaiting_feedback" : group.status}`}>{feedbackPhase ? "Awaiting feedback" : group.status === "completed" ? "Game done" : group.status === "in_progress" ? "Playing now" : flexibleTime ? "Time to confirm" : "Upcoming"}</span>{canStartTimePoll && <button className="group-space-time-poll-button" type="button" onClick={() => void startTimePoll()} disabled={timePolling}>{timePolling ? "Starting..." : "Start time poll"}</button>}{canMarkGameDone && <button className="group-space-mark-done-button" type="button" onClick={() => void markDone()} disabled={markingDone}>{markingDone ? "Saving..." : "Game done"}</button>}</div>
       </header>
       <div className="group-space-v2-grid">
         <section className="group-space-v2-chat">
-          <div className="group-space-v2-heading"><div><span className="kicker">PRIVATE CHAT</span><h3>Plan it together</h3><p className="group-space-v2-subtitle">Coordinate venue, arrival, payments, warm-up, and the post-game wrap-up.</p><p className="group-space-social-hint">This is the home for the group before and after the match. Any confirmed player can complete the game, which posts the activity to Home and prompts the lineup for ratings.</p></div><div className="group-space-v2-heading-actions"><button className="workspace-refresh" type="button" onClick={onRefresh}>Refresh</button>{group.status === "completed" && <button className="group-space-feedback-button" type="button" onClick={() => setFeedbackOpen(true)}>Rate players</button>}</div></div>
+          <div className="group-space-v2-heading"><div><span className="kicker">PRIVATE CHAT</span><h3>Plan it together</h3><p className="group-space-v2-subtitle">Coordinate venue, arrival, payments, warm-up, and the post-game wrap-up.</p><p className="group-space-social-hint">Mark the game done to open private ratings. Each player rates every other confirmed player, and only they can see what they submit.</p></div><div className="group-space-v2-heading-actions"><button className="workspace-refresh" type="button" onClick={onRefresh}>Refresh</button>{canRatePlayers && <button className="group-space-feedback-button" type="button" onClick={openFeedback}>Rate players</button>}</div></div>
           <div className="group-space-v2-feed">
             {posts.length ? posts.map((post) => {
               if (post.post_type === "time_poll") {
@@ -295,16 +408,32 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
             <button className={`chat-voice-button ${listening ? "listening" : ""}`} type="button" onClick={startVoice} aria-label={listening ? "Listening" : "Use voice to message the group"} title={listening ? "Listening" : "Use voice to message the group"}><MicrophoneIcon /></button>
             <button className="dark-button" type="submit" disabled={!draft.trim() || posting}>{posting ? "..." : "Post"}</button>
           </form>
-          <p className="group-space-v2-hint">{group.rating_mode === "competitive" ? "After completion, post the final score here. Every player in the result must confirm it before CMR changes." : "Share practical details here. This casual game does not need a score and will not change CMR."}</p>
+          <p className="group-space-v2-hint">{group.rating_mode === "competitive" ? "After the game is done, post the final score here. Every player in the result must confirm it before CMR changes." : "Share practical details here. This casual game does not need a score and will not change CMR."}</p>
         </section>
-        <section className="workspace-panel group-waitlist-panel group-lineup-panel"><div className="workspace-panel-heading"><div><span className="kicker">THE LINE-UP</span><h3>Players</h3></div>{group.status === "completed" ? <button className="group-lineup-rate-button" type="button" onClick={() => setFeedbackOpen(true)}>Rate players</button> : <span>{members.length} confirmed</span>}</div><p className="group-lineup-hint">Current CMR for this sport. Ratings open when the game is complete.</p><div className="group-roster-list">{members.map((member) => { const cmr = member.cmr_ratings?.[group.sport]; return <button type="button" className="group-roster-row group-profile-row" key={member.id} onClick={() => onViewProfile(member.id)} aria-label={`View ${member.display_name}'s profile`}><span className="chat-avatar">{member.profile_image_url ? <img src={member.profile_image_url} alt="" /> : initials(member.display_name)}</span><span><strong>{member.display_name}{member.id === currentUserId ? " (You)" : ""}</strong><small>{cmr != null ? "Current CMR" : "CMR building"}</small></span><b>{cmr != null ? `${cmr.toFixed(1)} CMR` : "-"}</b></button>; })}</div><div className="group-waitlist-heading"><span className="kicker">NEXT UP</span><strong>Waitlist · {waitlist.length}</strong></div>{waitlist.length ? <div className="group-waitlist-list">{waitlist.map((member, index) => <button type="button" className="group-waitlist-row group-profile-row" key={member.id} onClick={() => onViewProfile(member.id)} aria-label={`View ${member.display_name}'s profile`}><span>#{index + 1}</span><div><strong>{member.display_name}</strong><small>{member.area} · {member.style}</small></div><b>{member.cmr_ratings?.[group.sport]?.toFixed(1) ?? "-"}</b></button>)}</div> : <p className="activity-empty">No one is waiting. A player who backs out will release the next spot here.</p>}</section>
+        <section className="workspace-panel group-waitlist-panel group-lineup-panel"><div className="workspace-panel-heading"><div><span className="kicker">THE LINE-UP</span><h3>Players</h3></div>{canRatePlayers ? <button className="group-lineup-rate-button" type="button" onClick={openFeedback}>Rate players</button> : <span>{members.length} confirmed</span>}</div><p className="group-lineup-hint">Current CMR for this sport. Ratings open after someone marks the game done.</p><div className="group-roster-list">{members.map((member) => { const cmr = member.cmr_ratings?.[group.sport]; return <button type="button" className="group-roster-row group-profile-row" key={member.id} onClick={() => onViewProfile(member.id)} aria-label={`View ${member.display_name}'s profile`}><span className="chat-avatar">{member.profile_image_url ? <img src={member.profile_image_url} alt="" /> : initials(member.display_name)}</span><span><strong>{member.display_name}{member.id === currentUserId ? " (You)" : ""}</strong><small>{cmr != null ? "Current CMR" : "CMR building"}</small></span><b>{cmr != null ? `${cmr.toFixed(1)} CMR` : "-"}</b></button>; })}</div><div className="group-waitlist-heading"><span className="kicker">NEXT UP</span><strong>Waitlist · {waitlist.length}</strong></div>{waitlist.length ? <div className="group-waitlist-list">{waitlist.map((member, index) => <button type="button" className="group-waitlist-row group-profile-row" key={member.id} onClick={() => onViewProfile(member.id)} aria-label={`View ${member.display_name}'s profile`}><span>#{index + 1}</span><div><strong>{member.display_name}</strong><small>{member.area} · {member.style}</small></div><b>{member.cmr_ratings?.[group.sport]?.toFixed(1) ?? "-"}</b></button>)}</div> : <p className="activity-empty">No one is waiting. A player who backs out will release the next spot here.</p>}</section>
       </div>
-      {group.status === "completed" && <section className="group-space-activity-card" aria-label="Post-game activity">
+      {canPostGame && <section className="group-space-share-card" aria-label="Share game to your feed">
         <div className="group-space-activity-mark" aria-hidden="true">↗</div>
-        <div><span className="kicker">POST-GAME ACTIVITY</span><h2>Rally saved to your circle.</h2><p>{group.group_name} is now a completed-game update with the final line-up and each player&apos;s CMR movement.</p><div className="group-space-activity-meta"><span>{group.sport.replaceAll("_", " ")}</span><span>{members.length} players</span><span>CMR movement</span></div>
+        <div><span className="kicker">YOUR POST</span><h2>Post this game your way.</h2><p>Add your own message and photos whenever you choose. Posting is optional and appears only on your personal feed.</p><div className="group-space-activity-meta"><span>{group.sport.replaceAll("_", " ")}</span><span>{members.length} players</span><span>Only you publish</span></div>
         </div>
-        <button type="button" className="group-space-activity-open" onClick={onOpenPersonalRally}>Open My rallies <span>→</span></button>
+        <div className="group-space-share-actions"><button type="button" className="group-space-activity-open" onClick={() => setShareOpen((open) => !open)}>{shareOpen ? "Close composer" : "Post game"} <span>→</span></button><button type="button" className="group-space-share-link" onClick={onOpenPersonalRally}>View My rallies</button></div>
+        {shareOpen && <form className="group-space-share-composer" onSubmit={publishPersonalPost}>
+          <label><span>YOUR MESSAGE</span><textarea value={shareCaption} onChange={(event) => setShareCaption(event.target.value)} maxLength={500} placeholder={`What made ${group.group_name} memorable?`} aria-label="Message for your personal feed" autoFocus /></label>
+          <div className="group-space-share-composer-actions"><label className="group-space-share-photo-button"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; if (file) void addSharePhoto(file); }} disabled={sharePhotoUploading || sharePhotoUrls.length >= 6} />{sharePhotoUploading ? "Uploading..." : `Add photos${sharePhotoUrls.length ? ` (${sharePhotoUrls.length}/6)` : ""}`}</label><button type="submit" className="dark-button" disabled={!shareCaption.trim() || sharePhotoUploading || sharePublishing}>{sharePublishing ? "Publishing..." : "Post to my feed"} <span>→</span></button></div>
+          {sharePhotoUrls.length > 0 && (
+            <div className="group-space-share-previews">
+              {sharePhotoUrls.map((url, index) => (
+                <button type="button" key={url} onClick={() => setSharePhotoUrls((current) => current.filter((_, photoIndex) => photoIndex !== index))} aria-label={`Remove photo ${index + 1}`}>
+                  {/* Uploaded previews can be Firebase URLs or local data URLs. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={url} alt={`Post photo ${index + 1}`} />
+                  <span>×</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </form>}
       </section>}
-      {group.status === "completed" && feedbackOpen && <div id="post-game-feedback"><PostGameFeedbackPanel sessionId={group.id} sport={group.sport} ratingMode={group.rating_mode} members={members} currentUserId={currentUserId} apiUrl={apiUrl} authorizedFetch={authorizedFetch} onSaved={() => { setFeedbackOpen(false); onRefresh(); }} onToast={onToast} /></div>}
+      {canRatePlayers && feedbackOpen && <div id="post-game-feedback" className="post-game-feedback-backdrop" role="presentation" onMouseDown={closeFeedback}><section className="post-game-feedback-modal" role="dialog" aria-modal="true" aria-labelledby="post-game-feedback-title" onMouseDown={(event) => event.stopPropagation()}>{!feedbackRequired && <button className="post-game-feedback-close" type="button" onClick={closeFeedback} aria-label="Close player feedback">×</button>}<PostGameFeedbackPanel key={group.id} mandatory={feedbackRequired} sessionId={group.id} sport={group.sport} ratingMode={group.rating_mode} members={members} currentUserId={currentUserId} apiUrl={apiUrl} authorizedFetch={authorizedFetch} onSaved={() => { setFeedbackOpen(false); setFeedbackRequired(false); onRefresh(); }} onToast={onToast} /></section></div>}
     </section>;
 }

@@ -1,10 +1,20 @@
 "use client";
 
-import { PointerEvent, useEffect, useRef, useState } from "react";
+import { PointerEvent, useEffect, useEffectEvent, useRef, useState } from "react";
+
+import { TennisBallLoader } from "./tennis-ball-loader";
 
 type Sport = "pickleball" | "badminton" | "tennis" | "padel" | "squash" | "table_tennis";
 type SportFilter = Sport | "all";
 type MapVisibilityFilter = "all" | "public" | "friends";
+
+type AppliedMapQuery = {
+  sport: SportFilter;
+  radiusKm: number;
+  visibility: MapVisibilityFilter;
+  area: string;
+  location: { latitude: number; longitude: number };
+};
 
 export type NearbyGame = {
   id: string;
@@ -63,37 +73,9 @@ type MapCluster = {
   game_ids: string[];
 };
 
-type Facility = {
-  id: string;
-  name: string;
-  sport: Sport;
-  area: string;
-  phone?: string | null;
-  booking_method: string;
-  booking_url?: string | null;
-};
-
-type LeaderboardEntry = {
-  rank: number;
-  community_id: string;
-  name: string;
-  sport: Sport;
-  area: string;
-  quality_score: number;
-  completed_games: number;
-  active_players: number;
-  average_match_quality: number;
-  feedback_completion_rate: number;
-  repeat_play_rate: number;
-  average_cmr_improvement: number;
-  average_reliability: number;
-  badge?: "best_quality" | "most_improved" | "most_reliable" | "fastest_growing" | null;
-};
-
 export type CommunityHubProps = {
   apiUrl: string;
   authorizedFetch: (input: string, init?: RequestInit) => Promise<Response>;
-  currentCmr?: number;
   gamesLogged: number;
   requestedSessionIds?: string[];
   joinedSessionIds?: string[];
@@ -130,12 +112,17 @@ const BENGALURU_AREAS: Record<string, { latitude: number; longitude: number }> =
   Sarjapur: { latitude: 12.9279, longitude: 77.6271 },
   Kadubeesanahalli: { latitude: 12.9358, longitude: 77.69 },
 };
-const badgeLabels: Record<NonNullable<LeaderboardEntry["badge"]>, string> = {
-  best_quality: "Best quality",
-  most_improved: "Most improved",
-  most_reliable: "Most reliable",
-  fastest_growing: "Fastest growing",
-};
+
+function formatGameDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short" }).format(
+    new Date(year, month - 1, day),
+  );
+}
+
+function formatGameTime(value: string) {
+  return value.slice(0, 5);
+}
 
 let mapsLoaderPromise: Promise<void> | null = null;
 function loadGoogleMapsScript(apiKey: string): Promise<void> {
@@ -181,7 +168,7 @@ function GoogleDensityMap({
   center,
   radiusKm,
   selectedArea,
-  onMapMove,
+  onMapClick,
   onSelectCluster,
   onSelectGame,
 }: {
@@ -193,7 +180,7 @@ function GoogleDensityMap({
   radiusKm: number;
   selectedPoint: DensityPoint | null;
   selectedArea: string | null;
-  onMapMove: (center: { latitude: number; longitude: number }) => void;
+  onMapClick?: () => void;
   onSelect: (point: DensityPoint) => void;
   onSelectCommunity: (community: MapCommunity) => void;
   onSelectCluster: (cluster: MapCluster) => void;
@@ -206,19 +193,14 @@ function GoogleDensityMap({
   const circleInstanceRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
 
-  const onSelectClusterRef = useRef(onSelectCluster);
-  const onSelectGameRef = useRef(onSelectGame);
-  const onMapMoveRef = useRef(onMapMove);
-  const mapDraggedRef = useRef(false);
-  onSelectClusterRef.current = onSelectCluster;
-  onSelectGameRef.current = onSelectGame;
-  onMapMoveRef.current = onMapMove;
+  const selectCluster = useEffectEvent((cluster: MapCluster) => onSelectCluster(cluster));
+  const selectGame = useEffectEvent((game: NearbyGame, gameIds?: string[]) => onSelectGame(game, gameIds));
+  const selectMap = useEffectEvent(() => onMapClick?.());
 
   const mapKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
 
   useEffect(() => {
     if (!mapKey || !mapRef.current) {
-      if (!mapKey) setMapError("Interactive map is unavailable right now.");
       return;
     }
     let cancelled = false;
@@ -263,23 +245,10 @@ function GoogleDensityMap({
             zoomControl: true,
             clickableIcons: false,
             gestureHandling: "greedy",
-            styles: [
-              { featureType: "poi", stylers: [{ visibility: "simplified" }] },
-              { featureType: "transit", stylers: [{ visibility: "off" }] },
-            ],
           });
           mapInstanceRef.current = map;
 
-          map.addListener("dragstart", () => {
-            mapDraggedRef.current = true;
-          });
-          map.addListener("idle", () => {
-            if (!mapDraggedRef.current) return;
-            mapDraggedRef.current = false;
-            const nextCenter = map.getCenter?.();
-            if (!nextCenter) return;
-            onMapMoveRef.current({ latitude: nextCenter.lat(), longitude: nextCenter.lng() });
-          });
+          map.addListener("click", () => selectMap());
 
           if (typeof CircleConstructor === "function") {
             const circle = new CircleConstructor({
@@ -425,13 +394,17 @@ function GoogleDensityMap({
             isSelected,
           );
 
-          if (marker.addListener) {
+          if (typeof marker.addEventListener === "function") {
+            marker.addEventListener("gmp-click", () => {
+              selectCluster(cluster);
+            });
+          } else if (marker.addListener) {
             marker.addListener("click", () => {
-              onSelectClusterRef.current(cluster);
+              selectCluster(cluster);
             });
           } else if (marker.element) {
             marker.element.addEventListener("click", () => {
-              onSelectClusterRef.current(cluster);
+              selectCluster(cluster);
             });
           }
           markersRef.current.push(marker);
@@ -453,10 +426,12 @@ function GoogleDensityMap({
             "#17231f",
             28,
           );
-          if (marker.addListener) {
-            marker.addListener("click", () => onSelectGameRef.current(game, [game.id]));
+          if (typeof marker.addEventListener === "function") {
+            marker.addEventListener("gmp-click", () => selectGame(game, [game.id]));
+          } else if (marker.addListener) {
+            marker.addListener("click", () => selectGame(game, [game.id]));
           } else if (marker.element) {
-            marker.element.addEventListener("click", () => onSelectGameRef.current(game, [game.id]));
+            marker.element.addEventListener("click", () => selectGame(game, [game.id]));
           }
           markersRef.current.push(marker);
         });
@@ -508,7 +483,6 @@ function GoogleDensityMap({
 export function CommunityHub({
   apiUrl,
   authorizedFetch,
-  currentCmr,
   requestedSessionIds = [],
   joinedSessionIds = [],
   onOpenExistingGame,
@@ -521,15 +495,20 @@ export function CommunityHub({
   initialArea = "Whitefield",
 }: CommunityHubProps) {
   const authorizedFetchRef = useRef(authorizedFetch);
-  authorizedFetchRef.current = authorizedFetch;
+  useEffect(() => {
+    authorizedFetchRef.current = authorizedFetch;
+  }, [authorizedFetch]);
   const apiScope = isGuest ? "public" : "me";
+  const initialLocation = initialLatitude != null && initialLongitude != null
+    ? { latitude: initialLatitude, longitude: initialLongitude }
+    : DEFAULT_CENTER;
+  const initialAreaFilter = Object.prototype.hasOwnProperty.call(BENGALURU_AREAS, initialArea) ? initialArea : "Whitefield";
 
   const [sportFilter, setSportFilter] = useState<SportFilter>("all");
   const [radiusKm, setRadiusKm] = useState(50);
   const [visibilityFilter, setVisibilityFilter] = useState<MapVisibilityFilter>("all");
   const [mapRefresh, setMapRefresh] = useState(1);
   const [hasSearched, setHasSearched] = useState(true);
-  const [cmrOnly, setCmrOnly] = useState(false);
 
   const [densityPoints, setDensityPoints] = useState<DensityPoint[]>([]);
   const [densityLoading, setDensityLoading] = useState(false);
@@ -542,23 +521,18 @@ export function CommunityHub({
   const [selectedGameIds, setSelectedGameIds] = useState<string[] | null>(null);
   const [requestingGameId, setRequestingGameId] = useState<string | null>(null);
 
-  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
-  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
-  const [facilities, setFacilities] = useState<Facility[]>([]);
-  const [facilitiesLoading, setFacilitiesLoading] = useState(false);
-  const [facilitiesOpen, setFacilitiesOpen] = useState(false);
-
-  const [location, setLocation] = useState<{ latitude: number; longitude: number }>(
-    initialLatitude != null && initialLongitude != null
-      ? { latitude: initialLatitude, longitude: initialLongitude }
-      : DEFAULT_CENTER,
-  );
+  const [location, setLocation] = useState<{ latitude: number; longitude: number }>(initialLocation);
   const [locationState, setLocationState] = useState<"saved" | "detecting" | "fallback">(
     initialLatitude != null && initialLongitude != null ? "saved" : "fallback",
   );
-  const [areaFilter, setAreaFilter] = useState(
-    Object.prototype.hasOwnProperty.call(BENGALURU_AREAS, initialArea) ? initialArea : "Whitefield",
-  );
+  const [areaFilter, setAreaFilter] = useState(initialAreaFilter);
+  const [mapQuery, setMapQuery] = useState<AppliedMapQuery>({
+    sport: "all",
+    radiusKm: 50,
+    visibility: "all",
+    area: initialAreaFilter,
+    location: initialLocation,
+  });
 
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -569,8 +543,6 @@ export function CommunityHub({
   useEffect(() => {
     if (initialLatitude != null && initialLongitude != null) return;
     if (!navigator.geolocation) {
-      setLocation(DEFAULT_CENTER);
-      setLocationState("fallback");
       return;
     }
     navigator.geolocation.getCurrentPosition(
@@ -580,12 +552,7 @@ export function CommunityHub({
           setLocationState("saved");
         }
       },
-      () => {
-        if (!manualAreaRef.current) {
-          setLocation(DEFAULT_CENTER);
-          setLocationState("fallback");
-        }
-      },
+      () => undefined,
       { enableHighAccuracy: false, timeout: 6000, maximumAge: 300000 },
     );
   }, [initialLatitude, initialLongitude]);
@@ -596,28 +563,20 @@ export function CommunityHub({
     setDensityError("");
 
     const params = new URLSearchParams({
-      sport: sportFilter,
-      radius_km: radiusKm.toString(),
+      sport: mapQuery.sport,
+      radius_km: mapQuery.radiusKm.toString(),
       activity_type: "all",
-      area: areaFilter,
+      area: mapQuery.area,
     });
-    if (!isGuest) params.set("visibility_filter", visibilityFilter);
-    if (location) {
-      params.set("latitude", location.latitude.toString());
-      params.set("longitude", location.longitude.toString());
-    }
-    if (cmrOnly && currentCmr != null) {
-      params.set("cmr_min", Math.max(1, currentCmr - 1.8).toFixed(2));
-      params.set("cmr_max", Math.min(10, currentCmr + 1.8).toFixed(2));
-    }
+    if (!isGuest) params.set("visibility_filter", mapQuery.visibility);
+    params.set("latitude", mapQuery.location.latitude.toString());
+    params.set("longitude", mapQuery.location.longitude.toString());
 
     const loadLegacyMap = async () => {
       if (isGuest) throw new Error("Public map unavailable");
-      const legacyParams = new URLSearchParams({ sport: sportFilter === "all" ? "tennis" : sportFilter, radius_km: radiusKm.toString() });
-      if (location) {
-        legacyParams.set("latitude", location.latitude.toString());
-        legacyParams.set("longitude", location.longitude.toString());
-      }
+      const legacyParams = new URLSearchParams({ sport: mapQuery.sport === "all" ? "tennis" : mapQuery.sport, radius_km: mapQuery.radiusKm.toString() });
+      legacyParams.set("latitude", mapQuery.location.latitude.toString());
+      legacyParams.set("longitude", mapQuery.location.longitude.toString());
       const [densityResponse, exploreResponse] = await Promise.all([
         authorizedFetchRef.current(`${apiUrl}/v1/me/player-density?${legacyParams}`),
         authorizedFetchRef.current(`${apiUrl}/v1/me/explore`),
@@ -684,103 +643,18 @@ export function CommunityHub({
     return () => {
       cancelled = true;
     };
-  }, [apiUrl, apiScope, isGuest, mapRefresh, sportFilter, radiusKm, visibilityFilter, areaFilter, location.latitude, location.longitude, cmrOnly, currentCmr]);
+  }, [apiUrl, apiScope, isGuest, mapQuery, mapRefresh]);
 
-  useEffect(() => {
-    let cancelled = false;
-    if (sportFilter === "all") {
-      setLeaderboard([]);
-      setLeaderboardLoading(false);
-      return () => {
-        cancelled = true;
-      };
-    }
-    setLeaderboardLoading(true);
-    const params = new URLSearchParams({ sport: sportFilter });
-    if (initialArea) params.set("area", initialArea);
-
-    void authorizedFetchRef
-      .current(`${apiUrl}/v1/${apiScope}/community-leaderboard?${params}`)
-      .then(async (response) => {
-        if (!response.ok) throw new Error();
-        return response.json() as Promise<{ entries: LeaderboardEntry[] }>;
-      })
-      .then((payload) => {
-        if (!cancelled) setLeaderboard(payload.entries || []);
-      })
-      .catch(() => {
-        if (!cancelled) setLeaderboard([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLeaderboardLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [apiUrl, apiScope, sportFilter, initialArea]);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!facilitiesOpen) return () => { cancelled = true; };
-    if (sportFilter === "all") {
-      setFacilities([]);
-      setFacilitiesLoading(false);
-      return () => {
-        cancelled = true;
-      };
-    }
-    setFacilitiesLoading(true);
-    const params = new URLSearchParams({ sport: sportFilter });
-    if (initialArea) params.set("area", initialArea);
-
-    void authorizedFetchRef
-      .current(`${apiUrl}/v1/${apiScope}/venues?${params}`)
-      .then(async (response) => {
-        if (!response.ok) throw new Error();
-        return response.json() as Promise<{ facilities: Facility[] }>;
-      })
-      .then((payload) => {
-        if (!cancelled) setFacilities(payload.facilities || []);
-      })
-      .catch(() => {
-        if (!cancelled) setFacilities([]);
-      })
-      .finally(() => {
-        if (!cancelled) setFacilitiesLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [apiUrl, apiScope, sportFilter, initialArea, facilitiesOpen]);
-
-  const center = location ?? DEFAULT_CENTER;
-
-  const handleMapMove = (nextCenter: { latitude: number; longitude: number }) => {
-    if (Math.abs(nextCenter.latitude - center.latitude) < 0.001 && Math.abs(nextCenter.longitude - center.longitude) < 0.001) return;
-    let nearestArea = areaFilter;
-    let nearestDistance = Number.POSITIVE_INFINITY;
-    for (const [area, coordinates] of Object.entries(BENGALURU_AREAS)) {
-      const distance = Math.hypot(nextCenter.latitude - coordinates.latitude, nextCenter.longitude - coordinates.longitude);
-      if (distance < nearestDistance) {
-        nearestArea = area;
-        nearestDistance = distance;
-      }
-    }
-    manualAreaRef.current = true;
-    setLocation(nextCenter);
-    setAreaFilter(nearestArea);
-    setLocationState("fallback");
-    setSelectedGameState(null);
-    setSelectedMapArea(null);
-    setSelectedGameIds(null);
-  };
+  const center = mapQuery.location;
 
   const isRequested = (sessionId: string) => requestedSessionIds.includes(sessionId);
   const isJoined = (sessionId: string) => joinedSessionIds.includes(sessionId);
 
   const handleSelectCluster = (cluster: MapCluster) => {
+    if (isGuest) {
+      onSignIn?.();
+      return;
+    }
     setSelectedMapArea(cluster.area);
     setSelectedGameIds(cluster.game_ids);
     const firstGame = nearbyGamesState.find((candidate) => cluster.game_ids.includes(candidate.id)) ?? null;
@@ -790,6 +664,10 @@ export function CommunityHub({
   };
 
   const handleSelectGame = (game: NearbyGame, gameIds: string[] = [game.id]) => {
+    if (isGuest) {
+      onSignIn?.();
+      return;
+    }
     setSelectedGameState(game);
     setSelectedMapArea(game.area);
     setSelectedGameIds(gameIds);
@@ -848,7 +726,7 @@ export function CommunityHub({
     if (point.latitude == null || point.longitude == null) return { x: 200, y: 130 };
     const xKm = (point.longitude - center.longitude) * 111.32 * Math.cos((center.latitude * Math.PI) / 180);
     const yKm = (center.latitude - point.latitude) * 111.32;
-    return { x: 200 + (xKm / radiusKm) * 100, y: 130 + (yKm / radiusKm) * 100 };
+    return { x: 200 + (xKm / mapQuery.radiusKm) * 100, y: 130 + (yKm / mapQuery.radiusKm) * 100 };
   };
 
   const startPan = (event: PointerEvent<SVGSVGElement>) => {
@@ -863,131 +741,145 @@ export function CommunityHub({
     });
   };
 
+  const applyMapSearch = () => {
+    const nextLocation = manualAreaRef.current
+      ? BENGALURU_AREAS[areaFilter] || DEFAULT_CENTER
+      : location;
+    setLocation(nextLocation);
+    setLocationState(manualAreaRef.current ? "fallback" : "saved");
+    setMapQuery({
+      sport: sportFilter,
+      radiusKm,
+      visibility: visibilityFilter,
+      area: areaFilter,
+      location: nextLocation,
+    });
+    setHasSearched(true);
+    setSelectedGameState(null);
+    setSelectedMapArea(null);
+    setSelectedGameIds(null);
+    setMapRefresh((value) => value + 1);
+  };
+
+  const mapControls = (
+    <div className="density-heading-side map-filter-controls">
+      <div className="radar-selectors">
+        <select
+          value={sportFilter}
+          onChange={(event) => {
+            setSportFilter(event.target.value as SportFilter);
+            setSelectedGameState(null);
+            setSelectedMapArea(null);
+            setSelectedGameIds(null);
+          }}
+          aria-label="Choose sport"
+        >
+          <option value="all">All sports</option>
+          {Object.entries(labels).map(([value, label]) => (
+            value !== "all" &&
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={radiusKm}
+          onChange={(event) => {
+            setRadiusKm(Number(event.target.value));
+            setSelectedGameState(null);
+          }}
+          aria-label="Choose map radius"
+        >
+          <option value="5">Within 5 km</option>
+          <option value="10">Within 10 km</option>
+          <option value="20">Within 20 km</option>
+          <option value="35">Within 35 km</option>
+          <option value="50">Within 50 km</option>
+        </select>
+
+        {!isGuest && (
+          <select
+            value={visibilityFilter}
+            onChange={(event) => {
+              setVisibilityFilter(event.target.value as MapVisibilityFilter);
+              setSelectedGameState(null);
+              setSelectedMapArea(null);
+              setSelectedGameIds(null);
+            }}
+            aria-label="Choose game visibility"
+          >
+            <option value="all">All games</option>
+            <option value="public">Public only</option>
+            <option value="friends">Friends</option>
+          </select>
+        )}
+
+        <select
+          value={areaFilter}
+          onChange={(event) => {
+            const nextArea = event.target.value;
+            manualAreaRef.current = true;
+            setAreaFilter(nextArea);
+            setSelectedGameState(null);
+            setSelectedMapArea(null);
+            setSelectedGameIds(null);
+          }}
+          aria-label="Choose Bengaluru area"
+        >
+          {Object.keys(BENGALURU_AREAS).map((area) => (
+            <option key={area} value={area}>
+              {area}
+            </option>
+          ))}
+        </select>
+
+        <button type="button" className="radar-search-button" onClick={applyMapSearch}>
+          Search games
+        </button>
+      </div>
+      <div className="map-data-legend">
+        <span>
+          <i className="legend-dot games" /> Active games
+        </span>
+        <span>
+          <i className="legend-dot community" /> Game clusters (tap to view)
+        </span>
+      </div>
+    </div>
+  );
+
   return (
     <section className="community-page" aria-label="Nearby games and community activity">
       <section className="player-density-card" aria-labelledby="player-density-title">
-        <div className="density-heading">
-          <div>
-            <span className="kicker">LIVE COMMUNITY RADAR</span>
-            <h2 id="player-density-title">Active games near you</h2>
-            <p>
-              {nearbyGamesState.length
-                ? `${nearbyGamesState.length} ${!isGuest && visibilityFilter === "friends" ? "connection" : visibilityFilter === "public" || isGuest ? "public" : "visible"} ${labels[sportFilter].toLowerCase()} game${nearbyGamesState.length === 1 ? "" : "s"} within ${radiusKm} km`
-                : `Find active ${labels[sportFilter].toLowerCase()} games within ${radiusKm} km`}
-            </p>
-          </div>
-          <div className="density-heading-side">
-            <div className="radar-selectors">
-              <select
-                value={sportFilter}
-                onChange={(event) => {
-                  setSportFilter(event.target.value as SportFilter);
-                  setSelectedGameState(null);
-                  setSelectedMapArea(null);
-                  setSelectedGameIds(null);
-                }}
-                aria-label="Choose sport"
-              >
-                <option value="all">All sports</option>
-                {Object.entries(labels).map(([value, label]) => (
-                  value !== "all" &&
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-
-              <select
-                value={radiusKm}
-                onChange={(event) => {
-                  setRadiusKm(Number(event.target.value));
-                  setSelectedGameState(null);
-                }}
-                aria-label="Choose map radius"
-              >
-                <option value="5">Within 5 km</option>
-                <option value="10">Within 10 km</option>
-                <option value="20">Within 20 km</option>
-                <option value="35">Within 35 km</option>
-                <option value="50">Within 50 km</option>
-              </select>
-
-              {!isGuest && (
-                <select
-                  value={visibilityFilter}
-                  onChange={(event) => {
-                    setVisibilityFilter(event.target.value as MapVisibilityFilter);
-                    setSelectedGameState(null);
-                    setSelectedMapArea(null);
-                    setSelectedGameIds(null);
-                  }}
-                  aria-label="Choose game visibility"
-                >
-                  <option value="all">All games</option>
-                  <option value="public">Public only</option>
-                  <option value="friends">Friends</option>
-                </select>
-              )}
-
-              <select
-                value={areaFilter}
-                onChange={(event) => {
-                  const nextArea = event.target.value;
-                  manualAreaRef.current = true;
-                  setAreaFilter(nextArea);
-                  setLocation(BENGALURU_AREAS[nextArea] || DEFAULT_CENTER);
-                  setLocationState("fallback");
-                  setSelectedGameState(null);
-                  setSelectedMapArea(null);
-                  setSelectedGameIds(null);
-                }}
-                aria-label="Choose Bengaluru area"
-              >
-                {Object.keys(BENGALURU_AREAS).map((area) => (
-                  <option key={area} value={area}>
-                    {area}
-                  </option>
-                ))}
-              </select>
-
-              <button
-                type="button"
-                className="radar-search-button"
-                onClick={() => {
-                  setHasSearched(true);
-                  setSelectedGameState(null);
-                  setSelectedMapArea(null);
-                  setSelectedGameIds(null);
-                  setMapRefresh((value) => value + 1);
-                }}
-              >
-                Search games
-              </button>
-              {!isGuest && currentCmr != null && <button type="button" className={`radar-cmr-toggle ${cmrOnly ? "active" : ""}`} onClick={() => setCmrOnly((enabled) => !enabled)} aria-label="Filter games by my CMR" aria-pressed={cmrOnly}><span>CMR fit</span><i aria-hidden="true" /></button>}
-            </div>
-            <div className="map-data-legend">
-              <span>
-                <i className="legend-dot games" /> Active games
-              </span>
-              <span>
-                <i className="legend-dot community" /> Game clusters (tap to view)
-              </span>
+        {!isGuest && (
+          <div className="density-heading">
+            <div>
+              <span className="kicker">LIVE COMMUNITY RADAR</span>
+              <h2 id="player-density-title">Active games near you</h2>
+              <p>
+                {nearbyGamesState.length
+                  ? `${nearbyGamesState.length} ${mapQuery.visibility === "friends" ? "connection" : mapQuery.visibility === "public" ? "public" : "visible"} ${labels[mapQuery.sport].toLowerCase()} game${nearbyGamesState.length === 1 ? "" : "s"} within ${mapQuery.radiusKm} km`
+                  : `Find active ${labels[mapQuery.sport].toLowerCase()} games within ${mapQuery.radiusKm} km`}
+              </p>
             </div>
           </div>
-        </div>
+        )}
 
         {!hasSearched ? (
           <div className="density-map-empty">
             Choose your sport, radius, and area, then press Search games to find nearby activity.
           </div>
         ) : densityLoading ? (
-          <div className="density-map-loading">Scanning {radiusKm} km around you...</div>
+          <div className="density-map-loading">
+            <TennisBallLoader compact label={`Scanning ${mapQuery.radiusKm} km around you...`} />
+          </div>
         ) : (
           <>
             <div className="density-map-shell">
               <div className="density-map-toolbar">
                 <span>
-                  {locationState === "fallback" ? `Showing around ${areaFilter || initialArea}` : "Your approximate location"}
+                  {locationState === "fallback" ? `Showing around ${mapQuery.area || initialArea}` : "Your approximate location"}
                 </span>
                 <div>
                   <button
@@ -1023,10 +915,10 @@ export function CommunityHub({
                 games={nearbyGamesState}
                 clusters={mapClusters}
                 center={center}
-                radiusKm={radiusKm}
+                radiusKm={mapQuery.radiusKm}
                 selectedPoint={selectedPoint}
                 selectedArea={selectedMapArea}
-                onMapMove={handleMapMove}
+                onMapClick={isGuest ? onSignIn : undefined}
                 onSelect={setSelectedPoint}
                 onSelectCommunity={(community) =>
                   setSelectedPoint(densityPoints.find((point) => point.area === community.area) ?? null)
@@ -1039,7 +931,7 @@ export function CommunityHub({
                 className="density-map-svg"
                 viewBox="0 0 400 260"
                 role="img"
-                aria-label={`${labels[sportFilter]} player density within ${radiusKm} kilometres`}
+                aria-label={`${labels[mapQuery.sport]} player density within ${mapQuery.radiusKm} kilometres`}
                 onPointerDown={startPan}
                 onPointerMove={movePan}
                 onPointerUp={() => {
@@ -1052,6 +944,9 @@ export function CommunityHub({
                   setZoom((value) =>
                     Math.max(0.7, Math.min(2.4, Number((value + (event.deltaY < 0 ? 0.2 : -0.2)).toFixed(1)))),
                   );
+                }}
+                onClick={() => {
+                  if (isGuest) onSignIn?.();
                 }}
               >
                 <g transform={`translate(${pan.x} ${pan.y}) translate(200 130) scale(${zoom}) translate(-200 -130)`}>
@@ -1069,7 +964,12 @@ export function CommunityHub({
                         key={point.area}
                         transform={`translate(${position.x} ${position.y})`}
                         onPointerDown={(event) => event.stopPropagation()}
-                        onClick={() => {
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          if (isGuest) {
+                            onSignIn?.();
+                            return;
+                          }
                           setSelectedPoint(point);
                           setSelectedMapArea(point.area);
                         }}
@@ -1092,12 +992,14 @@ export function CommunityHub({
                   })}
                 </g>
                 <text className="density-radius-label" x="205" y="24">
-                  {radiusKm} km radius
+                  {mapQuery.radiusKm} km radius
                 </text>
               </svg>
             </div>
 
-            {selectedMapArea && (
+            {!isGuest && mapControls}
+
+            {!isGuest && selectedMapArea && (
               <div className="map-selected-game">
                 <div>
                   <strong>Showing games in {selectedMapArea}</strong>
@@ -1116,29 +1018,38 @@ export function CommunityHub({
               </div>
             )}
 
-            {displayedGames.length > 0 && (
+            {!isGuest && displayedGames.length > 0 && (
               <section className="map-game-list" aria-labelledby="nearby-games-title">
                 <div className="map-game-list-heading">
                   <div>
-                    <span className="kicker">{!isGuest && visibilityFilter === "friends" ? "FRIEND GAMES NEARBY" : "GAMES NEARBY"}</span>
+                    <span className="kicker">{!isGuest && mapQuery.visibility === "friends" ? "FRIEND GAMES NEARBY" : "GAMES NEARBY"}</span>
                     <h3 id="nearby-games-title">
                       {selectedMapArea ? `Games in ${selectedMapArea}` : "Games happening around you"}
                     </h3>
                   </div>
-                  <span>{displayedGames.length} available</span>
+                  <span className="map-game-count">{displayedGames.length} nearby</span>
                 </div>
                 {displayedGames.slice(0, 10).map((game) => (
                   <article className="map-game-row" key={game.id}>
-                    <div>
-                      <strong>{game.group_name}</strong>
-                      <small>
-                        {game.area}
-                        {game.venue_name ? ` · ${game.venue_name}` : ""} · {game.session_date} · {game.start_time}–{game.end_time}
-                      </small>
-                      <small>
-                        {game.open_slots} {game.open_slots === 1 ? "spot" : "spots"} open · {Math.round(game.match_score)}% match fit
-                      </small>
-                      {game.is_connection_game && <small className="map-game-connection">From a connection</small>}
+                    <div className="map-game-main">
+                      <div className="map-game-title-row">
+                        <strong>{game.group_name}</strong>
+                        <span className={`map-game-slots ${game.open_slots > 0 ? "is-available" : "is-full"}`}>
+                          {game.open_slots > 0
+                            ? `${game.open_slots} ${game.open_slots === 1 ? "spot" : "spots"} open`
+                            : "Full"}
+                        </span>
+                      </div>
+                      <p className="map-game-location">
+                        {game.venue_name || game.area}
+                        {game.venue_name && <span>{game.area}</span>}
+                      </p>
+                      <div className="map-game-meta" aria-label="Game details">
+                        <span>{formatGameDate(game.session_date)}</span>
+                        <span>{formatGameTime(game.start_time)}–{formatGameTime(game.end_time)}</span>
+                        <span>{Math.round(game.match_score)}% match</span>
+                      </div>
+                      {game.is_connection_game && <span className="map-game-connection">From a connection</span>}
                     </div>
                     <div className="map-game-actions">
                       <button
@@ -1173,111 +1084,13 @@ export function CommunityHub({
           </>
         )}
 
-        <p className="density-privacy-note">
-          Only aggregated neighborhoods are shown. Individual player locations are never shared.
-        </p>
-      </section>
-
-      <section className="community-leaderboard" aria-labelledby="community-leaderboard-title">
-        <div className="density-heading">
-          <div>
-            <span className="kicker">COMMUNITY LEADERBOARD</span>
-            <h2 id="community-leaderboard-title">
-              Top {initialArea ? `${initialArea} ` : "nearby "}
-              {labels[sportFilter]} circles
-            </h2>
-            <p>Quality over popularity: circles are ranked by the games people want to play again.</p>
-          </div>
-        </div>
-        <div className="leaderboard-explainer">
-          <strong>How the score works</strong>
-          <span>Match quality 35%</span>
-          <span>Feedback 20%</span>
-          <span>Repeat play 20%</span>
-          <span>Reliability 15%</span>
-          <span>CMR improvement 10%</span>
-          <small>Minimum to qualify: 3 completed games and 5 player ratings.</small>
-        </div>
-        {leaderboardLoading ? (
-          <div className="leaderboard-loading">Updating community scores...</div>
-        ) : leaderboard.length ? (
-          <div className="leaderboard-list">
-            {leaderboard.slice(0, 5).map((entry) => (
-              <article className="leaderboard-row" key={entry.community_id}>
-                <span className="leaderboard-rank">{entry.rank}</span>
-                <div>
-                  <strong>{entry.name}</strong>
-                  <small>
-                    {entry.completed_games} games · {Math.round(entry.average_match_quality * 20)}% match quality ·{" "}
-                    {Math.round(entry.average_reliability * 100)}% reliable
-                  </small>
-                </div>
-                <div className="leaderboard-score">
-                  <b>
-                    {entry.quality_score}
-                    <em>/100</em>
-                  </b>
-                  <small>{entry.badge ? badgeLabels[entry.badge] : "Quality score"}</small>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <div className="leaderboard-empty">
-            Circles appear after 3 completed games and 5 submitted player ratings.
-          </div>
+        {!isGuest && (
+          <p className="density-privacy-note">
+            Only aggregated neighborhoods are shown. Individual player locations are never shared.
+          </p>
         )}
       </section>
 
-      <details
-        className="facility-section facility-directory"
-        open={facilitiesOpen}
-        onToggle={(event) => setFacilitiesOpen(event.currentTarget.open)}
-      >
-        <summary className="facility-directory-summary">
-          <span>
-            <span className="kicker">COURTS NEAR YOUR CIRCLE</span>
-            <strong>Where to play {labels[sportFilter].toLowerCase()}</strong>
-            <small>Curated facilities near {initialArea}. Open to see booking details.</small>
-          </span>
-          <span className="facility-directory-count">
-            {facilities.length || ""}
-            <b aria-hidden="true">+</b>
-          </span>
-        </summary>
-        <div className="facility-directory-content">
-          {facilitiesLoading ? (
-            <div className="leaderboard-loading">Finding courts...</div>
-          ) : facilities.length ? (
-            <div className="facility-list">
-              {facilities.slice(0, 5).map((facility) => (
-                <article className="facility-row" key={facility.id}>
-                  <div>
-                    <strong>{facility.name}</strong>
-                    <small>
-                      {facility.area} · {facility.booking_method}
-                    </small>
-                  </div>
-                  <div className="facility-actions">
-                    {facility.phone && (
-                      <a href={`tel:${facility.phone.replaceAll(" ", "")}`} aria-label={`Call ${facility.name}`}>
-                        Call
-                      </a>
-                    )}
-                    {facility.booking_url && (
-                      <a href={facility.booking_url} target="_blank" rel="noreferrer">
-                        Book <span>↗</span>
-                      </a>
-                    )}
-                  </div>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <div className="leaderboard-empty">No curated {labels[sportFilter].toLowerCase()} courts found yet.</div>
-          )}
-        </div>
-      </details>
     </section>
   );
 }

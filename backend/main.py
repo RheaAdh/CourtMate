@@ -30,14 +30,6 @@ logger = logging.getLogger("courtmate")
 
 app = FastAPI(title="CourtMate API", version="0.1.0")
 allowed_origins = [origin.strip() for origin in os.getenv("COURTMATE_ALLOWED_ORIGINS", "http://localhost:3000").split(",") if origin.strip()]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins or ["http://localhost:3000"],
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 @app.middleware("http")
@@ -48,7 +40,7 @@ async def add_request_timing(request, call_next):
     response.headers["X-Response-Time-Ms"] = str(elapsed_ms)
     if request.method not in {"GET", "HEAD", "OPTIONS"} and request.url.path.startswith("/v1/") and response.status_code < 400:
         _clear_read_view_cache()
-    print(f"{request.method} {request.url.path} {response.status_code} {elapsed_ms}ms")
+    logger.info("%s %s %s %.1fms", request.method, request.url.path, response.status_code, elapsed_ms)
     return response
 repository = create_repository()
 intent_parser = GeminiIntentParser()
@@ -441,51 +433,33 @@ def social_feed(feed: str = "all", sport: Sport | None = None, player: Player = 
     if cached is not None:
         return cached
     sessions = _refresh_all_session_statuses()
+    sessions_by_id = {session.id: session for session in sessions}
     players_by_id = {candidate.id: candidate for candidate in repository.list_players()}
     following_ids = {record.following_id for record in repository.list_following(player.id)}
-    session_media: dict[str, list[SocialPost]] = {}
+    feed_posts = []
     for post in repository.list_social_posts():
-        if not post.session_id or not post.media_url:
+        # The former session-activity cards were shared group operations. Keep
+        # them out of the feed so every visible post has a player author.
+        if _session_id_from_activity_post_id(post.id):
             continue
-        session_media.setdefault(post.session_id, []).append(post)
-
-    session_activities = []
-    for session in sessions:
-        if (
-            not session.social_activity_published
-            or session.status != "completed"
-            or not session.confirmed_player_ids
-            or not _session_visible_to_player(session, player, following_ids)
-        ):
+        session = sessions_by_id.get(post.session_id) if post.session_id else None
+        if session and not _session_visible_to_player(session, player, following_ids):
             continue
-        if feed == "personal" and player.id not in session.confirmed_player_ids:
+        if feed == "personal" and post.player_id != player.id:
             continue
-        if feed == "following" and not ({*following_ids, player.id} & set(session.confirmed_player_ids)):
+        if feed == "following" and post.player_id not in {*following_ids, player.id}:
             continue
-        if sport and session.sport != sport:
+        if sport and post.sport != sport:
             continue
-        session_activities.append(_session_social_view(session, players_by_id, player.id, session_media.get(session.id, [])))
-    session_activities.sort(key=lambda item: item.created_at, reverse=True)
-    return _cache_social_feed(cache_key, SocialFeedResponse(posts=session_activities[:50]))
+        feed_posts.append(_social_post_view(post, player.id, session, players_by_id))
+    feed_posts.sort(key=lambda item: item.created_at, reverse=True)
+    return _cache_social_feed(cache_key, SocialFeedResponse(posts=feed_posts[:50]))
 
 
 @app.post("/v1/sessions/{session_id}/social-activity", response_model=SocialPostView)
 def publish_session_social_activity(session_id: str, player: Player = Depends(get_current_player)) -> SocialPostView:
-    """Return the completed session's stable Rally Circles activity card."""
-    session = _member_session(session_id, player)
-    if session.status == "cancelled":
-        raise HTTPException(status_code=409, detail="Cancelled games cannot be posted")
-    if session.status != "completed":
-        raise HTTPException(status_code=409, detail="Complete the game before publishing its Rally Circles activity")
-    if not session.social_activity_published or not session.social_activity_published_at:
-        session = repository.save_session(session.model_copy(update={
-            "social_activity_published": True,
-            "social_activity_published_at": datetime.now(timezone.utc),
-        }))
-    activity_post, _ = _ensure_social_target(_session_activity_post_id(session.id), player)
-    _clear_social_feed_cache()
-    players_by_id = {candidate.id: candidate for candidate in repository.list_players()}
-    return _session_social_view(session, players_by_id, player.id)
+    _member_session(session_id, player)
+    raise HTTPException(status_code=410, detail="Completed games are shared as individual player posts")
 
 
 def _session_visible_to_player(session: Session, player: Player, following_ids: set[str] | None = None) -> bool:
@@ -517,9 +491,21 @@ def create_social_post(request: SocialPostCreateRequest, player: Player = Depend
     caption = request.caption.strip()
     if not caption:
         raise HTTPException(status_code=422, detail="Post caption is required")
-    if request.media_url and not request.media_type:
+    media_urls = list(dict.fromkeys(
+        value.strip()
+        for value in [request.media_url, *request.media_urls]
+        if value and value.strip()
+    ))
+    if len(media_urls) > 6:
+        raise HTTPException(status_code=422, detail="Attach no more than 6 photos")
+    inline_media_sizes = [len(value.encode("utf-8")) for value in media_urls if value.lower().startswith("data:image/")]
+    if any(size > _SOCIAL_INLINE_MEDIA_PER_URL_LIMIT for size in inline_media_sizes) or sum(inline_media_sizes) > _SOCIAL_INLINE_MEDIA_TOTAL_LIMIT:
+        raise HTTPException(status_code=422, detail="One or more photos are too large. Re-upload the photos or attach fewer images.")
+    if media_urls and not request.media_type:
         raise HTTPException(status_code=422, detail="Media type is required with an attachment")
-    if request.media_url and not request.session_id:
+    if request.media_urls and request.media_type != "image":
+        raise HTTPException(status_code=422, detail="Photo attachments must be images")
+    if media_urls and not request.session_id:
         raise HTTPException(status_code=422, detail="Photos and videos must be attached to a game")
     if request.session_id:
         session = _get_session(request.session_id)
@@ -529,6 +515,8 @@ def create_social_post(request: SocialPostCreateRequest, player: Player = Depend
             raise HTTPException(status_code=422, detail="Post sport must match the tagged game")
         if player.id != session.organizer_id and player.id not in session.confirmed_player_ids:
             raise HTTPException(status_code=403, detail="Only players in this game can tag it in a post")
+        if session.status == "cancelled":
+            raise HTTPException(status_code=409, detail="Cancelled games cannot be posted about")
     post = repository.save_social_post(SocialPost(
         id=f"social-{uuid4().hex}",
         player_id=player.id,
@@ -537,8 +525,9 @@ def create_social_post(request: SocialPostCreateRequest, player: Player = Depend
         sport=request.sport,
         session_id=request.session_id,
         caption=caption,
-        media_url=request.media_url,
+        media_url=media_urls[0] if media_urls else None,
         media_type=request.media_type,
+        media_urls=media_urls,
         created_at=datetime.now(timezone.utc),
     ))
     _clear_social_feed_cache()
@@ -693,8 +682,17 @@ def create_profile_image_upload_url(request: ProfileImageUploadRequest, player: 
     return ProfileImageUploadResponse(upload_url=upload_url, image_url=image_url, object_name=object_name, expires_in=600)
 
 
-def _optimize_image_fallback(image_bytes: bytes, max_dim: int = 400, quality: int = 80) -> str:
-    """Compress image bytes into a compact WebP data URI for local/offline fallback."""
+_SOCIAL_INLINE_MEDIA_PER_URL_LIMIT = 120 * 1024
+_SOCIAL_INLINE_MEDIA_TOTAL_LIMIT = 700 * 1024
+
+
+def _optimize_image_fallback(
+    image_bytes: bytes,
+    max_dim: int = 400,
+    quality: int = 80,
+    max_data_uri_bytes: int = 192 * 1024,
+) -> str | None:
+    """Produce a bounded data URI only when Cloud Storage is temporarily unavailable."""
     try:
         from PIL import Image
         img = Image.open(io.BytesIO(image_bytes))
@@ -702,11 +700,10 @@ def _optimize_image_fallback(image_bytes: bytes, max_dim: int = 400, quality: in
         img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
         buf = io.BytesIO()
         img.save(buf, format="WEBP", quality=quality)
-        encoded = base64.b64encode(buf.getvalue()).decode("ascii")
-        return f"data:image/webp;base64,{encoded}"
+        data_uri = f"data:image/webp;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
     except Exception:
-        encoded = base64.b64encode(image_bytes).decode("ascii")
-        return f"data:image/jpeg;base64,{encoded}"
+        data_uri = f"data:image/jpeg;base64,{base64.b64encode(image_bytes).decode('ascii')}"
+    return data_uri if len(data_uri.encode("utf-8")) <= max_data_uri_bytes else None
 
 
 @app.post("/v1/me/profile-image/upload", response_model=Player)
@@ -740,6 +737,8 @@ async def upload_profile_image(request: FastAPIRequest, player: Player = Depends
     except Exception as error:
         logger.warning("Profile photo storage upload failed (%s); using data URL fallback", error)
         image_url = _optimize_image_fallback(image_bytes, max_dim=400, quality=80)
+        if not image_url:
+            raise HTTPException(status_code=503, detail="Profile photo storage is unavailable. Please try again shortly.")
 
     return repository.save_player(player.model_copy(update={"profile_image_url": image_url}))
 
@@ -774,7 +773,9 @@ async def upload_social_media(request: FastAPIRequest, player: Player = Depends(
         )
     except Exception as error:
         logger.warning("Social media storage upload failed (%s); using data URL fallback", error)
-        media_url = _optimize_image_fallback(image_bytes, max_dim=800, quality=82)
+        media_url = _optimize_image_fallback(image_bytes, max_dim=800, quality=82, max_data_uri_bytes=_SOCIAL_INLINE_MEDIA_PER_URL_LIMIT)
+        if not media_url:
+            raise HTTPException(status_code=503, detail="Photo storage is unavailable. Please try again shortly.")
 
     return {"media_url": media_url}
 
@@ -944,9 +945,6 @@ def _public_profile(
 
 
 def _session_cmr_rating(candidate: Player, sport: str) -> float | None:
-    current = candidate.cmr_ratings.get(sport)
-    if current is not None:
-        return round(current, 2)
     rating = rating_for_sport(candidate, sport)
     return round(rating, 2) if rating is not None else None
 
@@ -995,6 +993,7 @@ def _social_post_view(post: SocialPost, viewer_id: str, session: Session | None 
         caption=post.caption,
         media_url=post.media_url,
         media_type=post.media_type,
+        media_urls=post.media_urls or ([post.media_url] if post.media_url else []),
         like_count=len(post.liked_by),
         comment_count=post.comment_count,
         share_count=post.share_count,
@@ -2476,8 +2475,6 @@ def _time_poll_options(session: Session) -> list[TimePollOption]:
 def create_time_poll(session_id: str, player: Player = Depends(get_current_player)) -> ChatPost:
     session = _member_session(session_id, player)
     _require_joinable_session(session)
-    if session.organizer_id != player.id:
-        raise HTTPException(status_code=403, detail="Only the organizer can start the time poll")
     if session.time_finalized or not session.time_window_start or not session.time_window_end:
         raise HTTPException(status_code=409, detail="This game already has a fixed time")
     participant_ids = list(session.confirmed_player_ids)
@@ -2649,35 +2646,21 @@ def complete_session(session_id: str, background_tasks: BackgroundTasks, player:
     if player.id not in session.confirmed_player_ids:
         raise HTTPException(status_code=403, detail="Only confirmed players can complete this game")
     if not session.time_finalized:
-        raise HTTPException(status_code=409, detail="Finalize the time poll in the Rally Circle before completing this game")
+        if player.id != session.organizer_id or len(session.confirmed_player_ids) != 1:
+            raise HTTPException(status_code=409, detail="Finalize the time poll in the Rally Circle before completing this game")
+        # A solo game has no one else to poll. Preserve the original scheduled
+        # slot so older form-created games can still be completed.
+        session = repository.save_session(session.model_copy(update={"time_finalized": True}))
     if session.status == "cancelled":
         raise HTTPException(status_code=409, detail="Cancelled games cannot be completed")
     if session.status == "completed":
-        if session.social_activity_published:
-            return session
-        saved = repository.save_session(session.model_copy(update={
-            "social_activity_published": True,
-            "social_activity_published_at": datetime.now(timezone.utc),
-        }))
-        _clear_social_feed_cache()
-        return saved
+        return session
     if session.status == "awaiting_feedback":
-        # A confirmed player can close the feedback round manually when the
-        # group is ready. Submitted ratings are retained and the activity is
-        # published even if some players have not responded yet.
-        completed = session.model_copy(update={
-            "status": "completed",
-            "social_activity_published": True,
-            "social_activity_published_at": datetime.now(timezone.utc),
-        })
-        saved = repository.save_session(completed)
-        _clear_social_feed_cache()
-        background_tasks.add_task(_refresh_cmr_ratings)
-        background_tasks.add_task(_refresh_community_scores)
-        background_tasks.add_task(_index_session_best_effort, saved)
-        return saved
-    # Closing a game opens the private feedback round. Home is published only
-    # after every confirmed participant has submitted their ratings.
+        # Feedback closes automatically once every confirmed player submits.
+        # Repeating the action must never discard the remaining private ratings.
+        return session
+    # Closing a game opens the private feedback round. Players may later share
+    # their own post; completing a game never creates a group feed post.
     session.status = "awaiting_feedback"
     session.social_activity_published = False
     saved = repository.save_session(session)
@@ -2771,7 +2754,7 @@ def replacement(session_id: str, player: Player = Depends(get_current_player)) -
 def feedback(session_id: str, request: FeedbackRequest, background_tasks: BackgroundTasks, player: Player = Depends(get_current_player)) -> Feedback:
     session = _member_session(session_id, player)
     if session.status not in {"awaiting_feedback", "completed"}:
-        raise HTTPException(status_code=409, detail="Rate players after the game is marked complete")
+        raise HTTPException(status_code=409, detail="Rate players after the game is marked done")
     confirmed_others = [player_id for player_id in session.confirmed_player_ids if player_id != player.id]
     skipped_player_ids = set(request.skipped_player_ids)
     if request.player_order or request.skipped_player_ids:
@@ -2819,24 +2802,11 @@ def feedback(session_id: str, request: FeedbackRequest, background_tasks: Backgr
                     raise HTTPException(status_code=422, detail="A player can only be on one team")
                 seen_team_players.add(player_id)
     saved = repository.save_feedback(Feedback(session_id=session_id, created_at=datetime.now(timezone.utc), player_id=player.id, match_quality=request.match_quality, fun=request.fun, fairness=request.fairness, would_return=request.would_return, ratings=ratings, teams=request.teams))
-    for index, photo_url in enumerate(request.photo_urls[:6]):
-        repository.save_social_post(SocialPost(
-            id=f"session-photo-{session_id}-{player.id}-{index}",
-            player_id=player.id,
-            player_display_name=player.display_name,
-            profile_image_url=player.profile_image_url,
-            sport=session.sport,
-            session_id=session_id,
-            caption=f"A moment from {session.group_name}.",
-            media_url=photo_url,
-            media_type="image",
-            created_at=datetime.now(timezone.utc),
-        ))
     if session.status == "awaiting_feedback" and _all_participants_submitted_feedback(session):
         completed = session.model_copy(update={
             "status": "completed",
-            "social_activity_published": True,
-            "social_activity_published_at": datetime.now(timezone.utc),
+            "social_activity_published": False,
+            "social_activity_published_at": None,
         })
         repository.save_session(completed)
         _clear_social_feed_cache()
@@ -2910,3 +2880,15 @@ def analyze_activity_proof(session_id: str, request: ActivityProofRequest, playe
     analysis = _analyze_activity_image(request.image_url)
     proof = ActivityProof(id=f"proof-{uuid4().hex[:12]}", session_id=session.id, player_id=player.id, image_url=request.image_url, sport=session.sport, analysis=analysis, created_at=datetime.now(timezone.utc))
     return repository.save_activity_proof(proof)
+
+
+# Keep CORS outside FastAPI's server-error middleware so browser clients can
+# read an API error response instead of reporting a misleading CORS failure.
+app = CORSMiddleware(
+    app=app,
+    allow_origins=allowed_origins or ["http://localhost:3000"],
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)

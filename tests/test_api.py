@@ -1,6 +1,7 @@
 import os
 import unittest
 from datetime import date, datetime, time, timedelta
+from unittest.mock import patch
 
 os.environ["COURTMATE_DATASTORE"] = "memory"
 os.environ["COURTMATE_AUTH_REQUIRED"] = "false"
@@ -63,10 +64,16 @@ class ApiFlowTests(unittest.TestCase):
 
     def test_confirmed_late_withdrawal_updates_reliability_record(self):
         now = datetime.now(local_timezone).replace(second=0, microsecond=0)
+        starts_at = now + timedelta(hours=2)
+        ends_at = starts_at + timedelta(hours=2)
+        # Keep both wall-clock times on the same session date when this test
+        # runs late at night; otherwise the API correctly sees the game as over.
+        if ends_at.date() != starts_at.date():
+            ends_at = starts_at.replace(hour=23, minute=59)
         session = repository.get_session("s1").model_copy(update={
-            "session_date": now.date(),
-            "start_time": (now + timedelta(hours=2)).time(),
-            "end_time": (now + timedelta(hours=4)).time(),
+            "session_date": starts_at.date(),
+            "start_time": starts_at.time(),
+            "end_time": ends_at.time(),
             "status": "open",
         })
         repository.save_session(session)
@@ -517,10 +524,11 @@ class ApiFlowTests(unittest.TestCase):
         )
         self.assertEqual(approved.status_code, 200)
 
-        poll = self.client.post(f"/v1/sessions/{session_id}/time-poll", headers={"X-CourtMate-Player-ID": "p1"})
+        poll = self.client.post(f"/v1/sessions/{session_id}/time-poll", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(poll.status_code, 200)
         poll_payload = poll.json()
         self.assertEqual(poll_payload["post_type"], "time_poll")
+        self.assertEqual(poll_payload["player_id"], "p2")
         self.assertEqual([option["id"] for option in poll_payload["poll_options"]], ["1800", "1830", "1900"])
         poll_id = poll_payload["id"]
 
@@ -651,19 +659,28 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(payload["recommendations"], [])
         self.assertIn("book a tennis court", payload["message"].lower())
 
-    def test_social_feed_supports_session_posts_likes_comments_and_shares(self):
+    def test_social_feed_supports_individual_game_posts_likes_comments_and_shares(self):
+        self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p1"})
+        self.submit_feedback_for_everyone()
         created = self.client.post(
             "/v1/social/posts",
-            json={"caption": "Great Sunday rally with a really fun group.", "sport": "pickleball", "session_id": "s1"},
+            json={
+                "caption": "Great Sunday rally with a really fun group.",
+                "sport": "pickleball",
+                "session_id": "s1",
+                "media_urls": ["https://storage.googleapis.com/example/one.jpg", "https://storage.googleapis.com/example/two.jpg"],
+                "media_type": "image",
+            },
             headers={"X-CourtMate-Player-ID": "p1"},
         )
         self.assertEqual(created.status_code, 200)
         post_id = created.json()["id"]
         self.assertEqual(created.json()["session_name"], "Sunday Rally Crew")
+        self.assertEqual(created.json()["media_urls"], ["https://storage.googleapis.com/example/one.jpg", "https://storage.googleapis.com/example/two.jpg"])
 
         feed = self.client.get("/v1/social/feed", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(feed.status_code, 200)
-        self.assertFalse(any(post["id"] == post_id for post in feed.json()["posts"]))
+        self.assertTrue(any(post["id"] == post_id for post in feed.json()["posts"]))
 
         liked = self.client.post(f"/v1/social/posts/{post_id}/like", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertTrue(liked.json()["liked_by_me"])
@@ -682,19 +699,78 @@ class ApiFlowTests(unittest.TestCase):
         comments = self.client.get(f"/v1/social/posts/{post_id}/comments", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(len(comments.json()["comments"]), 1)
 
-    def test_personal_rally_contains_only_the_players_completed_session_cards(self):
+    def test_confirmed_player_can_post_without_completing_a_game(self):
+        created = self.client.post(
+            "/v1/social/posts",
+            json={"caption": "Sharing a quick in-game update.", "sport": "pickleball", "session_id": "s1"},
+            headers={"X-CourtMate-Player-ID": "p2"},
+        )
+
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(created.json()["player_id"], "p2")
+        self.assertEqual(created.json()["session_id"], "s1")
+
+    def test_social_post_server_error_keeps_cors_headers(self):
+        client = TestClient(app, raise_server_exceptions=False)
+        with patch.object(repository, "save_social_post", side_effect=RuntimeError("storage unavailable")):
+            response = client.post(
+                "/v1/social/posts",
+                json={"caption": "CORS error handling check", "sport": "pickleball"},
+                headers={"Origin": "http://localhost:3000"},
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.headers["access-control-allow-origin"], "http://localhost:3000")
+
+    def test_social_post_rejects_oversized_inline_media_before_writing(self):
+        oversized_photo = "data:image/webp;base64," + ("a" * (121 * 1024))
+        response = self.client.post(
+            "/v1/social/posts",
+            json={
+                "caption": "This photo should be rejected before Firestore sees it.",
+                "sport": "pickleball",
+                "session_id": "s1",
+                "media_urls": [oversized_photo],
+                "media_type": "image",
+            },
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("too large", response.json()["detail"].lower())
+
+    def test_social_post_clamps_legacy_cmr_before_building_the_feed_card(self):
+        self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p1"})
+        self.submit_feedback_for_everyone()
+        player = repository.get_player("p1")
+        repository.save_player(player.model_copy(update={"cmr_ratings": {"pickleball": 100}, "cmr_scale": 10}))
+
+        response = self.client.post(
+            "/v1/social/posts",
+            json={"caption": "A post with an older rating record.", "sport": "pickleball", "session_id": "s1"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(all(entry["cmr_rating"] is None or entry["cmr_rating"] <= 10 for entry in response.json()["session_leaderboard"]))
+
+    def test_personal_rally_contains_only_the_players_own_posts(self):
         completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(completed.status_code, 200)
         self.submit_feedback_for_everyone()
+        created = self.client.post(
+            "/v1/social/posts",
+            json={"caption": "My own view of a great rally.", "sport": "pickleball", "session_id": "s1"},
+            headers={"X-CourtMate-Player-ID": "p2"},
+        )
+        self.assertEqual(created.status_code, 200)
 
         feed = self.client.get("/v1/social/feed?feed=personal", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(feed.status_code, 200)
         posts = feed.json()["posts"]
-        self.assertTrue(any(post["id"] == "session-activity-s1" for post in posts))
-        self.assertTrue(all(post["activity_type"] == "session" and post["session_status"] == "completed" for post in posts))
-        self.assertTrue(all(any(member["id"] == "p2" for member in post["session_players"]) for post in posts))
+        self.assertEqual([post["id"] for post in posts], [created.json()["id"]])
+        self.assertTrue(all(post["player_id"] == "p2" and post["activity_type"] == "post" for post in posts))
 
-    def test_time_completed_session_is_published_to_personal_rally(self):
+    def test_completed_game_is_not_posted_until_a_player_chooses_to_share(self):
         repository.save_session(
             Session(
                 id="elapsed-rally",
@@ -718,22 +794,23 @@ class ApiFlowTests(unittest.TestCase):
 
         feed = self.client.get("/v1/social/feed?feed=personal", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(feed.status_code, 200)
-        activity = next(post for post in feed.json()["posts"] if post["id"] == "session-activity-elapsed-rally")
-        self.assertEqual(activity["session_status"], "completed")
-        self.assertTrue(repository.get_session("elapsed-rally").social_activity_published)
+        self.assertEqual(feed.json()["posts"], [])
+        self.assertFalse(repository.get_session("elapsed-rally").social_activity_published)
 
-    def test_session_activity_supports_likes_comments_and_shares(self):
-        incomplete = self.client.post("/v1/sessions/s1/social-activity", headers={"X-CourtMate-Player-ID": "p2"})
-        self.assertEqual(incomplete.status_code, 409)
+    def test_individual_game_post_supports_likes_comments_and_shares(self):
+        retired = self.client.post("/v1/sessions/s1/social-activity", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(retired.status_code, 410)
 
         completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(completed.status_code, 200)
         self.submit_feedback_for_everyone()
-        feed = self.client.get("/v1/social/feed", headers={"X-CourtMate-Player-ID": "p2"})
-        self.assertEqual(feed.status_code, 200)
-        activity = next(post for post in feed.json()["posts"] if post["id"] == "session-activity-s1")
-
-        post_id = activity["id"]
+        created = self.client.post(
+            "/v1/social/posts",
+            json={"caption": "A tough but satisfying game.", "sport": "pickleball", "session_id": "s1"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(created.status_code, 200)
+        post_id = created.json()["id"]
         comment = self.client.post(
             f"/v1/social/posts/{post_id}/comments",
             json={"message": "Great rally."},
@@ -751,7 +828,7 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(shared.status_code, 200)
         self.assertEqual(shared.json()["share_count"], 1)
 
-    def test_group_member_can_publish_live_session_that_becomes_final_leaderboard(self):
+    def test_completed_game_never_auto_publishes_and_each_player_controls_their_post(self):
         session = repository.get_session("s1")
         session.social_activity_published = False
         repository.save_session(session)
@@ -766,36 +843,34 @@ class ApiFlowTests(unittest.TestCase):
         self.assertFalse(completed.json()["social_activity_published"])
         self.submit_feedback_for_everyone()
 
-        feed = self.client.get("/v1/social/feed", headers={"X-CourtMate-Player-ID": "p2"})
-        published = next(post for post in feed.json()["posts"] if post["id"] == "session-activity-s1")
-        self.assertEqual(published["activity_type"], "session")
-        self.assertEqual(published["session_status"], "completed")
-
-        feedback = self.client.post(
-            "/v1/sessions/s1/feedback",
-            json={"match_quality": 4, "fun": 5, "fairness": 5, "would_return": True, "player_order": ["p1", "p3", "p6"]},
+        feed = self.client.get("/v1/social/feed?feed=personal", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(feed.json()["posts"], [])
+        first_post = self.client.post(
+            "/v1/social/posts",
+            json={"caption": "My version of the rally.", "sport": "pickleball", "session_id": "s1"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(first_post.status_code, 200)
+        second_post = self.client.post(
+            "/v1/social/posts",
+            json={"caption": "A different memory from the same game.", "sport": "pickleball", "session_id": "s1"},
             headers={"X-CourtMate-Player-ID": "p2"},
         )
-        self.assertEqual(feedback.status_code, 200)
-        self.assertEqual(feedback.json()["match_quality"], 4)
-        self.assertEqual(feedback.json()["ratings"][0]["player_id"], "p1")
-        self.assertEqual(feedback.json()["ratings"][0]["rank_score"], 100.0)
-        updated_feed = self.client.get("/v1/social/feed", headers={"X-CourtMate-Player-ID": "p2"})
-        updated_mvp = next(post for post in updated_feed.json()["posts"] if post["id"] == "session-activity-s1")["session_leaderboard"][0]
-        self.assertIsNone(updated_mvp["cmr_delta"])
+        self.assertEqual(second_post.status_code, 200)
+        personal = self.client.get("/v1/social/feed?feed=personal", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual([post["id"] for post in personal.json()["posts"]], [second_post.json()["id"]])
 
-    def test_any_confirmed_player_can_complete_a_game_and_notifies_the_lineup(self):
+    def test_any_confirmed_player_can_mark_a_game_done_and_open_private_feedback(self):
         completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p2"})
 
         self.assertEqual(completed.status_code, 200)
         self.assertEqual(completed.json()["status"], "awaiting_feedback")
         self.assertEqual(repository.get_session("s1").status, "awaiting_feedback")
 
-        manually_completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p2"})
-        self.assertEqual(manually_completed.status_code, 200)
-        self.assertEqual(manually_completed.json()["status"], "completed")
-        self.assertTrue(manually_completed.json()["social_activity_published"])
-        self.assertEqual(repository.get_session("s1").status, "completed")
+        repeated_request = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(repeated_request.status_code, 200)
+        self.assertEqual(repeated_request.json()["status"], "awaiting_feedback")
+        self.assertEqual(repository.get_session("s1").status, "awaiting_feedback")
 
         for player_id in ("p1", "p3", "p6"):
             notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": player_id}).json()["notifications"]
@@ -806,7 +881,7 @@ class ApiFlowTests(unittest.TestCase):
         completer_notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": "p2"}).json()["notifications"]
         self.assertTrue(any(item["kind"] == "game_completed" and item["session_id"] == "s1" for item in completer_notifications))
 
-    def test_feedback_requires_a_completed_game(self):
+    def test_feedback_requires_a_game_to_be_marked_done(self):
         response = self.client.post(
             "/v1/sessions/s1/feedback",
             json={"fun": 5, "fairness": 5, "would_return": True, "ratings": [{"player_id": "p1", "rating_10": 8}, {"player_id": "p3", "rating_10": 7}, {"player_id": "p6", "rating_10": 6}]},
@@ -814,7 +889,7 @@ class ApiFlowTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 409)
-        self.assertIn("marked complete", response.json()["detail"])
+        self.assertIn("marked done", response.json()["detail"])
 
     def test_feedback_accepts_private_player_ratings_without_changing_cmr(self):
         completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p1"})
@@ -1442,6 +1517,33 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(session["skill_min"], 3.2)
         self.assertEqual(session["skill_max"], 4.0)
         self.assertEqual(session["style"], "competitive")
+        self.assertTrue(session["time_finalized"])
+
+    def test_solo_flexible_game_can_be_completed_without_a_time_poll(self):
+        game_date = str(date.today() + timedelta(days=2))
+        created = self.client.post(
+            "/v1/groups",
+            json={
+                "query": "Create a casual tennis game near Whitefield",
+                "sport": "tennis",
+                "area": "Whitefield",
+                "session_date": game_date,
+                "time_window_start": "18:00",
+                "time_window_end": "20:00",
+                "duration_minutes": 60,
+            },
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(created.status_code, 200)
+        self.assertFalse(created.json()["session"]["time_finalized"])
+
+        completed = self.client.post(
+            f"/v1/sessions/{created.json()['session']['id']}/complete",
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(completed.status_code, 200)
+        self.assertTrue(completed.json()["time_finalized"])
+        self.assertEqual(completed.json()["status"], "awaiting_feedback")
 
     def test_group_creation_rejects_invalid_schedule(self):
         past_group = self.client.post(

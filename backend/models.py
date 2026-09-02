@@ -763,6 +763,7 @@ class SocialPostCreateRequest(BaseModel):
     session_id: str | None = None
     media_url: str | None = Field(default=None, max_length=2048)
     media_type: Literal["image", "video"] | None = None
+    media_urls: list[str] = Field(default_factory=list, max_length=6)
 
 
 class SocialPost(BaseModel):
@@ -775,6 +776,7 @@ class SocialPost(BaseModel):
     caption: str
     media_url: str | None = None
     media_type: Literal["image", "video"] | None = None
+    media_urls: list[str] = Field(default_factory=list, max_length=6)
     liked_by: list[str] = Field(default_factory=list)
     comment_count: int = Field(default=0, ge=0)
     share_count: int = Field(default=0, ge=0)
@@ -893,7 +895,6 @@ class FeedbackRequest(BaseModel):
     player_order: list[str] = Field(default_factory=list, max_length=16)
     skipped_player_ids: list[str] = Field(default_factory=list, max_length=16)
     teams: list["MatchTeam"] = Field(default_factory=list, max_length=4)
-    photo_urls: list[str] = Field(default_factory=list, max_length=6)
 
 
 class PlayerRating(BaseModel):

@@ -1,9 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
-import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
-
-import { storage } from "../firebase";
+import { FormEvent, useState } from "react";
 
 type FeedbackMember = {
   id: string;
@@ -21,54 +18,17 @@ type PostGameFeedbackProps = {
   currentUserId?: string;
   apiUrl: string;
   authorizedFetch: (url: string, options?: RequestInit) => Promise<Response>;
+  mandatory?: boolean;
   onSaved: () => void;
   onToast: (message: string) => void;
 };
 
-export function PostGameFeedbackPanel({ sessionId, sport, ratingMode = "casual", members, currentUserId, apiUrl, authorizedFetch, onSaved, onToast }: PostGameFeedbackProps) {
-  const [playerRatings, setPlayerRatings] = useState<Record<string, string>>({});
+export function PostGameFeedbackPanel({ sessionId, sport, ratingMode = "casual", members, currentUserId, apiUrl, authorizedFetch, mandatory = false, onSaved, onToast }: PostGameFeedbackProps) {
+  const [playerRatings, setPlayerRatings] = useState<Record<string, string>>(() => Object.fromEntries(
+    members.filter((member) => member.id !== currentUserId).map((member) => [member.id, ""]),
+  ));
   const [matchQuality, setMatchQuality] = useState("5");
-  const [photoUrls, setPhotoUrls] = useState<string[]>([]);
-  const [photoUploading, setPhotoUploading] = useState(false);
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    setPlayerRatings(Object.fromEntries(members.filter((member) => member.id !== currentUserId).map((member) => [member.id, ""])));
-  }, [sessionId, members, currentUserId, sport]);
-
-  async function addPhoto(file: File) {
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
-      onToast("Choose a JPG, PNG, or WebP photo");
-      return;
-    }
-    if (file.size > 8 * 1024 * 1024) {
-      onToast("Each photo must be smaller than 8 MB");
-      return;
-    }
-    if (photoUrls.length >= 6) {
-      onToast("You can add up to 6 photos to this game");
-      return;
-    }
-    try {
-      setPhotoUploading(true);
-      const uploadRes = await authorizedFetch(`${apiUrl}/v1/social/media/upload`, {
-        method: "POST",
-        headers: { "content-type": file.type },
-        body: file,
-      });
-      if (!uploadRes.ok) {
-        throw new Error("Photo upload failed");
-      }
-      const uploadPayload = await uploadRes.json() as { media_url: string };
-      if (!uploadPayload.media_url) throw new Error("Could not retrieve photo URL");
-      setPhotoUrls((urls) => [...urls, uploadPayload.media_url]);
-      onToast("Photo attached");
-    } catch {
-      onToast("Could not upload that photo");
-    } finally {
-      setPhotoUploading(false);
-    }
-  }
 
   async function submitFeedback(event: FormEvent) {
     event.preventDefault();
@@ -88,7 +48,6 @@ export function PostGameFeedbackPanel({ sessionId, sport, ratingMode = "casual",
           fairness: 5,
           would_return: true,
           ratings: otherPlayers.map((member) => ({ player_id: member.id, rating_10: Number(playerRatings[member.id]) })),
-          photo_urls: photoUrls,
         }),
       });
       if (!response.ok) throw new Error("Feedback failed");
@@ -102,14 +61,9 @@ export function PostGameFeedbackPanel({ sessionId, sport, ratingMode = "casual",
   }
 
   return <form className="workspace-panel feedback-panel feedback-panel-new" onSubmit={submitFeedback}>
-    <div className="workspace-panel-heading"><div><span className="kicker">POST-MATCH</span><h3>How was the game?</h3><p className="feedback-intro">Private feedback improves quality and trust. {ratingMode === "competitive" ? "CMR only changes from a confirmed final score." : "This casual game does not change CMR."}</p></div></div>
+    <div className="workspace-panel-heading"><div><span className="kicker">YOUR PRIVATE FEEDBACK</span><h3 id="post-game-feedback-title">Rate every player</h3><p className="feedback-intro">Only you can see the ratings you submit. Rate every other confirmed player to help keep future games fair and trusted. {ratingMode === "competitive" ? "CMR only changes from a confirmed final score." : "This casual game does not change CMR."}</p>{mandatory && <p className="feedback-required-note">Required to finish your post-game feedback.</p>}</div></div>
     <div className="feedback-fields feedback-quality-field"><label><span>Game match quality</span><select aria-label="Rate game match quality" value={matchQuality} onChange={(event) => setMatchQuality(event.target.value)}>{Array.from({ length: 5 }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value} / 5{value === 5 ? " · Excellent" : value === 1 ? " · Poor" : ""}</option>)}</select></label></div>
-    <fieldset className="player-rating-fields"><legend>Private player feedback</legend><div className="player-rating-list">{members.filter((member) => member.id !== currentUserId).map((member) => <label className="player-rating-row" key={member.id}><span><strong>{member.display_name}</strong><small>{member.cmr_ratings?.[sport] != null ? `${member.cmr_ratings[sport].toFixed(1)} CMR` : "CMR building"}</small></span><select required aria-label={`Rate playing with ${member.display_name} out of 10`} value={playerRatings[member.id] ?? ""} onChange={(event) => setPlayerRatings((ratings) => ({ ...ratings, [member.id]: event.target.value }))}><option value="" disabled>Experience /10</option>{Array.from({ length: 10 }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value} / 10</option>)}</select></label>)}</div></fieldset>
-    <button className="dark-button" type="submit" disabled={saving || photoUploading}>{saving ? "Saving..." : "Save feedback"} <span>→</span></button>
-    <div className="feedback-photo-row">
-      <div><strong>Add game photos</strong><small>They appear with the final leaderboard on Home.</small></div>
-      <label className="feedback-photo-button"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; if (file) void addPhoto(file); }} disabled={photoUploading || photoUrls.length >= 6} />{photoUploading ? "Uploading..." : `+ Add photo${photoUrls.length ? ` (${photoUrls.length}/6)` : ""}`}</label>
-      {photoUrls.length > 0 && <div className="feedback-photo-previews">{photoUrls.map((url, index) => <button type="button" key={url} onClick={() => setPhotoUrls((urls) => urls.filter((_, photoIndex) => photoIndex !== index))} aria-label={`Remove photo ${index + 1}`}><img src={url} alt={`Game photo ${index + 1}`} /><span>×</span></button>)}</div>}
-    </div>
+    <fieldset className="player-rating-fields"><legend>Rate every other player</legend><div className="player-rating-list">{members.filter((member) => member.id !== currentUserId).map((member) => <label className="player-rating-row" key={member.id}><span><strong>{member.display_name}</strong><small>{member.cmr_ratings?.[sport] != null ? `${member.cmr_ratings[sport].toFixed(1)} CMR` : "CMR building"}</small></span><select required aria-label={`Rate playing with ${member.display_name} out of 10`} value={playerRatings[member.id] ?? ""} onChange={(event) => setPlayerRatings((ratings) => ({ ...ratings, [member.id]: event.target.value }))}><option value="" disabled>Experience /10</option>{Array.from({ length: 10 }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value} / 10</option>)}</select></label>)}</div></fieldset>
+    <button className="dark-button" type="submit" disabled={saving}>{saving ? "Saving..." : "Save feedback"} <span>→</span></button>
   </form>;
 }

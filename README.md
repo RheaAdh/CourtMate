@@ -17,7 +17,7 @@ The first implementation slice is a Python API with:
 - Firestore-backed players, sessions, and feedback, with an explicit in-memory fallback
 - Persistent in-app game notifications for compatible nearby players after a game is created
 - Public player profiles with sport CMR, reliability, follower counts, and follow/unfollow relationships
-- CMR calculated and displayed on a 0-100 scale, with compatibility conversion for existing 1-8 skill bands
+- CMR calculated and displayed on the canonical 1-10 scale, with compatibility conversion for historic 1-8 and 0-100 ratings
 - A free-tier deployment profile with bounded Firestore reads and scale-to-zero Cloud Run
 - Post-game feedback with fun/fairness signals, broad player skill levels, and optional team/score context
 - Gemini vision analysis of optional watch-tracker screenshots, with extracted game stats saved as activity proof
@@ -89,6 +89,15 @@ The interactive Explore map uses the browser-only `NEXT_PUBLIC_GOOGLE_MAPS_API_K
 
 If the key is missing or rejected, CourtMate keeps the density illustration as a fallback and displays an "Interactive map unavailable" status while still listing nearby games below.
 
+### Production checklist
+
+Before releasing, configure the browser and API separately. Public `NEXT_PUBLIC_*` values are embedded into the Vercel build and must be safe to expose; server credentials belong only in Cloud Run or its secret manager.
+
+1. In Vercel Production, set `NEXT_PUBLIC_API_URL` to the deployed API origin, the required `NEXT_PUBLIC_FIREBASE_*` web configuration, `NEXT_PUBLIC_APP_URL` to the public web URL, and the restricted `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`. Redeploy after changing any `NEXT_PUBLIC_*` value.
+2. In Cloud Run, set `COURTMATE_ALLOWED_ORIGINS` to the exact production web origin, plus any required preview origins. Configure `GOOGLE_CLOUD_PROJECT`, Firestore access, Firebase Admin credentials, and server-only keys such as `GEMINI_API_KEY` and `GOOGLE_MAPS_API_KEY` as secrets.
+3. Verify `GET /health` on the API, sign in with Google on a real mobile browser, create and request a game, and confirm the Explore map loads with the production browser key.
+4. Run `npm run lint`, `npm run typecheck`, `npm run build`, and `python -m pytest -q` before a production deploy.
+
 ## Google sign-in setup
 
 Firebase Authentication Google sign-in is used for identity; the backend verifies the Firebase ID token before reading or writing player, group, or join-request data.
@@ -159,11 +168,21 @@ COURTMATE_DEMO_RHEA_UID=YOUR_FIREBASE_AUTH_UID \
 
 Without `COURTMATE_DEMO_RHEA_UID`, Rhea is created as the isolated `demo-rhea-adhikari` player. The seed includes 15 synthetic multi-sport players, 71 sessions across 10 Bangalore areas, seven tournaments, notifications, group requests, leaderboards, completed-session Home activities, and tournament fixtures so the Profile, Home, Games, social, and tournament flows are ready for a hackathon walkthrough. It is safe to rerun because the demo IDs are stable and writes are upserts.
 
-Existing player documents created before the 0-100 CMR update are converted safely when read. To permanently rewrite those records in Firestore, run the one-time migration with Application Default Credentials:
+To add only a labelled synthetic CMR trajectory to an existing demo profile, without replacing its name, image, or preferences, run:
+
+```bash
+GOOGLE_CLOUD_PROJECT=mttn-portal \
+  .venv/bin/python -m backend.seed_profile_trajectory \
+  --player-id YOUR_FIREBASE_UID --sport badminton --games 8
+```
+
+This utility is for demo profiles only. It marks the rating source as `synthetic` and creates 3–12 representative historical points for the profile graph.
+
+Existing player documents created on historic CMR scales are converted safely when read. To permanently rewrite those records in Firestore, run the one-time migration with Application Default Credentials:
 
 ```bash
 COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
-  python -m backend.migrate_cmr_to_100
+  python -m backend.migrate_cmr_to_10
 ```
 
 Start the API and website in separate terminals:
