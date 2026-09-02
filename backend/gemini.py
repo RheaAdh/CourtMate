@@ -245,7 +245,7 @@ Parsed intent: {intent.model_dump(mode='json')}
 Verified records: {records}
 """
         try:
-            response = self._client.models.generate_content(model=self.model, contents=prompt)
+            response = self._client.models.generate_content(model=self.model, contents=prompt, config={"max_output_tokens": 120})
             answer = response.text.strip()
             return answer or fallback
         except Exception as error:
@@ -255,21 +255,15 @@ Verified records: {records}
     def general_sports_answer(self, query: str) -> str:
         """Answer general sports and racket sports questions like normal Gemini."""
         if self._client:
-            prompt = f"""You are CourtMate's expert, friendly sports and racket-sports AI concierge.
-Answer the user's question with deep, structured, helpful sports knowledge.
-Cover rules, technique, strategy, footwork, equipment selection, scoring, differences, and drills whenever applicable.
-Provide clear Markdown with:
-1. A direct, informative opening explanation.
-2. Section headers with `###` where helpful.
-3. 2-5 concise, actionable bullet points.
-4. A practical "Pro Tip" at the end.
-
-Keep the tone encouraging, modern, and expert. Avoid filler or medical diagnosis.
+            prompt = f"""You are CourtMate's concise sports concierge.
+Answer the user's question accurately and practically in no more than 80 words.
+Use one short paragraph or at most 3 bullets. Give only the most useful answer; do not add sections, repetition, greetings, or a pro tip unless it is essential.
+Keep the tone encouraging and avoid medical diagnosis.
 
 User Question: {query}
 """
             try:
-                response = self._client.models.generate_content(model=self.model, contents=prompt)
+                response = self._client.models.generate_content(model=self.model, contents=prompt, config={"max_output_tokens": 120})
                 answer = response.text.strip()
                 if answer:
                     return answer
@@ -524,13 +518,13 @@ This screenshot is being attached to a completed racket-sport game."""
             return f"Your strongest current signal is {sport.replace('_', ' ').title()} at {rating:.2f}/10 CMR across {games} game{'' if games == 1 else 's'}.{evidence} Ask about a specific sport, rating trend, or wearable metric for a closer read."
 
         prompt = f"""You are CourtMate's private performance coach for racket-sport players.
-Answer the user's question using only the stored context below. Discuss CMR trends, completed games, consistency, and clearly extracted wearable metrics. Do not invent scores, medical advice, or metrics. Explain when the data is too limited. Keep the answer concise, warm, and actionable.
+Answer the user's question using only the stored context below. Discuss CMR trends, completed games, consistency, and clearly extracted wearable metrics. Do not invent scores, medical advice, or metrics. Explain when the data is too limited. Keep the answer to 2-4 short sentences, warm, and actionable.
 If the request is unrelated to racket-sport performance, say you can only discuss the player's CourtMate history and uploaded wearable activity.
 
 User question: {query}
 Stored player context: {context}
 """
-        response = self._client.models.generate_content(model=self.model, contents=prompt)
+        response = self._client.models.generate_content(model=self.model, contents=prompt, config={"max_output_tokens": 140})
         answer = response.text.strip()
         if not answer:
             raise RuntimeError("Gemini returned an empty performance answer")
