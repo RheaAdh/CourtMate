@@ -447,7 +447,7 @@ def social_feed(feed: str = "all", sport: Sport | None = None, player: Player = 
             continue
         if feed == "personal" and post.player_id != player.id:
             continue
-        if feed == "following" and post.player_id not in {*following_ids, player.id}:
+        if feed == "following" and post.player_id not in following_ids:
             continue
         if sport and post.sport != sport:
             continue
@@ -532,6 +532,14 @@ def create_social_post(request: SocialPostCreateRequest, player: Player = Depend
     ))
     _clear_social_feed_cache()
     return _social_post_view(post, player.id)
+
+
+@app.delete("/v1/social/posts/{post_id}")
+def delete_social_post(post_id: str, player: Player = Depends(get_current_player)) -> dict[str, bool]:
+    if not repository.delete_social_post(post_id, player.id):
+        raise HTTPException(status_code=404, detail="Social post not found")
+    _clear_social_feed_cache()
+    return {"deleted": True}
 
 
 @app.post("/v1/social/posts/{post_id}/like", response_model=SocialPostView)
@@ -980,6 +988,7 @@ def _session_leaderboard(session: Session, players_by_id: dict[str, Player]) -> 
 def _social_post_view(post: SocialPost, viewer_id: str, session: Session | None = None, players_by_id: dict[str, Player] | None = None) -> SocialPostView:
     session = session if session is not None else repository.get_session(post.session_id) if post.session_id else None
     players_by_id = players_by_id if players_by_id is not None else {candidate.id: candidate for candidate in repository.list_players()} if session else {}
+    post_player = players_by_id.get(post.player_id)
     return SocialPostView(
         id=post.id,
         player_id=post.player_id,
@@ -990,6 +999,8 @@ def _social_post_view(post: SocialPost, viewer_id: str, session: Session | None 
         session_name=session.group_name if session else None,
         session_date=session.session_date if session else None,
         session_area=session.area if session else None,
+        player_cmr=_session_cmr_rating(post_player, session.sport) if post_player and session else None,
+        player_cmr_delta=_session_cmr_delta(post_player, session) if post_player and session else None,
         caption=post.caption,
         media_url=post.media_url,
         media_type=post.media_type,
@@ -1899,7 +1910,16 @@ def my_activity(player: Player = Depends(get_current_player)) -> MyActivityRespo
     player_sessions = [session for session in sessions if player.id in session.confirmed_player_ids]
     games = [session for session in player_sessions if session.session_date >= _local_today() and session.status not in {"awaiting_feedback", "completed", "cancelled"}]
     games.sort(key=lambda session: (session.session_date, session.start_time))
-    awaiting_feedback = [session for session in player_sessions if session.status == "awaiting_feedback"]
+    submitted_feedback_session_ids = {
+        item.session_id
+        for item in repository.list_feedback()
+        if item.player_id == player.id
+    }
+    awaiting_feedback = [
+        session
+        for session in player_sessions
+        if session.status == "awaiting_feedback" and session.id not in submitted_feedback_session_ids
+    ]
     awaiting_feedback.sort(key=lambda session: (session.session_date, session.start_time), reverse=True)
     past_games = []
     for session in player_sessions:
@@ -2802,6 +2822,7 @@ def feedback(session_id: str, request: FeedbackRequest, background_tasks: Backgr
                     raise HTTPException(status_code=422, detail="A player can only be on one team")
                 seen_team_players.add(player_id)
     saved = repository.save_feedback(Feedback(session_id=session_id, created_at=datetime.now(timezone.utc), player_id=player.id, match_quality=request.match_quality, fun=request.fun, fairness=request.fairness, would_return=request.would_return, ratings=ratings, teams=request.teams))
+    _clear_read_view_cache()
     if session.status == "awaiting_feedback" and _all_participants_submitted_feedback(session):
         completed = session.model_copy(update={
             "status": "completed",

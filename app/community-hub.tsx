@@ -509,6 +509,7 @@ export function CommunityHub({
   const [visibilityFilter, setVisibilityFilter] = useState<MapVisibilityFilter>("all");
   const [mapRefresh, setMapRefresh] = useState(1);
   const [hasSearched, setHasSearched] = useState(true);
+  const [mapLoaded, setMapLoaded] = useState(false);
 
   const [densityPoints, setDensityPoints] = useState<DensityPoint[]>([]);
   const [densityLoading, setDensityLoading] = useState(false);
@@ -559,6 +560,7 @@ export function CommunityHub({
 
   useEffect(() => {
     let cancelled = false;
+    setMapLoaded(false);
     setDensityLoading(true);
     setDensityError("");
 
@@ -621,6 +623,7 @@ export function CommunityHub({
           setMapCommunities(payload.community_activity || []);
           setMapClusters(payload.game_clusters || []);
           setNearbyGamesState(payload.nearby_games || []);
+          setMapLoaded(true);
           setSelectedPoint(null);
           setSelectedGameState(null);
           setSelectedMapArea(null);
@@ -634,6 +637,7 @@ export function CommunityHub({
           setMapCommunities([]);
           setMapClusters([]);
           setNearbyGamesState([]);
+          setMapLoaded(true);
         }
       })
       .finally(() => {
@@ -646,6 +650,7 @@ export function CommunityHub({
   }, [apiUrl, apiScope, isGuest, mapQuery, mapRefresh]);
 
   const center = mapQuery.location;
+  const noGamesFound = hasSearched && mapLoaded && !densityLoading && !densityError && nearbyGamesState.length === 0;
 
   const isRequested = (sessionId: string) => requestedSessionIds.includes(sessionId);
   const isJoined = (sessionId: string) => joinedSessionIds.includes(sessionId);
@@ -995,6 +1000,12 @@ export function CommunityHub({
                   {mapQuery.radiusKm} km radius
                 </text>
               </svg>
+              {noGamesFound && (
+                <div className="density-no-results" role="status">
+                  <strong>No games found</strong>
+                  <span>Try another sport, area, or radius.</span>
+                </div>
+              )}
             </div>
 
             {!isGuest && mapControls}

@@ -40,6 +40,7 @@ class Repository(Protocol):
     def save_social_post(self, post: SocialPost) -> SocialPost: ...
     def get_social_post(self, post_id: str) -> SocialPost | None: ...
     def list_social_posts(self) -> list[SocialPost]: ...
+    def delete_social_post(self, post_id: str, player_id: str) -> bool: ...
     def toggle_social_like(self, post_id: str, player_id: str) -> SocialPost | None: ...
     def save_social_comment(self, comment: SocialComment) -> SocialComment: ...
     def list_social_comments(self, post_id: str) -> list[SocialComment]: ...
@@ -152,6 +153,18 @@ class InMemoryRepository:
 
     def list_social_posts(self) -> list[SocialPost]:
         return sorted(self.social_posts.values(), key=lambda post: post.created_at, reverse=True)
+
+    def delete_social_post(self, post_id: str, player_id: str) -> bool:
+        post = self.social_posts.get(post_id)
+        if not post or post.player_id != player_id:
+            return False
+        del self.social_posts[post_id]
+        self.social_comments = {
+            comment_id: comment
+            for comment_id, comment in self.social_comments.items()
+            if comment.post_id != post_id
+        }
+        return True
 
     def toggle_social_like(self, post_id: str, player_id: str) -> SocialPost | None:
         post = self.social_posts.get(post_id)
@@ -385,6 +398,20 @@ class FirestoreRepository:
     def list_social_posts(self) -> list[SocialPost]:
         documents = self.client.collection("social_posts").limit(100).stream()
         return sorted((self._as_social_post(document) for document in documents), key=lambda post: post.created_at, reverse=True)
+
+    def delete_social_post(self, post_id: str, player_id: str) -> bool:
+        reference = self.client.collection("social_posts").document(post_id)
+        document = reference.get()
+        if not document.exists:
+            return False
+        post = self._as_social_post(document)
+        if post.player_id != player_id:
+            return False
+        reference.delete()
+        comments = self.client.collection("social_comments").where(filter=self._FieldFilter("post_id", "==", post_id)).limit(100).stream()
+        for comment in comments:
+            comment.reference.delete()
+        return True
 
     def toggle_social_like(self, post_id: str, player_id: str) -> SocialPost | None:
         reference = self.client.collection("social_posts").document(post_id)

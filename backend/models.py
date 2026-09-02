@@ -807,6 +807,8 @@ class SocialPostView(BaseModel):
     session_name: str | None = None
     session_date: date_type | None = None
     session_area: str | None = None
+    player_cmr: float | None = Field(default=None, ge=1, le=10)
+    player_cmr_delta: float | None = None
     caption: str
     media_url: str | None = None
     media_type: Literal["image", "video"] | None = None

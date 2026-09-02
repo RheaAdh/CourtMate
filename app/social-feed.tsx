@@ -15,6 +15,8 @@ type SocialPost = {
   session_name?: string | null;
   session_date?: string | null;
   session_area?: string | null;
+  player_cmr?: number | null;
+  player_cmr_delta?: number | null;
   caption: string;
   media_url?: string | null;
   media_type?: "image" | "video" | null;
@@ -125,14 +127,24 @@ function relativeTime(value: string) {
   return `${days}d ago`;
 }
 
+function postDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return relativeTime(value);
+  return new Intl.DateTimeFormat("en-IN", { weekday: "long", month: "short", day: "numeric", year: "numeric" }).format(date);
+}
+
 function Avatar({ name, imageUrl, large = false }: { name: string; imageUrl?: string | null; large?: boolean }) {
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => setImageFailed(false), [imageUrl]);
   return <span className={`social-avatar ${large ? "large" : ""}`}>{imageUrl && !imageFailed ? <img src={imageUrl} alt="" onError={() => setImageFailed(true)} /> : initials(name)}</span>;
 }
 
-function FireIcon() {
-  return <svg className="social-fire-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.4 2.5c.4 3.5-1.8 4.8-3.1 6.7-.8 1.1-.9 2.2-.5 3.2.4-1 1.2-1.8 2.3-2.4-.2 2.3.8 3.1 1.9 4.1.8.7 1.3 1.5 1.3 2.5 0 .5-.1.9-.3 1.3 1.9-.8 3.2-2.6 3.2-4.8 0-1.3-.5-2.7-1.6-4.2 3.1 1.9 4.8 4.5 4.8 7.4 0 4.3-3.5 7.5-8 7.5s-8-3.1-8-7.5c0-3.8 2.4-6.8 6.6-9.2-.1 1.4.2 2.4.8 3.1.7-2.1 1.3-4.4.6-7.7Z" fill="currentColor" /></svg>;
+function LikeIcon() {
+  return <svg className="social-like-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.6 10.2H4.2v9.3h3.4M7.6 19.5h8.7a2.1 2.1 0 0 0 2-1.5l1.5-5.4a2.1 2.1 0 0 0-2-2.7h-4l.5-3.3a2.4 2.4 0 0 0-2.4-2.8L7.6 10.2v9.3Z" /></svg>;
+}
+
+function MoreIcon() {
+  return <svg className="social-post-more-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none" /></svg>;
 }
 
 function CommentIcon() {
@@ -164,7 +176,7 @@ function SocialPostEngagement({ post, currentUserName, currentProfileImage, comm
 }) {
   return <>
     <div className="social-post-actions">
-      <button type="button" className={post.liked_by_me ? "fire-active" : ""} onClick={() => onFire(post)} disabled={fireBusy} aria-pressed={post.liked_by_me} aria-label={post.liked_by_me ? "Remove fire" : "Fire this post"} title={post.liked_by_me ? "Remove fire" : "Fire this post"}><FireIcon />{post.like_count > 0 && <b>{post.like_count}</b>}</button>
+      <button type="button" className={post.liked_by_me ? "fire-active" : ""} onClick={() => onFire(post)} disabled={fireBusy} aria-pressed={post.liked_by_me} aria-label={post.liked_by_me ? "Unlike this post" : "Like this post"} title={post.liked_by_me ? "Unlike" : "Like"}><LikeIcon />{post.like_count > 0 && <b>{post.like_count}</b>}</button>
       <button type="button" onClick={() => onFocusComments(post.id)} aria-label={`${post.comment_count} comments`} title="Comments"><CommentIcon />{post.comment_count > 0 && <b>{post.comment_count}</b>}</button>
       <button type="button" onClick={() => onShare(post)} disabled={shareBusy} aria-label={shareLabel} title={shareLabel}><ShareIcon />{post.share_count > 0 && <b>{post.share_count}</b>}</button>
     </div>
@@ -198,19 +210,23 @@ function SessionActivityCard({ post, currentUserName, currentProfileImage, comme
   </article>;
 }
 
-function PlayerPostCard({ post, currentUserName, currentProfileImage, comments, commentDraft, fireBusy, commentsBusy, commentBusy, shareBusy, onFire, onViewProfile, onShare, onLoadComments, onFocusComments, onCommentDraftChange, onAddComment }: { post: SocialPost; currentUserName: string; currentProfileImage?: string | null; comments?: SocialComment[]; commentDraft: string; fireBusy: boolean; commentsBusy: boolean; commentBusy: boolean; shareBusy: boolean; onFire: (post: SocialPost) => void; onViewProfile: (playerId: string) => void; onShare: (post: SocialPost) => void; onLoadComments: (postId: string) => void; onFocusComments: (postId: string) => void; onCommentDraftChange: (postId: string, value: string) => void; onAddComment: (event: FormEvent, postId: string) => void }) {
+function PlayerPostCard({ post, currentUserName, currentProfileImage, comments, commentDraft, fireBusy, commentsBusy, commentBusy, shareBusy, canDelete, onDelete, onFire, onViewProfile, onShare, onLoadComments, onFocusComments, onCommentDraftChange, onAddComment }: { post: SocialPost; currentUserName: string; currentProfileImage?: string | null; comments?: SocialComment[]; commentDraft: string; fireBusy: boolean; commentsBusy: boolean; commentBusy: boolean; shareBusy: boolean; canDelete: boolean; onDelete: (post: SocialPost) => void; onFire: (post: SocialPost) => void; onViewProfile: (playerId: string) => void; onShare: (post: SocialPost) => void; onLoadComments: (postId: string) => void; onFocusComments: (postId: string) => void; onCommentDraftChange: (postId: string, value: string) => void; onAddComment: (event: FormEvent, postId: string) => void }) {
   const [photoIndex, setPhotoIndex] = useState(0);
+  const [menuOpen, setMenuOpen] = useState(false);
   const mediaUrls = post.media_urls?.filter(Boolean).length ? post.media_urls.filter(Boolean) : post.media_url ? [post.media_url] : [];
 
   return <article className="social-post-card social-player-post-card" id={`social-post-${post.id}`}>
-    <header className="social-post-header"><button type="button" className="social-profile-trigger" onClick={() => onViewProfile(post.player_id)} aria-label={`View ${post.player_display_name}'s profile`}><Avatar name={post.player_display_name} imageUrl={post.profile_image_url} large /><span><strong>{post.player_display_name}</strong><small>{relativeTime(post.created_at)} · {sportLabel(post.sport)}</small></span></button><span className="social-post-sport">{sportLabel(post.sport)}</span></header>
-    {post.session_name && <div className="social-player-post-game"><span>FROM GAME</span><strong>{post.session_name}</strong><small>{post.session_date} · {post.session_area}</small></div>}
-    <p className="social-player-post-caption">{post.caption}</p>
+    <header className="social-post-header"><button type="button" className="social-profile-trigger" onClick={() => onViewProfile(post.player_id)} aria-label={`View ${post.player_display_name}'s profile`}><Avatar name={post.player_display_name} imageUrl={post.profile_image_url} large /><span><strong>{post.player_display_name}{post.player_cmr != null && <em className={`social-player-post-cmr ${post.player_cmr_delta != null && post.player_cmr_delta < 0 ? "negative" : ""}`}>{post.player_cmr.toFixed(1)} CMR{post.player_cmr_delta != null && ` ${post.player_cmr_delta >= 0 ? "+" : ""}${post.player_cmr_delta.toFixed(1)}`}</em>}</strong><small>{postDate(post.created_at)}</small></span></button>{canDelete && <><button type="button" className="social-post-more" onClick={() => setMenuOpen((open) => !open)} aria-label="Post options" aria-expanded={menuOpen}><MoreIcon /></button>{menuOpen && <div className="social-post-menu" role="menu"><button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onDelete(post); }}>Delete post</button></div>}</>}</header>
+    <div className="social-player-post-content">
+      {post.session_name && <span className="social-player-post-source">From game</span>}
+      <h2 className="social-player-post-caption">{post.caption}</h2>
+      <dl className="social-player-post-stats"><div><dt>Sport</dt><dd>{sportLabel(post.sport)}</dd></div>{post.session_name && <div><dt>Game</dt><dd>{post.session_name}</dd></div>}</dl>
+    </div>
     {mediaUrls.length > 0 && <div className="social-post-media social-player-post-media">
       {/* Post media can be Firebase URLs or local data URLs. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={mediaUrls[photoIndex % mediaUrls.length]} alt={`Photo ${photoIndex + 1} from ${post.player_display_name}'s game`} />
-      {mediaUrls.length > 1 && <div className="social-session-carousel-controls"><button type="button" onClick={() => setPhotoIndex((index) => (index - 1 + mediaUrls.length) % mediaUrls.length)} aria-label="Previous post photo">←</button><span>{(photoIndex % mediaUrls.length) + 1} / {mediaUrls.length}</span><button type="button" onClick={() => setPhotoIndex((index) => (index + 1) % mediaUrls.length)} aria-label="Next post photo">→</button></div>}
+      {mediaUrls.length > 1 && <div className="social-post-pagination" aria-label="Post photos">{mediaUrls.map((_, index) => <button className={index === photoIndex % mediaUrls.length ? "active" : ""} type="button" key={index} onClick={() => setPhotoIndex(index)} aria-label={`Show photo ${index + 1}`} aria-pressed={index === photoIndex % mediaUrls.length} />)}</div>}
     </div>}
     <SocialPostEngagement post={post} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments} commentDraft={commentDraft} fireBusy={fireBusy} commentsBusy={commentsBusy} commentBusy={commentBusy} shareBusy={shareBusy} shareLabel="Share post" onFire={onFire} onShare={onShare} onFocusComments={onFocusComments} onLoadComments={onLoadComments} onCommentDraftChange={onCommentDraftChange} onAddComment={onAddComment} onViewProfile={onViewProfile} />
   </article>;
@@ -530,6 +546,27 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
     }
   }
 
+  async function deletePost(post: SocialPost) {
+    if (!window.confirm("Delete this post? This cannot be undone.")) return;
+    try {
+      setBusyAction(`delete-${post.id}`);
+      const response = await authorizedFetch(`${apiUrl}/v1/social/posts/${post.id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("Delete failed");
+      setPosts((current) => current.filter((item) => item.id !== post.id));
+      setComments((current) => {
+        const next = { ...current };
+        delete next[post.id];
+        return next;
+      });
+      clearFeedCache();
+      onToast("Post deleted");
+    } catch {
+      onToast("Could not delete this post");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
   async function loadComments(postId: string) {
     if (comments[postId]) return;
     try {
@@ -656,7 +693,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       {loading && <div className="social-feed-loader"><TennisBallLoader label="Rallying..." /></div>}
       {!loading && loadError && <div className="social-feed-error" role="alert"><strong>Social is taking a breather.</strong><p>We couldn&apos;t load the latest court activity.</p><button type="button" onClick={() => void loadFeed(feedFilter, true)}>Try again <span>↗</span></button></div>}
       {!loading && !loadError && posts.length === 0 && <div className="social-empty"><strong>{feedFilter === "personal" ? "Share a completed game when you have a moment worth keeping." : feedFilter === "following" ? "Follow players to build your Rally Circle." : "Player stories from completed games will appear here."}</strong><p>Every post is written and shared by its player.</p></div>}
-      {!loading && posts.map((post) => post.activity_type === "session" ? <SessionActivityCard key={post.id} post={post} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments[post.id]} commentDraft={commentDrafts[post.id] ?? ""} fireBusy={busyAction === `fire-${post.id}`} commentsBusy={busyAction === `comments-${post.id}`} commentBusy={busyAction === `comment-${post.id}`} shareBusy={busyAction === `share-${post.id}`} onFire={(socialPost) => void toggleFire(socialPost)} onViewProfile={onViewProfile} onShare={(sessionPost) => void shareSessionLeaderboard(sessionPost)} onLoadComments={(postId) => void loadComments(postId)} onFocusComments={focusComments} onCommentDraftChange={(postId, value) => setCommentDrafts((current) => ({ ...current, [postId]: value }))} onAddComment={(event, postId) => void addComment(event, postId)} /> : <PlayerPostCard key={post.id} post={post} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments[post.id]} commentDraft={commentDrafts[post.id] ?? ""} fireBusy={busyAction === `fire-${post.id}`} commentsBusy={busyAction === `comments-${post.id}`} commentBusy={busyAction === `comment-${post.id}`} shareBusy={busyAction === `share-${post.id}`} onFire={(socialPost) => void toggleFire(socialPost)} onViewProfile={onViewProfile} onShare={(socialPost) => void sharePost(socialPost)} onLoadComments={(postId) => void loadComments(postId)} onFocusComments={focusComments} onCommentDraftChange={(postId, value) => setCommentDrafts((current) => ({ ...current, [postId]: value }))} onAddComment={(event, postId) => void addComment(event, postId)} />)}
+      {!loading && posts.map((post) => post.activity_type === "session" ? <SessionActivityCard key={post.id} post={post} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments[post.id]} commentDraft={commentDrafts[post.id] ?? ""} fireBusy={busyAction === `fire-${post.id}`} commentsBusy={busyAction === `comments-${post.id}`} commentBusy={busyAction === `comment-${post.id}`} shareBusy={busyAction === `share-${post.id}`} onFire={(socialPost) => void toggleFire(socialPost)} onViewProfile={onViewProfile} onShare={(sessionPost) => void shareSessionLeaderboard(sessionPost)} onLoadComments={(postId) => void loadComments(postId)} onFocusComments={focusComments} onCommentDraftChange={(postId, value) => setCommentDrafts((current) => ({ ...current, [postId]: value }))} onAddComment={(event, postId) => void addComment(event, postId)} /> : <PlayerPostCard key={post.id} post={post} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments[post.id]} commentDraft={commentDrafts[post.id] ?? ""} fireBusy={busyAction === `fire-${post.id}`} commentsBusy={busyAction === `comments-${post.id}`} commentBusy={busyAction === `comment-${post.id}`} shareBusy={busyAction === `share-${post.id}`} canDelete={post.player_id === currentUserId} onDelete={(socialPost) => void deletePost(socialPost)} onFire={(socialPost) => void toggleFire(socialPost)} onViewProfile={onViewProfile} onShare={(socialPost) => void sharePost(socialPost)} onLoadComments={(postId) => void loadComments(postId)} onFocusComments={focusComments} onCommentDraftChange={(postId, value) => setCommentDrafts((current) => ({ ...current, [postId]: value }))} onAddComment={(event, postId) => void addComment(event, postId)} />)}
     </div>
   </section>;
 }

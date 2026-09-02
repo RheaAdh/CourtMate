@@ -29,6 +29,7 @@ export function PostGameFeedbackPanel({ sessionId, sport, ratingMode = "casual",
   ));
   const [matchQuality, setMatchQuality] = useState("5");
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   async function submitFeedback(event: FormEvent) {
     event.preventDefault();
@@ -51,6 +52,7 @@ export function PostGameFeedbackPanel({ sessionId, sport, ratingMode = "casual",
         }),
       });
       if (!response.ok) throw new Error("Feedback failed");
+      setSaved(true);
       onToast(ratingMode === "competitive" ? "Private feedback saved. The confirmed score decides CMR." : "Private feedback saved. This casual game did not change CMR.");
       onSaved();
     } catch {
@@ -61,9 +63,9 @@ export function PostGameFeedbackPanel({ sessionId, sport, ratingMode = "casual",
   }
 
   return <form className="workspace-panel feedback-panel feedback-panel-new" onSubmit={submitFeedback}>
-    <div className="workspace-panel-heading"><div><span className="kicker">YOUR PRIVATE FEEDBACK</span><h3 id="post-game-feedback-title">Rate every player</h3><p className="feedback-intro">Only you can see the ratings you submit. Rate every other confirmed player to help keep future games fair and trusted. {ratingMode === "competitive" ? "CMR only changes from a confirmed final score." : "This casual game does not change CMR."}</p>{mandatory && <p className="feedback-required-note">Required to finish your post-game feedback.</p>}</div></div>
-    <div className="feedback-fields feedback-quality-field"><label><span>Game match quality</span><select aria-label="Rate game match quality" value={matchQuality} onChange={(event) => setMatchQuality(event.target.value)}>{Array.from({ length: 5 }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value} / 5{value === 5 ? " · Excellent" : value === 1 ? " · Poor" : ""}</option>)}</select></label></div>
-    <fieldset className="player-rating-fields"><legend>Rate every other player</legend><div className="player-rating-list">{members.filter((member) => member.id !== currentUserId).map((member) => <label className="player-rating-row" key={member.id}><span><strong>{member.display_name}</strong><small>{member.cmr_ratings?.[sport] != null ? `${member.cmr_ratings[sport].toFixed(1)} CMR` : "CMR building"}</small></span><select required aria-label={`Rate playing with ${member.display_name} out of 10`} value={playerRatings[member.id] ?? ""} onChange={(event) => setPlayerRatings((ratings) => ({ ...ratings, [member.id]: event.target.value }))}><option value="" disabled>Experience /10</option>{Array.from({ length: 10 }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value} / 10</option>)}</select></label>)}</div></fieldset>
-    <button className="dark-button" type="submit" disabled={saving}>{saving ? "Saving..." : "Save feedback"} <span>→</span></button>
+    <div className="workspace-panel-heading"><div><span className="kicker">PRIVATE FEEDBACK</span><h3 id="post-game-feedback-title">Rate your lineup</h3><p className="feedback-intro">Rate each player after the game. Only you can see your ratings.</p>{mandatory && <p className="feedback-required-note">Required before you leave this game.</p>}</div></div>
+    <fieldset className="player-rating-fields"><legend>Players</legend><div className="player-rating-list">{members.filter((member) => member.id !== currentUserId).map((member) => <label className="player-rating-row" key={member.id}><span><strong>{member.display_name}</strong><small>{playerRatings[member.id] ? `Rating ${playerRatings[member.id]} / 10` : member.cmr_ratings?.[sport] != null ? `Current CMR ${member.cmr_ratings[sport].toFixed(1)}` : "CMR building"}</small></span><select required aria-label={`Rate playing with ${member.display_name} out of 10`} value={playerRatings[member.id] ?? ""} onChange={(event) => setPlayerRatings((ratings) => ({ ...ratings, [member.id]: event.target.value }))}><option value="" disabled>Rate /10</option>{Array.from({ length: 10 }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value} / 10</option>)}</select></label>)}</div></fieldset>
+    <fieldset className="feedback-quality-field"><legend>How was the game?</legend><div className="feedback-quality-control"><div className="feedback-quality-rating" role="radiogroup" aria-label="Rate the game from 1 to 5">{Array.from({ length: 5 }, (_, index) => index + 1).map((value) => <button type="button" key={value} className={Number(matchQuality) >= value ? "selected" : ""} onClick={() => setMatchQuality(String(value))} role="radio" aria-checked={Number(matchQuality) === value} aria-label={`${value} out of 5`} aria-pressed={Number(matchQuality) === value} title={`${value} out of 5`}>★</button>)}</div><strong>{matchQuality} / 5</strong></div></fieldset>
+    <button className="dark-button" type="submit" disabled={saving || saved}>{saving ? "Saving..." : saved ? "Feedback saved" : "Save feedback"} <span>{saved ? "✓" : "→"}</span></button>
   </form>;
 }

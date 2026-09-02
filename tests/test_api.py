@@ -710,6 +710,23 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(created.json()["player_id"], "p2")
         self.assertEqual(created.json()["session_id"], "s1")
 
+    def test_only_the_post_owner_can_delete_a_social_post(self):
+        created = self.client.post(
+            "/v1/social/posts",
+            json={"caption": "A post I may remove.", "sport": "pickleball"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        post_id = created.json()["id"]
+
+        forbidden = self.client.delete(f"/v1/social/posts/{post_id}", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(forbidden.status_code, 404)
+        self.assertIsNotNone(repository.get_social_post(post_id))
+
+        deleted = self.client.delete(f"/v1/social/posts/{post_id}", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(deleted.json(), {"deleted": True})
+        self.assertIsNone(repository.get_social_post(post_id))
+
     def test_social_post_server_error_keeps_cors_headers(self):
         client = TestClient(app, raise_server_exceptions=False)
         with patch.object(repository, "save_social_post", side_effect=RuntimeError("storage unavailable")):
@@ -769,6 +786,29 @@ class ApiFlowTests(unittest.TestCase):
         posts = feed.json()["posts"]
         self.assertEqual([post["id"] for post in posts], [created.json()["id"]])
         self.assertTrue(all(post["player_id"] == "p2" and post["activity_type"] == "post" for post in posts))
+
+    def test_following_feed_excludes_my_own_posts(self):
+        self.client.post(
+            "/v1/social/posts",
+            json={"caption": "My own post", "sport": "pickleball"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        other_post = self.client.post(
+            "/v1/social/posts",
+            json={"caption": "A followed player's post", "sport": "pickleball"},
+            headers={"X-CourtMate-Player-ID": "p2"},
+        )
+        repository.save_follow(FollowRecord(
+            id="p1_p2_accepted",
+            follower_id="p1",
+            following_id="p2",
+            status="accepted",
+            created_at=datetime.now(local_timezone),
+        ))
+
+        feed = self.client.get("/v1/social/feed?feed=following", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(feed.status_code, 200)
+        self.assertEqual([post["id"] for post in feed.json()["posts"]], [other_post.json()["id"]])
 
     def test_completed_game_is_not_posted_until_a_player_chooses_to_share(self):
         repository.save_session(
@@ -880,6 +920,27 @@ class ApiFlowTests(unittest.TestCase):
 
         completer_notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": "p2"}).json()["notifications"]
         self.assertTrue(any(item["kind"] == "game_completed" and item["session_id"] == "s1" for item in completer_notifications))
+
+    def test_submitted_feedback_is_removed_from_that_players_awaiting_list(self):
+        completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(completed.status_code, 200)
+
+        before = self.client.get("/v1/me/activity", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertIn("s1", [session["id"] for session in before.json()["awaiting_feedback"]])
+
+        submitted = self.client.post(
+            "/v1/sessions/s1/feedback",
+            json={"fun": 5, "fairness": 5, "would_return": True, "ratings": [
+                {"player_id": "p1", "rating_10": 8},
+                {"player_id": "p3", "rating_10": 7},
+                {"player_id": "p6", "rating_10": 6},
+            ]},
+            headers={"X-CourtMate-Player-ID": "p2"},
+        )
+        self.assertEqual(submitted.status_code, 200)
+
+        after = self.client.get("/v1/me/activity", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertNotIn("s1", [session["id"] for session in after.json()["awaiting_feedback"]])
 
     def test_feedback_requires_a_game_to_be_marked_done(self):
         response = self.client.post(
