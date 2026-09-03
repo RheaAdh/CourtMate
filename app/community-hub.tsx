@@ -718,7 +718,6 @@ export function CommunityHub({
     try {
       const response = await authorizedFetchRef.current(`${apiUrl}/v1/sessions/${game.id}/join`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
       });
       if (!response.ok) {
         const errorPayload = await response.json().catch(() => ({})) as { detail?: string };

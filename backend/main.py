@@ -20,7 +20,7 @@ from .auth import AuthIdentity, get_current_identity
 from .facilities import BENGALURU_FACILITIES
 from .gemini import GeminiIntentParser
 from .matching import distance_km, search_sessions, suggest_replacements
-from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, BookingUpdateRequest, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CommunityActivityPoint, CommunityJoinRequest, CommunityLeaderboardEntry, CommunityLeaderboardResponse, CommunityMapResponse, CommunityMembership, CommunityMembershipResponse, CreateGroupRequest, CreatedGroupResponse, ExploreSessionsResponse, Facility, FacilityListResponse, Feedback, FeedbackRequest, FollowRecord, GameCluster, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MapNearbyGame, MapSport, MatchTeam, MyActivityResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, PlayerDensityPoint, PlayerDensityResponse, PlayerRating, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, SportyAvatarRequest, SportyAvatarResponse, TimePollOption, TimePollVoteRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
+from .models import ActivityProof, ActivityProofRequest, ActivityProofsResponse, AppNotification, BookingUpdateRequest, CMRHistoryPoint, ChatPost, ChatPostRequest, ChatResponse, ChatResultDecisionRequest, CommunityActivityPoint, CommunityJoinRequest, CommunityLeaderboardEntry, CommunityLeaderboardResponse, CommunityMapResponse, CommunityMembership, CommunityMembershipResponse, CreateGroupRequest, CreatedGroupResponse, ExploreSessionsResponse, Facility, FacilityListResponse, Feedback, FeedbackRequest, FollowRecord, GameCluster, GroupProposal, GroupViewResponse, IncomingRequestsResponse, JoinRequest, JoinRequestDecisionRequest, JoinRequestView, JoinRequestsResponse, LeaderboardEntry, LeaderboardResponse, MapNearbyGame, MapSport, MatchTeam, MyActivityResponse, MyGamesResponse, MyGroupsResponse, MyRequestsResponse, NotificationsResponse, ParseRequest, PastGame, PerformanceChatRequest, PerformanceChatResponse, Player, PlayerDensityPoint, PlayerDensityResponse, PlayerRating, ProfileGameSummary, ProfileImageUpdateRequest, ProfileImageUploadRequest, ProfileImageUploadResponse, ProfileUpdateRequest, PublicPlayerProfile, PublicPlayerProfilesResponse, ReplacementResponse, RetrievalTrace, SearchIntent, SearchResponse, Session, SocialComment, SocialCommentCreateRequest, SocialCommentsResponse, SocialFeedResponse, SocialLeaderboardEntry, SocialPost, SocialPostCreateRequest, SocialPostView, SocialSessionPlayer, Sport, SportyAvatarRequest, SportyAvatarResponse, TimePollOption, TimePollVoteRequest, baseline_rating_for_sport, cmr_from_legacy_rating, rating_for_sport
 from .repository import create_repository
 from .vector_search import VectorIndexer, VectorRetriever
 
@@ -1625,17 +1625,17 @@ def search(request: ParseRequest, player: Player = Depends(get_current_player)) 
 
 
 @app.post("/v1/sessions/{session_id}/join", response_model=JoinRequest)
-def join_session(session_id: str, request: JoinRequestRequest | None = None, player: Player = Depends(get_current_player)) -> JoinRequest:
+def join_session(session_id: str, player: Player = Depends(get_current_player)) -> JoinRequest:
     session = _get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     _require_joinable_session(session)
-    if player.id in session.confirmed_player_ids:
-        raise HTTPException(status_code=409, detail="Player is already confirmed for this session")
     request_id = f"{session_id}_{player.id}"
     previous = next((candidate for candidate in repository.list_join_requests(session_id) if candidate.player_id == player.id and candidate.status in {"pending", "approved", "waitlisted"}), None)
     if previous:
-        raise HTTPException(status_code=409, detail=f"Join request is already {previous.status}")
+        return previous
+    if player.id in session.confirmed_player_ids:
+        raise HTTPException(status_code=409, detail="Player is already confirmed for this session")
     status = "pending"
     if session.visibility == "private" and session.open_slots > 0:
         session.confirmed_player_ids.append(player.id)

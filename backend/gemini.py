@@ -490,7 +490,7 @@ This screenshot is being attached to a completed racket-sport game."""
         own_history_context = bool(re.search(r"\b(my|mine|i've|i have)\b", lowered)) and bool(re.search(r"\b(last|recent|history|played|games|game|activity)\b", lowered))
         if discovery_request and not own_history_context:
             return False
-        explicit_metric = bool(re.search(r"\b(cmr|rating|ratings|stats|statistics|calories|steps|heart rate|distance|wearable|progress|trend|fitness|form)\b", lowered))
+        explicit_metric = bool(re.search(r"\b(cmr|rating|ratings|feedback|review|stats|statistics|calories|steps|heart rate|distance|wearable|progress|trend|fitness|form)\b", lowered))
         personal_history = bool(re.search(r"\b(my|mine|i've|i have)\b", lowered)) and bool(re.search(r"\b(performance|history|played|games|activity|progress|trend|form|improve|rating|stats|fitness)\b", lowered))
         return explicit_metric or personal_history
 
@@ -503,7 +503,7 @@ This screenshot is being attached to a completed racket-sport game."""
             "cmr_history": history,
             "wearable_proofs": activity_proofs[:12],
         }
-        if not self._client:
+        def fallback_answer() -> str:
             ratings = [
                 (sport, rating, player.cmr_game_counts.get(sport, 0))
                 for sport, rating in player.cmr_ratings.items()
@@ -512,10 +512,34 @@ This screenshot is being attached to a completed racket-sport game."""
                 return "CMR means CourtMate Rating. It is a sport-specific score from 1.00 to 10.00 that starts with your confirmed level and updates from confirmed competitive match results. It is a guide to progress, not a permanent label."
             if not ratings:
                 return "You do not have a CMR history yet. Play a completed racket-sport game and check in to start tracking your form."
-            sport, rating, games = max(ratings, key=lambda item: item[1])
+            requested_sport = next((
+                sport for sport, _, _ in ratings
+                if sport.replace("_", " ") in query.lower()
+            ), None)
+            sport, rating, games = next(
+                (item for item in ratings if item[0] == requested_sport),
+                max(ratings, key=lambda item: item[1]),
+            )
+            recent_points = history.get(sport, [])[-3:]
+            recent_delta = sum(float(point.get("delta") or 0) for point in recent_points)
+            if recent_points and recent_delta != 0:
+                direction = "up" if recent_delta > 0 else "down"
+                trend = f" Your recent recorded CMR movement is {direction} {abs(recent_delta):.2f}."
+            else:
+                trend = " There is not enough recent CMR movement to identify a reliable trend yet."
             proof_count = len(activity_proofs)
             evidence = f" I also have {proof_count} wearable check-in{'' if proof_count == 1 else 's'} to compare." if proof_count else ""
-            return f"Your strongest current signal is {sport.replace('_', ' ').title()} at {rating:.2f}/10 CMR across {games} game{'' if games == 1 else 's'}.{evidence} Ask about a specific sport, rating trend, or wearable metric for a closer read."
+            sport_name = sport.replace('_', ' ').title()
+            rating_copy = (
+                f"Your current {sport_name} rating is {rating:.2f}/10 CMR across {games} game{'' if games == 1 else 's'}."
+                if requested_sport
+                else f"Your strongest current signal is {sport_name} at {rating:.2f}/10 CMR across {games} game{'' if games == 1 else 's'}."
+            )
+            next_step = " Keep logging confirmed competitive results so I can give you a stronger trend analysis." if games < 3 else " Use your next confirmed games to see whether that direction continues."
+            return f"{rating_copy}{trend}{evidence}{next_step}"
+
+        if not self._client:
+            return fallback_answer()
 
         prompt = f"""You are CourtMate's private performance coach for racket-sport players.
 Answer the user's question using only the stored context below. Discuss CMR trends, completed games, consistency, and clearly extracted wearable metrics. Do not invent scores, medical advice, or metrics. Explain when the data is too limited. Keep the answer to 2-4 short sentences, warm, and actionable.
@@ -524,11 +548,15 @@ If the request is unrelated to racket-sport performance, say you can only discus
 User question: {query}
 Stored player context: {context}
 """
-        response = self._client.models.generate_content(model=self.model, contents=prompt, config={"max_output_tokens": 140})
-        answer = response.text.strip()
-        if not answer:
-            raise RuntimeError("Gemini returned an empty performance answer")
-        return answer
+        try:
+            response = self._client.models.generate_content(model=self.model, contents=prompt, config={"max_output_tokens": 140})
+            answer = response.text.strip()
+            if not answer:
+                raise RuntimeError("Gemini returned an empty performance answer")
+            return answer
+        except Exception as error:
+            logger.warning("Gemini performance coaching failed (%s); using stored CMR fallback", error)
+            return fallback_answer()
 
     def generate_sporty_avatar(self, image_bytes: bytes, mime_type: str, sport: Sport) -> list[str]:
         """Create a few sport-themed avatar options while preserving identity."""

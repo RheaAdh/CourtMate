@@ -272,6 +272,54 @@ function loadShareLogo(): Promise<HTMLImageElement | null> {
   });
 }
 
+function loadCanvasImage(source: string): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => resolve(image);
+    image.onerror = () => resolve(null);
+    image.src = source;
+  });
+}
+
+function drawCoverImage(context: CanvasRenderingContext2D, image: HTMLImageElement, x: number, y: number, width: number, height: number, radius: number) {
+  const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight);
+  const sourceWidth = width / scale;
+  const sourceHeight = height / scale;
+  const sourceX = (image.naturalWidth - sourceWidth) / 2;
+  const sourceY = (image.naturalHeight - sourceHeight) / 2;
+  context.save();
+  context.beginPath();
+  context.roundRect(x, y, width, height, radius);
+  context.clip();
+  context.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, x, y, width, height);
+  context.restore();
+}
+
+function canvasFile(canvas: HTMLCanvasElement, filename: string): Promise<File | null> {
+  return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob ? new File([blob], filename, { type: "image/png" }) : null), "image/png"));
+}
+
+function downloadShareFile(file: File) {
+  const url = URL.createObjectURL(file);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = file.name;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export async function shareImageFile(file: File, title: string, text: string, url?: string) {
+  const shareData: ShareData = { title, text, files: [file] };
+  if (url) shareData.url = url;
+  if (navigator.share && navigator.canShare?.(shareData)) {
+    await navigator.share(shareData);
+    return "shared" as const;
+  }
+  downloadShareFile(file);
+  return "downloaded" as const;
+}
+
 async function createShareCard(post: SocialPost): Promise<File | null> {
   if (typeof document === "undefined") return null;
   const canvas = document.createElement("canvas");
@@ -375,19 +423,37 @@ async function createShareCard(post: SocialPost): Promise<File | null> {
       context.textAlign = "left";
     });
   } else {
-    context.fillStyle = "#c9e86b";
-    context.beginPath();
-    context.roundRect(70, 720, 940, 265, 28);
-    context.fill();
-    context.fillStyle = "#192321";
-    context.font = "800 28px Manrope, sans-serif";
-    context.fillText(post.player_display_name, 106, 780);
-    context.fillStyle = "#718f12";
-    context.font = "700 22px 'DM Mono', monospace";
-    context.fillText(sportLabel(post.sport).toUpperCase(), 106, 824);
-    context.fillStyle = "#192321";
-    context.font = "500 25px Manrope, sans-serif";
-    wrapCanvasText(context, post.caption, 106, 890, 850, 35, 3);
+    const mediaUrl = post.media_urls?.find(Boolean) ?? post.media_url;
+    const media = mediaUrl ? await loadCanvasImage(mediaUrl) : null;
+    if (media) {
+      drawCoverImage(context, media, 70, 520, 940, 610, 28);
+      const shade = context.createLinearGradient(0, 920, 0, 1130);
+      shade.addColorStop(0, "rgba(15, 27, 24, 0)");
+      shade.addColorStop(1, "rgba(15, 27, 24, .78)");
+      context.fillStyle = shade;
+      context.beginPath();
+      context.roundRect(70, 520, 940, 610, 28);
+      context.fill();
+      context.fillStyle = "#d8f53f";
+      context.font = "800 23px 'DM Mono', monospace";
+      context.textAlign = "right";
+      context.fillText("COURTMATE", 965, 1080);
+      context.textAlign = "left";
+    } else {
+      context.fillStyle = "#c9e86b";
+      context.beginPath();
+      context.roundRect(70, 650, 940, 350, 28);
+      context.fill();
+      context.fillStyle = "#192321";
+      context.font = "800 28px Manrope, sans-serif";
+      context.fillText(post.player_display_name, 106, 720);
+      context.fillStyle = "#718f12";
+      context.font = "700 22px 'DM Mono', monospace";
+      context.fillText(sportLabel(post.sport).toUpperCase(), 106, 766);
+      context.fillStyle = "#192321";
+      context.font = "500 31px Manrope, sans-serif";
+      wrapCanvasText(context, post.caption, 106, 835, 850, 43, 4);
+    }
   }
 
   context.fillStyle = "#192321";
@@ -396,7 +462,7 @@ async function createShareCard(post: SocialPost): Promise<File | null> {
   context.textAlign = "right";
   context.fillText("COURTMATE", 1000, 1270);
   context.textAlign = "left";
-  return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob ? new File([blob], "courtmate-share.png", { type: "image/png" }) : null), "image/png"));
+  return canvasFile(canvas, "courtmate-post.png");
 }
 
 function recentStreakDays(activityByDate: Record<string, number> = {}) {
@@ -407,6 +473,119 @@ function recentStreakDays(activityByDate: Record<string, number> = {}) {
     const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
     return { key, label: date.toLocaleDateString("en-IN", { weekday: "short" }).slice(0, 1), day: date.getDate(), active: (activityByDate[key] ?? 0) > 0 };
   });
+}
+
+export async function createStreakShareCard(playerName: string, weeklyStreak: number, activityByDate: Record<string, number>): Promise<File | null> {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = 1080;
+  canvas.height = 1350;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+
+  context.fillStyle = "#10231d";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = "#d8f53f";
+  context.beginPath();
+  context.arc(980, 145, 260, 0, Math.PI * 2);
+  context.fill();
+  context.fillStyle = "#1c352c";
+  context.beginPath();
+  context.arc(70, 1240, 300, 0, Math.PI * 2);
+  context.fill();
+
+  const logo = await loadShareLogo();
+  if (logo) {
+    const logoWidth = 330;
+    const logoHeight = logoWidth * (logo.naturalHeight / logo.naturalWidth);
+    context.drawImage(logo, 70, 58, logoWidth, logoHeight);
+  } else {
+    context.fillStyle = "#ffffff";
+    context.font = "800 34px Manrope, sans-serif";
+    context.fillText("COURTMATE", 70, 100);
+  }
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const firstWeekday = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const monthPrefix = `${year}-${String(month + 1).padStart(2, "0")}-`;
+  const activeDays = Object.entries(activityByDate).filter(([key, count]) => key.startsWith(monthPrefix) && count > 0).length;
+
+  context.fillStyle = "#fbfff0";
+  context.beginPath();
+  context.roundRect(90, 245, 900, 820, 36);
+  context.fill();
+  context.fillStyle = "#718f12";
+  context.font = "700 21px 'DM Mono', monospace";
+  context.fillText("YOUR RACKET-SPORT STREAK", 145, 320);
+  context.fillStyle = "#192321";
+  context.font = "800 51px Manrope, sans-serif";
+  context.fillText(now.toLocaleDateString("en-IN", { month: "long", year: "numeric" }), 145, 390);
+  context.fillStyle = "#5f7068";
+  context.font = "500 24px Manrope, sans-serif";
+  context.fillText(playerName, 145, 435);
+
+  const metrics = [
+    { value: String(weeklyStreak), label: `WEEK${weeklyStreak === 1 ? "" : "S"}` },
+    { value: String(activeDays), label: "ACTIVE DAYS" },
+  ];
+  metrics.forEach((metric, index) => {
+    const x = 145 + index * 250;
+    context.fillStyle = "#192321";
+    context.font = "800 43px Manrope, sans-serif";
+    context.fillText(metric.value, x, 520);
+    context.fillStyle = "#718f12";
+    context.font = "700 17px 'DM Mono', monospace";
+    context.fillText(metric.label, x, 555);
+  });
+
+  const weekdays = ["S", "M", "T", "W", "T", "F", "S"];
+  const cellGap = 96;
+  weekdays.forEach((label, index) => {
+    context.fillStyle = "#7b8780";
+    context.font = "700 18px 'DM Mono', monospace";
+    context.textAlign = "center";
+    context.fillText(label, 174 + index * cellGap, 630);
+  });
+  for (let slot = 0; slot < 42; slot += 1) {
+    const day = slot - firstWeekday + 1;
+    if (day < 1 || day > daysInMonth) continue;
+    const row = Math.floor(slot / 7);
+    const column = slot % 7;
+    const key = `${monthPrefix}${String(day).padStart(2, "0")}`;
+    const active = (activityByDate[key] ?? 0) > 0;
+    const x = 174 + column * cellGap;
+    const y = 690 + row * 62;
+    context.fillStyle = active ? "#192321" : "#edf1e7";
+    context.beginPath();
+    context.arc(x, y, 22, 0, Math.PI * 2);
+    context.fill();
+    if (active) {
+      context.strokeStyle = "#d8f53f";
+      context.lineWidth = 4;
+      context.stroke();
+    }
+    context.fillStyle = active ? "#d8f53f" : "#758079";
+    context.font = "700 16px 'DM Mono', monospace";
+    context.textAlign = "center";
+    context.fillText(String(day), x, y + 6);
+  }
+  context.textAlign = "left";
+  context.fillStyle = "#596a63";
+  context.font = "500 23px Manrope, sans-serif";
+  context.fillText("Every game adds to your CourtMate story.", 145, 1010);
+
+  context.fillStyle = "#ffffff";
+  context.font = "800 48px Manrope, sans-serif";
+  context.textAlign = "center";
+  context.fillText("COURTMATE", canvas.width / 2, 1195);
+  context.fillStyle = "#d8f53f";
+  context.font = "700 20px 'DM Mono', monospace";
+  context.fillText("FIND YOUR GAME · BUILD YOUR CIRCLE", canvas.width / 2, 1240);
+  context.textAlign = "left";
+  return canvasFile(canvas, "courtmate-streak.png");
 }
 
 export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProfileImage, weeklyStreak = 0, weeklyStreakActive = false, activityByDate = {}, authorizedFetch, onToast, onViewProfile, onInvalidate, initialFilter = "all" }: SocialFeedProps & { initialFilter?: FeedFilter }) {
@@ -677,11 +856,12 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       setPosts((current) => current.map((item) => item.id === updated.id ? updated : item));
       clearFeedCache();
       onInvalidate?.(["feed"]);
-      if (navigator.share) {
-        await navigator.share({ title: `${post.player_display_name} on CourtMate`, text: post.caption, url: shareUrl });
-      } else {
+      const file = await createShareCard(post);
+      if (!file) throw new Error("Could not create the CourtMate share image");
+      const outcome = await shareImageFile(file, `${post.player_display_name} on CourtMate`, post.caption, shareUrl);
+      if (outcome === "downloaded") {
         await navigator.clipboard?.writeText(shareUrl);
-        onToast("Post link copied");
+        onToast("Branded post image downloaded and link copied");
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
@@ -696,15 +876,32 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
     const text = `${post.session_name ?? "CourtMate game"} on CourtMate`;
     try {
       setBusyAction(`share-${post.id}`);
-      if (navigator.share) {
-        await navigator.share({ title: text, text, url: shareUrl });
-      } else {
+      const file = await createShareCard(post);
+      if (!file) throw new Error("Could not create the CourtMate share image");
+      const outcome = await shareImageFile(file, text, text, shareUrl);
+      if (outcome === "downloaded") {
         await navigator.clipboard?.writeText(shareUrl);
-        onToast("Post link copied");
+        onToast("Branded leaderboard image downloaded and link copied");
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       onToast("Could not share this leaderboard");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function shareStreak() {
+    try {
+      setBusyAction("share-streak");
+      const file = await createStreakShareCard(currentUserName, weeklyStreak, activityByDate);
+      if (!file) throw new Error("Could not create the streak image");
+      const text = `${weeklyStreak}-week CourtMate streak. Keep showing up.`;
+      const outcome = await shareImageFile(file, "My CourtMate streak", text, `${window.location.origin}/home`);
+      if (outcome === "downloaded") onToast("CourtMate streak image downloaded");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      onToast(error instanceof Error ? error.message : "Could not share your streak");
     } finally {
       setBusyAction("");
     }
@@ -720,7 +917,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
   return <section className="social-page" aria-label="Rally Circles">
     <div className="social-feed-tabs" role="tablist" aria-label="Rally feed"><button className={feedFilter === "all" ? "active" : ""} type="button" onClick={() => changeFilter("all")} role="tab" aria-selected={feedFilter === "all"}>Discover</button><button className={feedFilter === "following" ? "active" : ""} type="button" onClick={() => changeFilter("following")} role="tab" aria-selected={feedFilter === "following"}>Following</button><button className={feedFilter === "personal" ? "active" : ""} type="button" onClick={() => changeFilter("personal")} role="tab" aria-selected={feedFilter === "personal"}>My rallies</button></div>
 
-    {feedFilter === "personal" && <section className={`social-streak-card ${weeklyStreakActive ? "active" : ""}`} aria-label="Your streak"><div className="social-streak-heading"><div><span className="kicker">YOUR STREAK</span><h2>Keep showing up</h2></div><span className="social-streak-share" aria-hidden="true">↗</span></div><div className="social-streak-content"><div className="social-streak-total"><span className="social-streak-flame" aria-hidden="true"><StreakIcon /></span><strong>{weeklyStreak}</strong><small>WEEK{weeklyStreak === 1 ? "" : "S"}</small></div><div className="social-streak-days">{streakDays.map((day) => <span className={day.active ? "active" : ""} key={day.key}><b>{day.label}</b><i>{day.day}</i></span>)}</div></div><p>{weeklyStreakActive ? "You have played this week. Keep your rally going." : "Complete a game this week to start your streak."}</p></section>}
+    {feedFilter === "personal" && <section className={`social-streak-card ${weeklyStreakActive ? "active" : ""}`} aria-label="Your streak"><div className="social-streak-heading"><div><span className="kicker">YOUR STREAK</span><h2>Keep showing up</h2></div><button type="button" className="social-streak-share" onClick={() => void shareStreak()} disabled={busyAction === "share-streak"} aria-label="Share your CourtMate streak as an image" title="Share streak">{busyAction === "share-streak" ? "…" : "↗"}</button></div><div className="social-streak-content"><div className="social-streak-total"><span className="social-streak-flame" aria-hidden="true"><StreakIcon /></span><strong>{weeklyStreak}</strong><small>WEEK{weeklyStreak === 1 ? "" : "S"}</small></div><div className="social-streak-days">{streakDays.map((day) => <span className={day.active ? "active" : ""} key={day.key}><b>{day.label}</b><i>{day.day}</i></span>)}</div></div><p>{weeklyStreakActive ? "You have played this week. Keep your rally going." : "Complete a game this week to start your streak."}</p></section>}
 
     {feedFilter === "all" && !recommendationsLoading && recommendedPlayers.length > 0 && <section className="social-recommendations" aria-labelledby="social-recommendations-title">
       <div className="social-recommendations-heading"><div><h2 id="social-recommendations-title">People worth playing with</h2></div><span>Nearby and active</span></div>

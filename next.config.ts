@@ -4,6 +4,7 @@ const firebaseAuthHost = "https://mttn-portal.firebaseapp.com";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  devIndicators: false,
   async rewrites() {
     // Firebase's popup/redirect helpers must be served from the configured auth domain.
     return [

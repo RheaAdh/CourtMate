@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from backend.main import _clear_read_view_cache, _clear_social_feed_cache, app, local_timezone, repository
 from backend.models import FollowRecord, Session
+from backend.seed_synthetic_firestore import seed
 from tests.fixtures import load_repository_fixture
 
 
@@ -1383,6 +1384,70 @@ class ApiFlowTests(unittest.TestCase):
         self.assertTrue(any(item["request"]["id"] == join.json()["id"] for item in requester_activity.json()["requests"]))
         organizer_activity = self.client.get("/v1/me/activity", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertTrue(any(item["request"]["id"] == join.json()["id"] for item in organizer_activity.json()["incoming_requests"]))
+
+    def test_showcase_seed_supports_primary_demo_journeys(self):
+        summary = seed(store=repository)
+        _clear_read_view_cache()
+        _clear_social_feed_cache()
+        headers = {"X-CourtMate-Player-ID": "showcase-visitor"}
+
+        self.assertGreaterEqual(summary["players"], 30)
+        self.assertGreaterEqual(summary["sessions"], 30)
+        self.assertLessEqual(summary["sessions"], 100)
+        self.assertGreaterEqual(summary["social_posts"], 6)
+        self.assertTrue(all(not player.profile_image_url for player in repository.list_players() if player.id.startswith("demo-")))
+
+        profile = self.client.get("/v1/me", headers=headers)
+        explore = self.client.get("/v1/me/explore", headers=headers)
+        feed = self.client.get("/v1/social/feed", headers=headers)
+        recommended = self.client.get("/v1/players/recommended", headers=headers)
+        leaderboard = self.client.get(
+            "/v1/me/circle-leaderboard?scope=bengaluru&sport=badminton",
+            headers=headers,
+        )
+
+        self.assertEqual(profile.status_code, 200)
+        self.assertEqual(explore.status_code, 200)
+        self.assertEqual(feed.status_code, 200)
+        self.assertEqual(recommended.status_code, 200)
+        self.assertEqual(leaderboard.status_code, 200)
+        self.assertTrue(explore.json()["recommendations"])
+        self.assertGreaterEqual(len(feed.json()["posts"]), 6)
+        self.assertTrue(recommended.json()["profiles"])
+        self.assertTrue(leaderboard.json()["entries"])
+
+        session = next(
+            item["session"]
+            for item in explore.json()["recommendations"]
+            if item["session"]["status"] == "open"
+        )
+        join = self.client.post(f"/v1/sessions/{session['id']}/join", headers=headers)
+        self.assertEqual(join.status_code, 200)
+        self.assertEqual(join.json()["status"], "pending")
+        activity = self.client.get("/v1/me/activity", headers=headers)
+        self.assertTrue(any(item["request"]["id"] == join.json()["id"] for item in activity.json()["requests"]))
+
+    def test_join_accepts_browser_post_without_a_json_body(self):
+        join = self.client.post(
+            "/v1/sessions/s1/join",
+            content=b"",
+            headers={"X-CourtMate-Player-ID": "p4", "Content-Type": "application/json"},
+        )
+
+        self.assertEqual(join.status_code, 200)
+        self.assertEqual(join.json()["status"], "pending")
+        self.assertTrue(any(
+            request.id == join.json()["id"]
+            for request in repository.list_join_requests_for_player("p4")
+        ))
+
+        repeated = self.client.post(
+            "/v1/sessions/s1/join",
+            headers={"X-CourtMate-Player-ID": "p4"},
+        )
+        self.assertEqual(repeated.status_code, 200)
+        self.assertEqual(repeated.json()["id"], join.json()["id"])
+        self.assertEqual(len(repository.list_join_requests_for_player("p4")), 1)
 
     def test_created_group_appears_in_the_organizers_upcoming_activity(self):
         created = self.client.post(

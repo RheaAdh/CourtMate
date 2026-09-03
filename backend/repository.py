@@ -575,6 +575,15 @@ class FirestoreRepository:
         self.client.collection("search_documents").document(document.id).set(payload)
         return document
 
+    @staticmethod
+    def _as_search_document(document) -> SearchDocument:
+        payload = {**(document.to_dict() or {}), "id": document.id}
+        embedding = payload.get("embedding", [])
+        # Firestore returns vector fields as its Vector wrapper, while the
+        # application model intentionally stays provider-agnostic.
+        payload["embedding"] = [float(value) for value in embedding]
+        return SearchDocument.model_validate(payload)
+
     def delete_search_document(self, document_id: str) -> None:
         self.client.collection("search_documents").document(document_id).delete()
 

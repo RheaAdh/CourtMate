@@ -547,7 +547,9 @@ class SearchDocument(BaseModel):
     """A sanitized, searchable projection of an operational record."""
 
     id: str
-    source_type: Literal["session", "player", "venue", "faq", "community"]
+    # ``tournament`` is retained only so index rebuilds can deserialize and
+    # remove records created before tournament discovery was retired.
+    source_type: Literal["session", "player", "venue", "faq", "community", "tournament"]
     source_id: str
     content: str
     embedding: list[float] = Field(default_factory=list)
@@ -583,10 +585,6 @@ class ParseRequest(BaseModel):
     sport: Sport | None = None
     mode: Literal["exact", "profile"] = "exact"
     context: str | None = Field(default=None, max_length=500)
-
-
-class JoinRequestRequest(BaseModel):
-    pass
 
 
 class JoinRequestDecisionRequest(BaseModel):

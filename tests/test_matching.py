@@ -4,7 +4,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from backend.gemini import GeminiIntentParser
 from backend.matching import search_sessions, suggest_replacements
 from backend.models import Player, SearchIntent, Session, cmr_from_legacy_rating, normalize_cmr_player, normalize_session, rating_for_sport
-from backend.repository import InMemoryRepository
+from backend.repository import FirestoreRepository, InMemoryRepository
 from tests.fixtures import load_repository_fixture
 from backend.vector_search import VectorIndexer, VectorRetriever, session_to_document
 
@@ -23,6 +23,33 @@ class FakeEmbeddingProvider:
 
 
 class MatchingTests(unittest.TestCase):
+    def test_firestore_search_document_deserializes_vector_wrapper(self):
+        from google.cloud.firestore_v1.vector import Vector
+
+        class FakeDocument:
+            id = "session__s1"
+
+            @staticmethod
+            def to_dict():
+                return {
+                    "source_type": "session",
+                    "source_id": "s1",
+                    "content": "A social pickleball game in Whitefield",
+                    "embedding": Vector([0.25, 0.75]),
+                    "metadata": {"sport": "pickleball"},
+                    "embedding_model": "text-embedding-005",
+                    "embedding_version": "v1",
+                }
+
+        document = FirestoreRepository._as_search_document(FakeDocument())
+        self.assertEqual(document.embedding, [0.25, 0.75])
+        self.assertEqual(document.metadata["sport"], "pickleball")
+
+        legacy_payload = FakeDocument.to_dict()
+        legacy_payload["source_type"] = "tournament"
+        FakeDocument.to_dict = staticmethod(lambda: legacy_payload)
+        self.assertEqual(FirestoreRepository._as_search_document(FakeDocument()).source_type, "tournament")
+
     def test_vector_index_retrieves_sanitized_records_with_metadata_filters(self):
         repo = InMemoryRepository()
         load_repository_fixture(repo)
@@ -98,6 +125,22 @@ class MatchingTests(unittest.TestCase):
         parser = GeminiIntentParser()
         self.assertFalse(parser.is_performance_query("Find games near me"))
         self.assertTrue(parser.is_performance_query("How is my CMR changing?"))
+        self.assertTrue(parser.is_performance_query("Give me badminton game feedback"))
+
+    def test_performance_fallback_uses_the_requested_sport(self):
+        parser = GeminiIntentParser()
+        parser._client = None
+        player = Player(
+            id="multi-sport-player",
+            display_name="Multi Sport Player",
+            area="Whitefield",
+            cmr_ratings={"pickleball": 7.2, "badminton": 4.3},
+            cmr_game_counts={"pickleball": 8, "badminton": 3},
+        )
+        answer = parser.discuss_performance("Give me badminton game feedback", player, {}, [])
+        self.assertIn("Badminton", answer)
+        self.assertIn("4.30", answer)
+        self.assertNotIn("7.20", answer)
 
     def test_cmr_migrates_100_scale_to_canonical_ten_point_scale(self):
         player = Player(

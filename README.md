@@ -149,14 +149,16 @@ COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
   python -m backend.seed_synthetic_firestore
 ```
 
-The script upserts only `demo-` records in the CourtMate collections: players, sessions, join requests, chat posts, session feedback, follows, notifications, tournaments, tournament registrations, and tournament matches. Home activity cards are generated from completed demo sessions and include multi-sport leaderboards, CMR movement, reactions, comments, and share counts. It does not touch Firebase Authentication or unrelated collections. To replace old authored social data, explicitly clear `social_posts` and `social_comments` while rebuilding the activity cards:
+The script upserts stable `demo-` records for players, sessions, join requests, chat, private feedback, follows, notifications, community memberships, and social posts. It does not touch Firebase Authentication or unrelated user records. Synthetic people have natural display names and no image URL, so CourtMate renders their initials instead of stock avatars.
+
+To replace only synthetic Explore posts and comments while rebuilding the feed:
 
 ```bash
 COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
   python -m backend.seed_synthetic_firestore --replace-social
 ```
 
-`--replace-social` is intentionally opt-in and deletes every document in only those two CourtMate collections. To attach the Rhea Adhikari demo profile to your signed-in Firebase account, pass the Firebase Auth UID from that account:
+`--replace-social` is intentionally opt-in and preserves posts and comments created by genuine users.
 
 To fully refresh the demo state for the current product flows, delete only synthetic CourtMate records and reseed all screens in one command. This preserves unrelated player and application data:
 
@@ -165,7 +167,7 @@ COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
   python -m backend.seed_synthetic_firestore --reset-synthetic
 ```
 
-The refreshed dataset includes upcoming, pending, waitlisted, two awaiting-feedback games (one empty and one one-response-away from completion), completed games, generated-avatar profiles, group chat, notifications, private feedback and multi-sport CMR history, Home activity cards with carousel media, and registration, live, and completed knockout tournaments. Demo media uses generated avatars/shapes rather than photographs of real people.
+The refreshed dataset includes 35 realistic Bengaluru players, 32 games across all six sports and ten localities, pending and waitlisted requests, two awaiting-feedback games, completed games, common chat, notifications, private feedback, connections, sport CMR histories, leaderboard depth, and eight authored Explore posts with comments, reactions, and shares. The session count intentionally leaves headroom below the production Firestore read cap so genuine and seeded games remain visible together. An integrity audit runs after every full seed and fails if roster/request states conflict, a synthetic avatar is present, Explore lacks personal posts, or a sport is missing from discovery and completed history.
 
 For a faster social-only reset that skips unrelated requests, notifications, and tournament writes, add `--social-only` to the replacement command.
 
@@ -175,7 +177,7 @@ COURTMATE_DEMO_RHEA_UID=YOUR_FIREBASE_AUTH_UID \
   python -m backend.seed_synthetic_firestore
 ```
 
-Without `COURTMATE_DEMO_RHEA_UID`, Rhea is created as the isolated `demo-rhea-adhikari` player. The seed includes 15 synthetic multi-sport players, 71 sessions across 10 Bangalore areas, seven tournaments, notifications, group requests, leaderboards, completed-session Home activities, and tournament fixtures so the Profile, Home, Games, social, and tournament flows are ready for a hackathon walkthrough. It is safe to rerun because the demo IDs are stable and writes are upserts.
+Without `COURTMATE_DEMO_RHEA_UID`, Rhea is created as the isolated `demo-rhea-adhikari` player. It is safe to rerun because synthetic IDs are stable and writes are upserts.
 
 To add only a labelled synthetic CMR trajectory to an existing demo profile, without replacing its name, image, or preferences, run:
 
