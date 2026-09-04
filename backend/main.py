@@ -626,7 +626,7 @@ def update_profile(request: ProfileUpdateRequest, player: Player = Depends(get_c
         if self_assessed_level is not None:
             games_played = updated.cmr_game_counts.get(request.sport, 0)
             if games_played:
-                raise HTTPException(status_code=409, detail="CMR is based on confirmed competitive games and cannot be reset")
+                raise HTTPException(status_code=409, detail="CMR is built from completed-game feedback and cannot be reset")
             level = legacy_cmr if legacy_cmr is not None else float(self_assessed_level)
             updated = updated.model_copy(update={
                 "primary_sport": updated.primary_sport or request.sport,
@@ -863,7 +863,7 @@ def _profile_activity(player_id: str, sessions: list[Session] | None = None) -> 
             start_time=session.start_time,
             status="played" if session.session_date < today or session.status == "completed" else session.status,
         )
-        for session in sorted(played_sessions, key=lambda item: (item.session_date, item.start_time), reverse=True)[:6]
+        for session in sorted(played_sessions, key=lambda item: (item.session_date, item.start_time), reverse=True)
     ]
     activity_by_date: dict[str, int] = {}
     for session in played_sessions:
@@ -1285,62 +1285,54 @@ def _confirmed_competitive_results(sessions: list[Session]) -> list[tuple[Sessio
 
 
 def _refresh_cmr_ratings() -> None:
-    """Recompute CMR solely from confirmed, valid competitive game results."""
+    """Recompute sport-specific CMR from completed-session player feedback."""
     players_by_id = {player.id: player for player in repository.list_players()}
-    results = _confirmed_competitive_results(repository.list_sessions())
     ratings: dict[tuple[str, Sport], float] = {}
     game_counts: dict[tuple[str, Sport], int] = {}
     histories: dict[tuple[str, Sport], list[CMRHistoryPoint]] = {}
 
-    for session, post in results:
-        teams = post.teams
-        team_ratings: list[float] = []
-        for team in teams:
-            member_ratings = []
-            for player_id in team.player_ids:
-                player = players_by_id.get(player_id)
-                if not player:
-                    member_ratings = []
-                    break
-                key = (player_id, session.sport)
-                member_ratings.append(ratings.get(key, _cmr_seed_rating(player, session.sport)))
-            if not member_ratings:
-                team_ratings = []
-                break
-            team_ratings.append(sum(member_ratings) / len(member_ratings))
-        if len(team_ratings) != 2:
-            continue
+    sessions = sorted(
+        (session for session in repository.list_sessions() if session.status in {"awaiting_feedback", "completed"}),
+        key=lambda session: (session.session_date, session.start_time),
+    )
+    for session in sessions:
+        received: dict[str, list[float]] = {}
+        for feedback_item in repository.list_feedback(session.id):
+            for player_rating in feedback_item.ratings:
+                value = player_rating.rating_10
+                if value is None and player_rating.rating is not None:
+                    value = player_rating.rating * 2
+                if value is None and player_rating.rank_score is not None:
+                    value = 1 + (player_rating.rank_score / 100) * 9
+                if value is None and player_rating.skill_level:
+                    value = {"beginner": 2.5, "intermediate": 5.0, "advanced": 7.5}[player_rating.skill_level]
+                if value is not None and player_rating.player_id in session.confirmed_player_ids:
+                    received.setdefault(player_rating.player_id, []).append(float(value))
 
-        score_a, score_b = teams[0].score or 0, teams[1].score or 0
-        expected_a = 1 / (1 + 10 ** ((team_ratings[1] - team_ratings[0]) / 1.8))
-        result_a = 1.0 if score_a > score_b else 0.0 if score_a < score_b else 0.5
-        score_factor = 1 + min(0.2, abs(score_a - score_b) / max(score_a, score_b, 1) * 0.2)
-
-        for index, team in enumerate(teams):
-            outcome = result_a if index == 0 else 1 - result_a if result_a != 0.5 else 0.5
-            expected = expected_a if index == 0 else 1 - expected_a
-            for player_id in team.player_ids:
-                player = players_by_id[player_id]
-                key = (player_id, session.sport)
-                previous = ratings.get(key, _cmr_seed_rating(player, session.sport))
-                games_before = game_counts.get(key, 0)
-                confidence_before = _cmr_confidence_for_games(games_before)
-                k_factor = 0.90 - 0.54 * (confidence_before / 100)
-                delta = round(k_factor * (outcome - expected) * score_factor, 2)
-                rating = round(max(1, min(10, previous + delta)), 2)
-                games_after = games_before + 1
-                confidence_after = _cmr_confidence_for_games(games_after)
-                ratings[key] = rating
-                game_counts[key] = games_after
-                histories.setdefault(key, []).append(CMRHistoryPoint(
-                    session_id=session.id,
-                    session_date=session.session_date,
-                    group_name=session.group_name,
-                    game_rating=rating,
-                    rating=rating,
-                    delta=round(rating - previous, 2),
-                    confidence=confidence_after,
-                ))
+        for player_id, feedback_values in received.items():
+            player = players_by_id.get(player_id)
+            if not player:
+                continue
+            key = (player_id, session.sport)
+            games_before = game_counts.get(key, 0)
+            session_rating = sum(feedback_values) / len(feedback_values)
+            previous = ratings.get(key, session_rating)
+            # First-session feedback establishes CMR; later sessions smooth it.
+            weight = 1.0 if games_before == 0 else max(0.16, 0.42 - games_before * 0.04)
+            rating = round(max(1, min(10, previous + weight * (session_rating - previous))), 2)
+            games_after = games_before + 1
+            confidence_after = _cmr_confidence_for_games(games_after)
+            ratings[key] = rating
+            game_counts[key] = games_after
+            histories.setdefault(key, []).append(CMRHistoryPoint(
+                session_id=session.id,
+                session_date=session.session_date,
+                group_name=session.group_name,
+                game_rating=round(session_rating, 2),
+                rating=rating,
+                delta=round(rating - previous, 2),
+                confidence=confidence_after,
+            ))
 
     for player in players_by_id.values():
         cmr_ratings = dict(player.cmr_ratings)
@@ -2661,7 +2653,8 @@ def post_group_chat(session_id: str, request: ChatPostRequest, player: Player = 
         if teams:
             post_type = "match_result"
         else:
-            _require_active_session(session)
+            if session.status == "cancelled":
+                raise HTTPException(status_code=409, detail="This cancelled game's chat is closed")
     if post_type == "match_result":
         if session.status not in {"awaiting_feedback", "completed"}:
             raise HTTPException(status_code=409, detail="Record the final score after the game is marked complete")
@@ -2923,7 +2916,8 @@ def feedback(session_id: str, request: FeedbackRequest, background_tasks: Backgr
                 if player_id in seen_team_players:
                     raise HTTPException(status_code=422, detail="A player can only be on one team")
                 seen_team_players.add(player_id)
-    saved = repository.save_feedback(Feedback(session_id=session_id, created_at=datetime.now(timezone.utc), player_id=player.id, match_quality=request.match_quality, fun=request.fun, fairness=request.fairness, would_return=request.would_return, ratings=ratings, teams=request.teams))
+    session_note = request.session_note.strip() if request.session_note and request.session_note.strip() else None
+    saved = repository.save_feedback(Feedback(session_id=session_id, created_at=datetime.now(timezone.utc), player_id=player.id, match_quality=request.match_quality, fun=request.fun, fairness=request.fairness, would_return=request.would_return, session_note=session_note, ratings=ratings, teams=request.teams))
     _clear_read_view_cache()
     if session.status == "awaiting_feedback" and _all_participants_submitted_feedback(session):
         completed = session.model_copy(update={

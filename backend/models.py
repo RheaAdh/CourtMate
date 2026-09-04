@@ -894,6 +894,7 @@ class FeedbackRequest(BaseModel):
     fun: int = Field(ge=1, le=5)
     fairness: int = Field(ge=1, le=5)
     would_return: bool
+    session_note: str | None = Field(default=None, max_length=500)
     ratings: list["PlayerRating"] = Field(default_factory=list)
     # Ordered from strongest to weakest for this session. The server converts
     # the order into a bounded CMR signal so clients do not submit raw scores.
@@ -926,6 +927,7 @@ class Feedback(BaseModel):
     fun: int
     fairness: int
     would_return: bool
+    session_note: str | None = None
     ratings: list[PlayerRating] = Field(default_factory=list)
     teams: list[MatchTeam] = Field(default_factory=list)
     created_at: datetime

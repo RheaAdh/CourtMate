@@ -512,7 +512,7 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(response.json()["scope"], "out_of_scope")
         self.assertIn("racket-sport history", response.json()["answer"])
 
-    def test_group_chat_can_log_pairs_and_update_relative_cmr(self):
+    def test_group_chat_logs_scores_without_replacing_feedback_driven_cmr(self):
         session = repository.get_session("s1")
         session.status = "awaiting_feedback"
         repository.save_session(session)
@@ -540,12 +540,20 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(confirmation.json()["result_status"], "confirmed")
 
         profile = self.client.get("/v1/me", headers={"X-CourtMate-Player-ID": "p1"})
-        self.assertIsNotNone(profile.json()["cmr_ratings"].get("pickleball"))
-        self.assertGreater(profile.json()["cmr_confidence"]["pickleball"], 0)
-        history = profile.json()["cmr_history"]["pickleball"]
-        point = next(item for item in history if item["session_id"] == "s1")
-        self.assertIsNotNone(point["game_rating"])
-        self.assertGreater(point["confidence"], 0)
+        self.assertIsNone(profile.json()["cmr_ratings"].get("pickleball"))
+
+    def test_group_chat_continues_after_the_game_is_completed(self):
+        session = repository.get_session("s1").model_copy(update={"status": "completed"})
+        repository.save_session(session)
+
+        response = self.client.post(
+            "/v1/sessions/s1/chat",
+            json={"message": "Great game, same time next week?"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["post_type"], "message")
 
     def test_casual_game_result_is_saved_but_does_not_change_cmr(self):
         session = repository.get_session("s1").model_copy(update={"status": "completed", "rating_mode": "casual"})
@@ -1048,7 +1056,7 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertIn("marked done", response.json()["detail"])
 
-    def test_feedback_accepts_private_player_ratings_without_changing_cmr(self):
+    def test_feedback_builds_sport_specific_cmr(self):
         completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(completed.status_code, 200)
 
@@ -1058,6 +1066,7 @@ class ApiFlowTests(unittest.TestCase):
                 "fun": 5,
                 "fairness": 5,
                 "would_return": True,
+                "session_note": "Good rallies and an evenly matched session.",
                 "ratings": [
                     {"player_id": "p1", "rating_10": 10},
                     {"player_id": "p3", "rating_10": 7},
@@ -1068,12 +1077,15 @@ class ApiFlowTests(unittest.TestCase):
         )
         self.assertEqual(feedback.status_code, 200)
         self.assertEqual(feedback.json()["ratings"][0]["rating_10"], 10)
+        self.assertEqual(feedback.json()["session_note"], "Good rallies and an evenly matched session.")
         self.submit_feedback_for_everyone()
 
         profile = self.client.get("/v1/me", headers={"X-CourtMate-Player-ID": "p1"})
-        self.assertNotIn("pickleball", profile.json()["cmr_ratings"])
+        self.assertIn("pickleball", profile.json()["cmr_ratings"])
+        self.assertEqual(profile.json()["cmr_game_counts"]["pickleball"], 1)
+        self.assertGreater(profile.json()["cmr_confidence"]["pickleball"], 0)
 
-    def test_feedback_resubmission_replaces_private_feedback_without_changing_cmr(self):
+    def test_feedback_resubmission_replaces_the_cmr_input(self):
         completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(completed.status_code, 200)
         first = self.client.post(
@@ -1110,7 +1122,8 @@ class ApiFlowTests(unittest.TestCase):
         self.submit_feedback_for_everyone()
 
         profile = self.client.get("/v1/me", headers={"X-CourtMate-Player-ID": "p1"})
-        self.assertNotIn("pickleball", profile.json()["cmr_ratings"])
+        self.assertIn("pickleball", profile.json()["cmr_ratings"])
+        self.assertEqual(profile.json()["cmr_game_counts"]["pickleball"], 1)
 
     def test_private_feedback_requires_one_rating_for_each_other_player(self):
         completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p2"})
@@ -1310,6 +1323,33 @@ class ApiFlowTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["recent_games"][0]["group_name"], "Wednesday Rally")
         self.assertEqual(payload["activity_by_date"][played_on.isoformat()], 1)
+
+    def test_public_profile_exposes_all_completed_game_sessions(self):
+        for index in range(8):
+            repository.save_session(
+                Session(
+                    id=f"profile-history-{index}",
+                    sport="badminton",
+                    group_name=f"Community Rally {index}",
+                    organizer_id="p1",
+                    area="Whitefield",
+                    session_date=date.today() - timedelta(days=index + 1),
+                    start_time=time(19),
+                    end_time=time(21),
+                    skill_min=3.0,
+                    skill_max=6.0,
+                    style="casual",
+                    capacity=8,
+                    confirmed_player_ids=["p2"],
+                    status="completed",
+                )
+            )
+
+        response = self.client.get("/v1/players/p2", headers={"X-CourtMate-Player-ID": "p1"})
+        history_ids = {game["id"] for game in response.json()["recent_games"]}
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue({f"profile-history-{index}" for index in range(8)}.issubset(history_ids))
 
     def test_public_profile_calculates_active_weekly_streak_from_completed_games(self):
         current_week = date.today() - timedelta(days=date.today().weekday())
@@ -1713,12 +1753,12 @@ class ApiFlowTests(unittest.TestCase):
         leaderboard = self.client.get(f"/v1/sessions/{session_id}/leaderboard", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(leaderboard.status_code, 200)
         p1_entry = next(entry for entry in leaderboard.json()["entries"] if entry["player"]["id"] == "p1")
-        self.assertEqual(p1_entry["score"], 4.0)
+        self.assertGreater(p1_entry["score"], 4.0)
         self.assertEqual(p1_entry["ratings_count"], 1)
         profile = self.client.get("/v1/me", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(profile.status_code, 200)
         history = profile.json()["cmr_history"].get("pickleball", [])
-        self.assertFalse(any(point["session_id"] == session_id for point in history))
+        self.assertTrue(any(point["session_id"] == session_id for point in history))
 
         waitlist = self.client.post("/v1/sessions/s7/join", headers={"X-CourtMate-Player-ID": "p4"})
         self.assertEqual(waitlist.status_code, 200)
