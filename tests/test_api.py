@@ -454,6 +454,8 @@ class ApiFlowTests(unittest.TestCase):
         self.assertIn("CMR", response.json()["answer"])
 
     def test_performance_quick_prompts_are_grounded_and_never_call_gemini(self):
+        self.assertTrue(intent_parser.is_performance_query("What's my current skill level?"))
+        self.assertFalse(intent_parser.is_performance_query("Find a badminton game at my skill level"))
         player = repository.get_player("p1")
         history = [
             CMRHistoryPoint(session_id="history-1", session_date=date.today() - timedelta(days=14), group_name="Whitefield Rally", rating=4.80, delta=0.10),
@@ -476,6 +478,8 @@ class ApiFlowTests(unittest.TestCase):
             "Summarise my recent games": ("Sunday Smash", "Brookefield Doubles"),
             "Analyze my existing Badminton CMR and game history. What should I work on next?": ("Badminton", "5.15"),
             "How am I doing?": ("Badminton", "5.15"),
+            "What's my current skill level?": ("Strong intermediate", "Badminton", "5.15"),
+            "What is my Pickleball skill level?": ("Intermediate", "Pickleball", "4.20"),
             "What is my reliability?": ("94%", "confirmed show-ups"),
             "What is my weakest sport?": ("Pickleball", "4.20"),
         }

@@ -11469,6 +11469,16 @@ html[data-viewed-profile-private="true"] .public-profile-card::after {
   box-shadow: none;
 }
 
+.ask-conversation .crafted-game-message > .crafted-game-card {
+  max-width: min(100% - 42px, 680px);
+  overflow: hidden;
+  padding: 18px 20px;
+  border: 0;
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--paper) 90%, var(--lime));
+  box-shadow: 0 12px 30px rgba(31, 50, 29, .09);
+}
+
 .ask-conversation .assistant-message p,
 .ask-conversation .assistant-reply {
   font-size: 13px;
@@ -11508,9 +11518,25 @@ html[data-viewed-profile-private="true"] .public-profile-card::after {
 .ask-conversation .chat-message-mark {
   width: 32px;
   height: 32px;
+  overflow: hidden;
   border: 1px solid #b8d126;
   background: var(--lime);
   font-size: 9px;
+}
+
+.ask-conversation .chat-message-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+@media (max-width: 600px) {
+  .ask-conversation .crafted-game-message > .crafted-game-card {
+    max-width: calc(100% - 42px);
+    padding: 15px;
+    border-radius: 17px;
+  }
 }
 
 .ask-conversation .chat-prompt-groups {
@@ -11626,10 +11652,6 @@ html[data-theme="dark"] .ask-conversation .chat-input-shell {
 
   .ask-conversation .user-message {
     max-width: 88%;
-  }
-
-  .ask-conversation .user-message .chat-message-mark {
-    display: none;
   }
 
   .ask-conversation .user-message > div {

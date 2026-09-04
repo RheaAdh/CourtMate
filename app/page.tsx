@@ -580,6 +580,91 @@ function dateInputValue(value: Date): string {
   return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
 }
 
+function parseNaturalGameDate(value: string, now = new Date()): string | null {
+  const normalized = value.toLowerCase().replace(/,/g, " ").replace(/\b(\d{1,2})(?:st|nd|rd|th)\b/g, "$1").replace(/\s+/g, " ").trim();
+  const numericDate = normalized.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (numericDate) {
+    const candidate = new Date(Number(numericDate[3]), Number(numericDate[2]) - 1, Number(numericDate[1]), 12);
+    return candidate.getFullYear() === Number(numericDate[3]) && candidate.getMonth() === Number(numericDate[2]) - 1 && candidate.getDate() === Number(numericDate[1]) ? dateInputValue(candidate) : null;
+  }
+  const isoDate = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoDate) {
+    const candidate = new Date(Number(isoDate[1]), Number(isoDate[2]) - 1, Number(isoDate[3]), 12);
+    return candidate.getFullYear() === Number(isoDate[1]) && candidate.getMonth() === Number(isoDate[2]) - 1 && candidate.getDate() === Number(isoDate[3]) ? dateInputValue(candidate) : null;
+  }
+
+  const months = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+  const monthPattern = "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
+  const monthFirst = normalized.match(new RegExp(`\\b(${monthPattern})\\s+(\\d{1,2})(?:\\s+(\\d{4}))?\\b`));
+  const dayFirst = normalized.match(new RegExp(`\\b(\\d{1,2})\\s+(${monthPattern})(?:\\s+(\\d{4}))?\\b`));
+  const monthText = monthFirst?.[1] ?? dayFirst?.[2];
+  const dayText = monthFirst?.[2] ?? dayFirst?.[1];
+  const yearText = monthFirst?.[3] ?? dayFirst?.[3];
+  if (!monthText || !dayText) return null;
+
+  const monthIndex = months.findIndex((month) => month.startsWith(monthText.slice(0, 3)));
+  let year = yearText ? Number(yearText) : now.getFullYear();
+  let candidate = new Date(year, monthIndex, Number(dayText), 12);
+  if (candidate.getMonth() !== monthIndex || candidate.getDate() !== Number(dayText)) return null;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0);
+  if (!yearText && candidate < today) {
+    year += 1;
+    candidate = new Date(year, monthIndex, Number(dayText), 12);
+  }
+  return dateInputValue(candidate);
+}
+
+function parseNaturalGameTime(value: string): Pick<CreateGroupDraft, "start_time" | "end_time"> | null {
+  const normalized = value.toLowerCase()
+    .replace(/\b([ap])\.?\s*m\.?(?=\W|$)/g, "$1m")
+    .replace(/\bnoon\b/g, "12 pm")
+    .replace(/\bmidnight\b/g, "12 am")
+    .replace(/[–—]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const toTime = (hourText: string, minuteText: string | undefined, meridiem: string | undefined) => {
+    let hour = Number(hourText);
+    const minute = Number(minuteText ?? "0");
+    if (!Number.isInteger(hour) || !Number.isInteger(minute) || minute < 0 || minute > 59) return null;
+    if (meridiem) {
+      if (hour < 1 || hour > 12) return null;
+      hour = hour % 12 + (meridiem === "pm" ? 12 : 0);
+    } else if (hour < 0 || hour > 23) {
+      return null;
+    }
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  };
+
+  const range = normalized.match(/\b(?:from\s+)?(\d{1,2})(?::([0-5]\d))?\s*(am|pm)?\s*(?:to|till|until|-)\s*(\d{1,2})(?::([0-5]\d))?\s*(am|pm)?\b/);
+  if (range) {
+    const rawStartHour = Number(range[1]);
+    const rawEndHour = Number(range[4]);
+    let startMeridiem = range[3];
+    let endMeridiem = range[6];
+    if (!startMeridiem && endMeridiem) startMeridiem = rawStartHour > rawEndHour ? (endMeridiem === "pm" ? "am" : "pm") : endMeridiem;
+    if (startMeridiem && !endMeridiem) endMeridiem = startMeridiem;
+    if (!startMeridiem && !endMeridiem && rawStartHour <= 12 && rawEndHour <= 12) {
+      const contextualMeridiem = /\b(morning)\b/.test(normalized) ? "am" : /\b(afternoon|evening|tonight|night)\b/.test(normalized) ? "pm" : null;
+      if (!contextualMeridiem) return null;
+      startMeridiem = contextualMeridiem;
+      endMeridiem = contextualMeridiem;
+    }
+    const startTime = toTime(range[1], range[2], startMeridiem);
+    const endTime = toTime(range[4], range[5], endMeridiem);
+    if (!startTime || !endTime || endTime <= startTime) return null;
+    return { start_time: startTime, end_time: endTime };
+  }
+
+  const singleTime = normalized.match(/\b(\d{1,2})(?::([0-5]\d))?\s*(am|pm)\b/);
+  if (!singleTime) return null;
+  const startTime = toTime(singleTime[1], singleTime[2], singleTime[3]);
+  if (!startTime) return null;
+  const [hour, minute] = startTime.split(":").map(Number);
+  if (hour * 60 + minute + 120 >= 24 * 60) return null;
+  return { start_time: startTime, end_time: `${String(hour + 2).padStart(2, "0")}:${String(minute).padStart(2, "0")}` };
+}
+
 function nextDefaultGameSchedule(now = new Date()): Pick<CreateGroupDraft, "session_date" | "start_time" | "end_time"> {
   const date = new Date(now);
   // A 7 PM game is no longer selectable once that time has passed locally.
@@ -595,13 +680,14 @@ function localTimeInput(): string {
 function isPerformanceQuery(query: string): boolean {
   const normalized = query.toLowerCase().replace(/\s+/g, " ").trim();
   if (!normalized) return false;
-  const hasDiscoveryAction = /\b(find|search|show|join|invite|create|book|nearby|around)\b/.test(normalized);
+  const hasDiscoveryAction = /\b(find|search(?:ing)?|look(?:ing)?|show|join|invite|create|book|play|discover|nearby|around)\b/.test(normalized);
   const hasDiscoveryObject = /\b(game|games|group|groups|session|sessions|player|players|court|courts|venue|venues|match|matches)\b/.test(normalized);
-  const asksAboutOwnGames = /\b(my|mine|i've|i have)\b/.test(normalized) && /\b(last|recent|history|played|games|game)\b/.test(normalized);
-  if (hasDiscoveryAction && hasDiscoveryObject) return asksAboutOwnGames;
-  return /\b(cmr|rating|ratings|feedback|review|stats|statistics|calories|steps|heart rate|distance|wearable|progress|trend|fitness|form|strongest|weakest|reliability|attendance)\b/.test(normalized)
-    || /\bhow (?:am i doing|have i been playing)\b/.test(normalized)
-    || (/\b(my|me|i|mine|i've|i have)\b/.test(normalized) && /\b(performance|history|played|games|activity|progress|trend|improve|form)\b/.test(normalized));
+  const asksAboutOwnGames = /\b(my|mine|i've|i have)\b/.test(normalized) && /\b(last|recent|history|played|performance|progress|trend|summary|summari[sz]e)\b/.test(normalized);
+  if (isFindGameQuery(normalized) || (hasDiscoveryAction && hasDiscoveryObject && !asksAboutOwnGames)) return false;
+  return /\b(cmr|rating|ratings|feedback|review|stats|statistics|calories|steps|heart rate|distance|wearable|progress|trend|fitness|form|strongest|weakest|reliability|attendance|skill level)\b/.test(normalized)
+    || /\bhow (?:am i doing|have i been playing|good am i)\b/.test(normalized)
+    || /\bwhat(?:'s| is) my (?:current )?level\b/.test(normalized)
+    || (/\b(my|me|i|mine|i've|i have)\b/.test(normalized) && /\b(performance|history|played|games|activity|progress|trend|improve|form|level)\b/.test(normalized));
 }
 
 function isCreateGameQuery(query: string): boolean {
@@ -610,9 +696,18 @@ function isCreateGameQuery(query: string): boolean {
 }
 
 function isFindGameQuery(query: string): boolean {
-  return /\b(?:find|search|show|discover|looking for|want to join|play)\b[\s\S]*\b(?:game|games|match|matches|session|sessions|group|groups)\b/i.test(query)
+  return /\b(?:find|search(?:ing)?|show|discover|look(?:ing)? for|want to join|play)\b[\s\S]*\b(?:game|games|match|matches|session|sessions|group|groups)\b/i.test(query)
     || /\b(?:game|games|match|matches|session|sessions|group|groups)\b[\s\S]*\b(?:near me|nearby|available|today|tomorrow|weekend)\b/i.test(query)
-    || /\b(?:find|show|play|join|looking for|want to play)\b[\s\S]*\b(?:pickleball|badminton|tennis|padel|squash|table tennis|ping pong)\b/i.test(query);
+    || /\b(?:find|show|play|join|look(?:ing)? for|want to play)\b[\s\S]*\b(?:pickleball|badminton|tennis|padel|squash|table tennis|ping pong)\b/i.test(query)
+    || /\b(?:find|search|choose) (?:for )?(?:a |an )?(?:different|another) sport\b/i.test(query)
+    || /(?:^|\b(?:any|available|nearby|some|are there|do you have)\s+)(?:pickleball|badminton|tennis|padel|squash|table tennis|ping pong)\s+(?:game|games|match|matches|session|sessions|group|groups)\b/i.test(query);
+}
+
+function isSearchRefinementQuery(query: string): boolean {
+  const normalized = query.toLowerCase().trim();
+  return /^(?:make|only|same|another|more|instead|try|what about|how about|show another)\b/.test(normalized)
+    || /\b(?:today|tomorrow|this weekend|next weekend|morning|afternoon|evening|night|after work)\s+(?:instead|only)?\b/.test(normalized)
+    || /\b(?:closer|nearer|earlier|later|more casual|more social)\b/.test(normalized);
 }
 
 function MicrophoneIcon() {
@@ -939,6 +1034,7 @@ export default function Home() {
   const liveRefreshInFlightRef = useRef(false);
   const pendingLiveRefreshKeysRef = useRef(new Set<LiveStateKey>());
   const chatRequestVersionRef = useRef(0);
+  const lastDiscoveryQueryRef = useRef<string | null>(null);
 
   useEffect(() => {
     const savedTheme = window.localStorage.getItem("courtmate-theme");
@@ -1831,6 +1927,13 @@ export default function Home() {
     const recent = history.slice(-3);
     const recentDelta = recent.reduce((total, point) => total + (point.delta ?? 0), 0);
     const sportName = sportLabel(sport);
+    if (/\b(skill level|current level|what level|how good am i)\b/.test(normalized)) {
+      const level = cmrLevelForRating(rating);
+      const subject = requestedSport ? `Your current ${sportName} skill level` : `Your strongest current skill level is ${level} in ${sportName}`;
+      return requestedSport
+        ? `${subject} is ${level}, based on a ${rating.toFixed(2)}/10 CMR across ${games} rated game${games === 1 ? "" : "s"}.`
+        : `${subject}, based on a ${rating.toFixed(2)}/10 CMR across ${games} rated game${games === 1 ? "" : "s"}. CourtMate tracks a separate skill level for each sport.`;
+    }
     if (/\b(progress|progression|trend|trending|changing|change over time|movement)\b/.test(normalized)) {
       const progressionRatings = requestedSport
         ? ratings.filter(([name]) => name === requestedSport)
@@ -1904,9 +2007,7 @@ export default function Home() {
         return;
       }
       const requestSport = sportFromText(requestQuery) ?? selectedSport;
-      const previousRequest = searchScope === "court_discovery" && (sessions.length > 0 || groupProposal)
-        ? [...chatMessages].reverse().find((message) => message.role === "user")?.text
-        : undefined;
+      const previousRequest = isSearchRefinementQuery(requestQuery) ? lastDiscoveryQueryRef.current ?? undefined : undefined;
       selectDetectedSport(requestSport);
       const response = await authorizedFetch(`${apiUrl}/v1/sessions/search`, {
         method: "POST",
@@ -1916,7 +2017,7 @@ export default function Home() {
       const payload = await response.json().catch(() => ({})) as SearchResponse & { detail?: string };
       if (requestVersion !== chatRequestVersionRef.current) return;
       if (!response.ok) throw new Error(payload.detail ?? "The game search is temporarily unavailable");
-      const isInScope = payload.scope !== "out_of_scope";
+      if (payload.scope === "court_discovery") lastDiscoveryQueryRef.current = requestQuery;
       setSessions(payload.recommendations.map((item: { session: Session; score: number; reasons: { explanation: string } }) => ({
         ...item.session,
         open_slots: item.session.capacity - item.session.confirmed_player_ids.length,
@@ -1924,36 +2025,14 @@ export default function Home() {
         explanation: item.reasons.explanation,
       })));
       setSearchScope(payload.scope ?? "court_discovery");
-      setGroupProposal(isInScope ? payload.group_proposal ?? null : null);
-      setGroupNameDraft(payload.group_proposal?.group_name ?? "");
-      const shouldStartCreation = isInScope && payload.recommendations.length === 0 && Boolean(payload.group_proposal);
-      const needsSport = shouldStartCreation && !sportFromText(requestQuery);
+      setGroupProposal(null);
+      setGroupNameDraft("");
       setShowCraftedGame(false);
-      if (shouldStartCreation) setCreationStep(needsSport ? "sport" : "vibe");
       setCreateQuery(requestQuery);
-      if (payload.group_proposal) {
-        setCreateGroupDraft({
-          sport: payload.group_proposal.sport,
-          area: payload.group_proposal.area,
-          session_date: payload.group_proposal.session_date ?? localDateInput(),
-          start_time: payload.group_proposal.start_time ?? "19:00",
-          end_time: payload.group_proposal.end_time ?? "21:00",
-          skill_min: payload.group_proposal.skill_min.toString(),
-          skill_max: payload.group_proposal.skill_max.toString(),
-          style: payload.group_proposal.style === "social" ? "social" : "casual",
-          rating_mode: "competitive",
-          game_format: payload.group_proposal.game_format ?? "doubles",
-          capacity: payload.group_proposal.capacity ?? 6,
-        });
-      }
       if (shouldShowMessage && payload.message) {
         setChatMessages((messages) => [...messages.slice(-8), { id: `${requestTimestamp}-assistant`, role: "assistant", text: payload.message }]);
       } else if (exact && requestQuery.trim()) {
         setChatMessages((messages) => [...messages.slice(-8), { id: `${requestTimestamp}-assistant`, role: "assistant", text: payload.message || (payload.recommendations.length ? "I found a few games that could work." : "I could not find an exact match yet.") }]);
-      }
-      if (shouldStartCreation) {
-        const firstStep = needsSport ? "sport" : "vibe";
-        setChatMessages((messages) => [...messages.slice(-8), { id: `${requestTimestamp}-creation-assistant`, role: "assistant", text: `I can create one around those requirements. ${creationQuestion(firstStep)}` }]);
       }
     } catch {
       if (requestVersion !== chatRequestVersionRef.current) return;
@@ -2083,9 +2162,10 @@ export default function Home() {
       if (areaMatch) next.area = areaMatch[1].trim();
       else if (step === "area" && normalized.length >= 2 && normalized.length <= 80) next.area = normalized.replace(/^(?:near|around|in)\s+/i, "");
     }
-    const dateMatch = lowered.match(/\b(today|tomorrow|this weekend|next weekend|any date|mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?|\d{4}-\d{2}-\d{2})\b/);
+    const dateMatch = lowered.match(/\b(today|tomorrow|this weekend|next weekend|any date|mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b/);
+    const naturalDate = parseNaturalGameDate(normalized);
     if (dateMatch) next.date = dateMatch[1];
-    else if (step === "date" && normalized) next.date = normalized;
+    else if (naturalDate) next.date = naturalDate;
     const timeMatch = lowered.match(/\b(any time|morning|daytime|afternoon|evening|night|after work|tonight|\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/);
     if (timeMatch) next.time = timeMatch[1];
     else if (step === "time" && normalized) next.time = normalized;
@@ -2179,7 +2259,7 @@ export default function Home() {
   }
 
   function nextCreationStep(step: CreationStep, draft: CreateGroupDraft): CreationStep {
-    const order: CreationStep[] = ["sport", "area", "date", "time", "skill", "vibe", "format", "capacity", "visibility", "name", "confirm"];
+    const order: CreationStep[] = ["sport", "area", "date", "time", "skill", "format", "capacity", "visibility", "name", "confirm"];
     let nextStep = order[order.indexOf(step) + 1] ?? "confirm";
     if (nextStep === "capacity" && draft.game_format === "singles") nextStep = "visibility";
     return nextStep;
@@ -2214,23 +2294,10 @@ export default function Home() {
       nextDraft.skill_max = skillBands[skill][1];
       changed = true;
     }
-    const timeMatch = lowered.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/);
-    if (timeMatch) {
-      let hour = Number(timeMatch[1]) % 12;
-      if (timeMatch[3] === "pm") hour += 12;
-      nextDraft.start_time = `${String(hour).padStart(2, "0")}:${timeMatch[2] ?? "00"}`;
-      nextDraft.end_time = `${String((hour + 2) % 24).padStart(2, "0")}:${timeMatch[2] ?? "00"}`;
-      changed = true;
-    }
-    const timeRange = lowered.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:to|–|-)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/);
-    if (timeRange) {
-      const endMeridiem = timeRange[6];
-      const startMeridiem = timeRange[3] ?? endMeridiem;
-      let startHour = Number(timeRange[1]) % 12 + (startMeridiem === "pm" ? 12 : 0);
-      let endHour = Number(timeRange[4]) % 12 + (endMeridiem === "pm" ? 12 : 0);
-      if (!timeRange[3] && endMeridiem === "pm" && startHour > endHour) startHour -= 12;
-      nextDraft.start_time = `${String(startHour).padStart(2, "0")}:${timeRange[2] ?? "00"}`;
-      nextDraft.end_time = `${String(endHour).padStart(2, "0")}:${timeRange[5] ?? "00"}`;
+    const parsedTime = parseNaturalGameTime(reply);
+    if (parsedTime) {
+      nextDraft.start_time = parsedTime.start_time;
+      nextDraft.end_time = parsedTime.end_time;
       changed = true;
     }
     if (lowered.includes("today") || lowered.includes("tomorrow") || /\b(mon|tue|wed|thu|fri|sat|sun)(day)?\b/.test(lowered)) {
@@ -2248,10 +2315,10 @@ export default function Home() {
       nextDraft.session_date = formatCreationDate(nextDate);
       changed = true;
     }
-    if (creationStep === "date" && !changed) {
-      const parsedDate = new Date(`${normalizedReply} 12:00`);
-      if (!Number.isNaN(parsedDate.getTime())) {
-        nextDraft.session_date = formatCreationDate(parsedDate);
+    if (creationStep === "date") {
+      const parsedDate = parseNaturalGameDate(normalizedReply);
+      if (parsedDate) {
+        nextDraft.session_date = parsedDate;
         changed = true;
       }
     }
@@ -2379,7 +2446,10 @@ export default function Home() {
       setChatMessages((messages) => [...messages.slice(-8), { id: `${Date.now()}-creation-assistant`, role: "assistant", text: nextMessage }]);
       return;
     }
-    setChatMessages((messages) => [...messages.slice(-8), { id: `${Date.now()}-creation-assistant`, role: "assistant", text: creationQuestion() }]);
+    const retryMessage = creationStep === "time"
+      ? "I couldn't read both times. Please enter a range such as 5 PM to 9 PM."
+      : creationQuestion();
+    setChatMessages((messages) => [...messages.slice(-8), { id: `${Date.now()}-creation-assistant`, role: "assistant", text: retryMessage }]);
   }
 
   function skipSession(sessionId: string) {
@@ -2599,25 +2669,153 @@ export default function Home() {
     }
   }
 
-  function sendQuickPrompt(prompt: string) {
-    if (prompt === "Create a game") {
-      openCreateGame();
+  function routeAskNavigation(message: string) {
+    const normalized = message.toLowerCase().replace(/\s+/g, " ").trim();
+    const asksToOpen = /\b(?:open|show|view|go to|take me to)\b/.test(normalized);
+    let destination = "";
+    let action: (() => void) | null = null;
+
+    if ((asksToOpen && /\bnotifications?\b/.test(normalized)) || /^notifications?$/.test(normalized)) {
+      destination = "notifications";
+      action = openNotifications;
+    } else if ((asksToOpen && /\b(?:settings|preferences)\b/.test(normalized)) || /^(?:settings|preferences)$/.test(normalized) || /\b(?:edit|update) my profile\b/.test(normalized)) {
+      destination = "settings";
+      action = openSettings;
+    } else if (/\bhow (?:court ?mate|the app|it) works\b/.test(normalized) || /^(?:help|how it works)$/.test(normalized)) {
+      destination = "How CourtMate works";
+      action = openHowItWorks;
+    } else if ((asksToOpen && /\b(?:leaderboard|rankings?)\b/.test(normalized)) || /^(?:leaderboard|rankings?)$/.test(normalized)) {
+      destination = "the leaderboard";
+      action = () => selectTab("leaderboard");
+    } else if ((asksToOpen && /\b(?:my )?profile\b/.test(normalized)) || /^(?:my )?profile$/.test(normalized)) {
+      destination = "your profile";
+      action = () => selectTab("profile");
+    } else if (/^(?:my )?pending (?:games?|requests?)$/.test(normalized) || (asksToOpen && /\bpending (?:games?|requests?)\b/.test(normalized))) {
+      destination = "pending games";
+      action = () => { setGamesViewTab("pending"); selectTab("games"); };
+    } else if (/^(?:my )?upcoming games?$/.test(normalized) || (asksToOpen && /\bupcoming games?\b/.test(normalized))) {
+      destination = "upcoming games";
+      action = () => { setGamesViewTab("upcoming"); selectTab("games"); };
+    } else if (/^(?:my )?completed games?$/.test(normalized) || (asksToOpen && /\bcompleted games?\b/.test(normalized))) {
+      destination = "completed games";
+      action = () => { setGamesViewTab("awaiting_feedback"); selectTab("games"); };
+    } else if ((asksToOpen && /\bexplore\b/.test(normalized)) || /^(?:explore|explore games)$/.test(normalized)) {
+      destination = "Explore games";
+      action = () => { setGamesViewTab("explore"); selectTab("games"); };
+    } else if ((asksToOpen && /\b(?:my games|games tab)\b/.test(normalized)) || /^(?:my games|games tab)$/.test(normalized)) {
+      destination = "your games";
+      action = () => selectTab("games");
+    } else if ((asksToOpen && /\b(?:feed|home)\b/.test(normalized)) || /^(?:feed|home|activity feed)$/.test(normalized)) {
+      destination = "the activity feed";
+      action = () => { setSocialFeedEntry("all"); selectTab("social"); };
+    }
+
+    if (!action) return false;
+    const timestamp = Date.now();
+    setQuery("");
+    setChatMessages((messages) => [...messages.slice(-8), { id: `${timestamp}-navigation-user`, role: "user", text: message.trim() }, { id: `${timestamp}-navigation-assistant`, role: "assistant", text: `Opening ${destination}.` }]);
+    setToast(`Opening ${destination}`);
+    action();
+    return true;
+  }
+
+  function resetAskWorkflow() {
+    setSessions([]);
+    setGroupProposal(null);
+    setShowCreateGame(false);
+    setShowCraftedGame(false);
+    setDiscoveryStep(null);
+    setScoreSessionId(null);
+    setScorePickerOpen(false);
+    setScorePickerSport(null);
+    setFeedbackSessionId(null);
+    setFeedbackPickerOpen(false);
+    setFeedbackMembers([]);
+    setLastChatRequest(null);
+  }
+
+  function routeAskMessage(message: string) {
+    const cleanMessage = message.trim();
+    if (!cleanMessage) return;
+
+    if (/^(?:clear|reset)(?: the)? (?:chat|conversation)$/i.test(cleanMessage)) {
+      clearChat();
+      setToast("Ask conversation cleared");
       return;
     }
-    if (prompt === "Record final score") {
-      startScoreEntry();
+    if (/^(?:cancel|stop|never ?mind|start over|new request)$/i.test(cleanMessage)) {
+      const timestamp = Date.now();
+      resetAskWorkflow();
+      setQuery("");
+      setChatMessages((messages) => [...messages.slice(-8), { id: `${timestamp}-cancel-user`, role: "user", text: cleanMessage }, { id: `${timestamp}-cancel-assistant`, role: "assistant", text: "No problem. What would you like to do next: find a game, create one, or review your CMR?" }]);
       return;
     }
-    if (prompt === "Give game feedback") {
+    if (/\b(?:what can you do|how can you help|what can i ask|help me use ask)\b/i.test(cleanMessage)) {
+      const timestamp = Date.now();
+      resetAskWorkflow();
+      setQuery("");
+      setChatMessages((messages) => [...messages.slice(-8), { id: `${timestamp}-capabilities-user`, role: "user", text: cleanMessage }, { id: `${timestamp}-capabilities-assistant`, role: "assistant", text: "I can find and join games, guide you through creating one, explain your CMR and recent game history, collect completed-game feedback, record scores, and open Games, Profile, Leaderboard, Notifications, Settings, or the activity feed." }]);
+      return;
+    }
+
+    // A complete intent must be allowed to interrupt an unfinished guided flow.
+    if (groupProposal && creationStep === "confirm" && /^(?:create this game|create|yes|looks good|go ahead)$/i.test(cleanMessage)) {
+      void handleCreationReply(cleanMessage);
+      return;
+    }
+    if (routeAskNavigation(cleanMessage)) return;
+    if (isCreateGameQuery(cleanMessage)) {
+      resetAskWorkflow();
+      openCreateGame(cleanMessage);
+      setQuery("");
+      return;
+    }
+    if (isFindGameQuery(cleanMessage)) {
+      resetAskWorkflow();
+      startDiscovery(cleanMessage);
+      return;
+    }
+    if (/(?:\bsubmit\b|\bleave\b|\bsave\b|\bgive\b).*\bfeedback\b/i.test(cleanMessage) || /\brate\b.*\b(?:player|players|lineup|game|match)\b/i.test(cleanMessage)) {
+      resetAskWorkflow();
       startFeedbackEntry();
       return;
     }
-    if (feedbackSessionId) {
-      void postHomeFeedback(prompt);
+    if (/\b(?:log|record|add)\b.*\bscore\b/i.test(cleanMessage)) {
+      resetAskWorkflow();
+      startScoreEntry();
       return;
     }
+    if (isPerformanceQuery(cleanMessage)) {
+      resetAskWorkflow();
+      void search(undefined, cleanMessage);
+      return;
+    }
+
+    if (!scoreSessionId && !feedbackSessionId && !groupProposal && !discoveryStep && requestSessionFromChat(cleanMessage)) return;
     if (discoveryStep) {
-      handleDiscoveryReply(prompt);
+      handleDiscoveryReply(cleanMessage);
+      return;
+    }
+    if (feedbackPickerOpen && analyzeFeedbackForSport(cleanMessage)) return;
+    if (scoreSessionId) {
+      void postHomeScore(cleanMessage);
+      return;
+    }
+    if (scorePickerOpen && filterScoreGames(cleanMessage)) return;
+    if (feedbackSessionId) {
+      void postHomeFeedback(cleanMessage);
+      return;
+    }
+    if (groupProposal) {
+      void handleCreationReply(cleanMessage);
+      return;
+    }
+    void search(undefined, cleanMessage);
+  }
+
+  function sendQuickPrompt(prompt: string) {
+    if (prompt === "Create this game" && groupProposal) {
+      void handleCreationReply(prompt);
       return;
     }
     if (prompt === "Back to game search") {
@@ -2630,16 +2828,11 @@ export default function Home() {
       setChatMessages((messages) => [...messages.slice(-8), { id: `${Date.now()}-score-back`, role: "assistant", text: "What game would you like to find?" }]);
       return;
     }
-    if (groupProposal) {
-      void handleCreationReply(prompt);
-      return;
-    }
-    if (isFindGameQuery(prompt) || (!sessions.length && ["This weekend", "Casual after work"].includes(prompt))) {
+    if (!sessions.length && ["This weekend", "Casual after work"].includes(prompt)) {
       startDiscovery(prompt);
       return;
     }
-    setQuery(prompt);
-    void search(undefined, prompt);
+    routeAskMessage(prompt);
   }
 
   function quickPrompts() {
@@ -2652,6 +2845,7 @@ export default function Home() {
     if (searchScope === "performance") return ["How is my CMR changing?", "What should I improve?", "Summarise my recent games", "Create a game", ...feedbackPrompt];
     if (groupProposal && !sessions.length) return creationQuickPrompts();
     if (sessions.length) return ["Show another option", "Make it more casual", "Only show games after 7 PM", "Create a game", ...(approvedGames.length ? ["Record final score"] : []), ...feedbackPrompt];
+    if (searchScope === "court_discovery" && chatMessages.length) return ["Tomorrow instead", "Search another sport", "Create a game"];
     return ["Find games around me", "This weekend", "Casual after work", "Create a game", ...(approvedGames.length ? ["Record final score"] : []), ...feedbackPrompt];
   }
 
@@ -2668,49 +2862,7 @@ export default function Home() {
 
   function handleChatSubmit(event: FormEvent) {
     event.preventDefault();
-    if (!scoreSessionId && !feedbackSessionId && !groupProposal && !discoveryStep && isCreateGameQuery(query)) {
-      openCreateGame(query);
-      setQuery("");
-      return;
-    }
-    if (discoveryStep) {
-      handleDiscoveryReply(query);
-      return;
-    }
-    if (feedbackPickerOpen && analyzeFeedbackForSport(query)) {
-      return;
-    }
-    if (!scoreSessionId && !feedbackSessionId && !groupProposal && requestSessionFromChat(query)) {
-      return;
-    }
-    if (!scoreSessionId && !feedbackSessionId && (/(?:\bsubmit\b|\bleave\b|\bsave\b).*\bfeedback\b/i.test(query) || /\brate\b.*\b(?:player|players|lineup|game|match)\b/i.test(query))) {
-      startFeedbackEntry();
-      return;
-    }
-    if (!scoreSessionId && /\b(?:log|record|add)\b.*\bscore\b/i.test(query)) {
-      startScoreEntry();
-      return;
-    }
-    if (scoreSessionId) {
-      void postHomeScore(query);
-      return;
-    }
-    if (scorePickerOpen && filterScoreGames(query)) {
-      return;
-    }
-    if (feedbackSessionId) {
-      void postHomeFeedback(query);
-      return;
-    }
-    if (groupProposal) {
-      void handleCreationReply(query);
-      return;
-    }
-    if (isFindGameQuery(query)) {
-      startDiscovery(query);
-      return;
-    }
-    void search(undefined, query);
+    routeAskMessage(query);
   }
 
   function changeCreateSport(sport: Sport) {
@@ -2836,40 +2988,10 @@ export default function Home() {
       const transcript = Array.from({ length: event.results.length }, (_, index) => event.results[index][0].transcript).join(" ").trim();
       if (!transcript) return;
       setQuery(transcript);
-      if (feedbackSessionId) {
-        if (Array.from({ length: event.results.length }, (_, index) => event.results[index].isFinal).some(Boolean)) {
-          void postHomeFeedback(transcript);
-        }
-        return;
-      }
-      if (scoreSessionId) {
-        if (Array.from({ length: event.results.length }, (_, index) => event.results[index].isFinal).some(Boolean)) {
-          void postHomeScore(transcript);
-        }
-        return;
-      }
-      if (scorePickerOpen) {
-        if (Array.from({ length: event.results.length }, (_, index) => event.results[index].isFinal).some(Boolean) && filterScoreGames(transcript)) return;
-        return;
-      }
-      if (feedbackPickerOpen) {
-        if (Array.from({ length: event.results.length }, (_, index) => event.results[index].isFinal).some(Boolean) && analyzeFeedbackForSport(transcript)) return;
-        return;
-      }
-      if (groupProposal) {
-        if (Array.from({ length: event.results.length }, (_, index) => event.results[index].isFinal).some(Boolean)) {
-          void handleCreationReply(transcript);
-        }
-        return;
-      }
-      if (/(?:\bsubmit\b|\bleave\b|\bsave\b).*\bfeedback\b/i.test(transcript) || /\brate\b.*\b(?:player|players|lineup|game|match)\b/i.test(transcript)) {
-        if (Array.from({ length: event.results.length }, (_, index) => event.results[index].isFinal).some(Boolean)) startFeedbackEntry();
-        return;
-      }
       const detectedSport = sportFromText(transcript);
       if (detectedSport) selectDetectedSport(detectedSport);
       if (Array.from({ length: event.results.length }, (_, index) => event.results[index].isFinal).some(Boolean)) {
-        void search(undefined, transcript);
+        routeAskMessage(transcript);
       }
     };
     recognition.start();
@@ -3787,7 +3909,7 @@ export default function Home() {
         <div className="brand" aria-label="CourtMate"><img className="brand-icon brand-logo-light" src="/courtmate-header-logo-light.png" alt="CourtMate" /><img className="brand-icon brand-logo-dark" src="/courtmate-header-logo-dark.png" alt="" aria-hidden="true" /></div>
         <div className="nav-right"><button className={`mobile-info-button ${howItWorksOpen ? "active" : ""}`} type="button" onClick={openHowItWorks} aria-label="How CourtMate works" title="How CourtMate works" aria-expanded={howItWorksOpen}><InfoIcon /></button><button className={`about-link ${howItWorksOpen ? "active" : ""}`} type="button" onClick={openHowItWorks} aria-expanded={howItWorksOpen}>How it works</button><span className="location-pill"><span className="dot" /> {profile?.area || "Whitefield"}, Bengaluru</span><button className="theme-toggle" type="button" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}><ThemeIcon dark={theme === "dark"} /></button>{user ? <><div className="notification-wrap">
           <button className={`notification-button ${notificationsOpen ? "active" : ""}`} type="button" onClick={openNotifications} aria-label={`Notifications${unreadNotifications ? `, ${unreadNotifications} unread` : ""}`} title="Notifications"><BellIcon />{unreadNotifications > 0 && <span className="notification-count">{unreadNotifications > 9 ? "9+" : unreadNotifications}</span>}</button>
-        </div><span className="user-name">{user.displayName ?? user.email}</span><button className="avatar" onClick={() => selectTab("profile")} title="Open profile">{profile?.profile_image_url ? <img src={profile.profile_image_url} alt="" /> : initials(user.displayName ?? user.email ?? "CourtMate")}</button></> : <button className="sign-in-button" onClick={() => void signIn()}>{authReady ? "Sign in with Google" : "Loading auth"}</button>}</div>
+        </div><span className="user-name">{user.displayName ?? user.email}</span><button className="avatar" onClick={() => selectTab("profile")} title="Open profile">{profile?.profile_image_url || user.photoURL ? <img src={profile?.profile_image_url || user.photoURL || ""} alt="" /> : initials(profile?.display_name ?? user.displayName ?? user.email ?? "CourtMate")}</button></> : <button className="sign-in-button" onClick={() => void signIn()}>{authReady ? "Sign in with Google" : "Loading auth"}</button>}</div>
       </nav>
       {user && <span className="nav-streak" title={`${socialProfile?.weekly_streak ?? 0} week streak`} aria-label={`${socialProfile?.weekly_streak ?? 0} week streak`}><StreakFireIcon /><b>{socialProfile?.weekly_streak ?? 0}</b></span>}
       {user && <nav className="app-tabs" aria-label="CourtMate sections">
@@ -3820,12 +3942,12 @@ export default function Home() {
       <section className={`home-chat-page ask-conversation ${searchScope === "out_of_scope" ? "chat-out-of-scope" : ""} ${groupProposal && !showCraftedGame ? "creation-in-progress" : ""}`} aria-label="Ask CourtMate">
         <div className="chat-thread" aria-live="polite">
           {!chatMessages.length && !sessions.length && !groupProposal && <div className="chat-message assistant-message welcome-message"><span className="chat-message-mark">CM</span><div><strong>What can I help with?</strong><p>Find a game, create one, or ask about your CMR and recent performance.</p></div></div>}
-          {chatMessages.map((message) => <div className={`chat-message ${message.role}-message`} key={message.id}><span className="chat-message-mark">{message.role === "assistant" ? "CM" : initials(user?.displayName ?? "You")}</span><div>{message.imageUrl && <img className="chat-attachment-preview" src={message.imageUrl} alt="Attached wearable screenshot" />}{message.role === "assistant" ? <AssistantReply text={message.text} /> : <p>{message.text}</p>}</div></div>)}
+          {chatMessages.map((message) => <div className={`chat-message ${message.role}-message`} key={message.id}><span className="chat-message-mark">{message.role === "assistant" ? "CM" : profile?.profile_image_url || user.photoURL ? <img src={profile?.profile_image_url || user.photoURL || ""} alt="" /> : initials(profile?.display_name ?? user.displayName ?? "You")}</span><div>{message.imageUrl && <img className="chat-attachment-preview" src={message.imageUrl} alt="Attached wearable screenshot" />}{message.role === "assistant" ? <AssistantReply text={message.text} /> : <p>{message.text}</p>}</div></div>)}
           {loading && <TennisBallLoader label="Finding your best match" detail={loadingMessage} />}
           {!loading && searchScope === "court_discovery" && sessions.length > 0 && <div className="chat-message assistant-message result-message"><span className="chat-message-mark">CM</span><div className="result-message-body"><p>{`I found ${sessions.length} option${sessions.length === 1 ? "" : "s"}. Pick one to see the group, request a spot, or skip it.`}</p><div className="chat-choice-list">{sessions.map((session, index) => <article className={`session-card chat-choice-card ${index === 0 ? "featured" : ""}`} key={session.id}><div className="card-top"><span className="date-badge"><strong>{new Date(session.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><small>{new Date(session.session_date).getDate()}</small></span><div className="session-meta"><div className="session-title-row"><h3>{session.group_name}</h3><span className="fit-score">{Math.round(session.score * 100)}% fit</span></div><p>{sportLabel(session.sport)} · {session.start_time} – {session.end_time} · {session.area}</p></div></div><div className="tags"><span className="tag rating">{sportLabel(session.sport)} skill {session.skill_min.toFixed(1)}–{session.skill_max.toFixed(1)}</span><span className="tag">{session.style}</span><span className="tag open">{session.open_slots} spots open</span></div><div className="chat-choice-actions"><button className="join-button secondary-button" onClick={() => void viewGroup(session.id)} disabled={loadingGroupId === session.id}>{loadingGroupId === session.id ? "Loading" : "View group"}</button>{session.organizer_id === user?.uid ? <span className="status-badge approved">Your group</span> : <><button className="join-button chat-join-action" onClick={() => void joinSession(session.id, session.group_name, session.organizer_id)} disabled={joiningSessionId !== null}>{joiningSessionId === session.id ? "Requesting..." : session.open_slots > 0 ? "Request to join" : "Join waitlist"}<span>↗</span></button><button className="chat-skip-action" type="button" onClick={() => skipSession(session.id)}>Not for me</button></>}</div></article>)}</div></div></div>}
           {!loading && lastChatRequest && <div className="chat-request-confirmation" role="status"><div><strong>{lastChatRequest.status === "waitlisted" ? "You are on the waitlist" : "Request sent"}</strong><span>{lastChatRequest.name}</span></div><button type="button" onClick={() => { setGamesViewTab(lastChatRequest.status === "approved" ? "upcoming" : "pending"); selectTab("games"); }}>{lastChatRequest.status === "approved" ? "View My games" : "Check Pending requests"} <span>→</span></button></div>}
           {!loading && showCraftedGame && groupProposal && <div className="chat-message assistant-message crafted-game-message"><span className="chat-message-mark">CM</span><div className="crafted-game-card"><span className="eyebrow">GAME PLAN</span><p className="create-guide-question">{creationQuestion()}</p><strong>{groupNameDraft}</strong><p>{creationPlanLabel()}</p><div className="tags"><span className="tag rating">CMR {createCmrMin}–{createCmrMax}</span><span className="tag">{createGroupDraft.style}</span></div><div className="crafted-game-actions"><button className="join-button create-button" type="button" onClick={() => void createGroup()} disabled={createGroupLoading}>{createGroupLoading ? "Creating..." : "Create game"}<span>↗</span></button></div></div></div>}
-      {!loading && <div className="chat-quick-replies chat-context-suggestions" aria-label="Suggested replies">{suggestedPrompts().map((prompt) => <button type="button" key={prompt} onClick={() => prompt === "Create this game" ? openCreateGame() : sendQuickPrompt(prompt)}><span>{prompt}</span></button>)}</div>}
+      {!loading && <div className="chat-quick-replies chat-context-suggestions" aria-label="Suggested replies">{suggestedPrompts().map((prompt) => <button type="button" key={prompt} onClick={() => sendQuickPrompt(prompt)}><span>{prompt}</span></button>)}</div>}
         </div>
         {joiningSessionId && <div className="chat-request-sending" role="status">Sending your request to the group...</div>}
         <form className="chat-input-shell" onSubmit={handleChatSubmit}><div className="chat-input-row"><input value={query} placeholder={feedbackSessionId ? "How was the game?" : scoreSessionId ? "e.g. Rhea beat Ananya 11 to 8" : showCraftedGame ? "Change the time, area, level, or vibe" : "Message CourtMate"} onChange={(event) => { setQuery(event.target.value); const detectedSport = sportFromText(event.target.value); if (detectedSport) selectDetectedSport(detectedSport); }} aria-label="Message CourtMate" autoComplete="off" /><button className={`ask-voice-button ${isListening ? "listening" : ""}`} type="button" onClick={startVoice} disabled={loading} aria-label={isListening ? "Listening for your question" : "Ask with your voice"} title="Voice search"><MicrophoneIcon /></button><button className="chat-send-action composer-send-button" type="submit" disabled={loading || !query.trim()} aria-label="Send message"><SendUpIcon /></button></div></form>

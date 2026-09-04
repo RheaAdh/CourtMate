@@ -487,12 +487,13 @@ This screenshot is being attached to a completed racket-sport game."""
             return False
         # Search requests mentioning games or skill should stay in discovery.
         discovery_request = bool(re.search(r"\b(find|search|show|join|invite|create|book|nearby|around)\b", lowered)) and bool(re.search(r"\b(game|games|group|groups|session|sessions|player|players|court|courts|venue|venues|match|matches)\b", lowered))
-        own_history_context = bool(re.search(r"\b(my|mine|i've|i have)\b", lowered)) and bool(re.search(r"\b(last|recent|history|played|games|game|activity)\b", lowered))
+        own_history_context = bool(re.search(r"\b(my|mine|i've|i have)\b", lowered)) and bool(re.search(r"\b(last|recent|history|played|performance|progress|trend|summary|summarize|summarise|activity)\b", lowered))
         if discovery_request and not own_history_context:
             return False
-        explicit_metric = bool(re.search(r"\b(cmr|rating|ratings|feedback|review|stats|statistics|calories|steps|heart rate|distance|wearable|progress|trend|fitness|form|improve|improvement|strongest|weakest|reliability|attendance)\b", lowered))
-        personal_history = bool(re.search(r"\b(my|me|i|mine|i've|i have)\b", lowered)) and bool(re.search(r"\b(performance|history|played|games|activity|progress|trend|form|improve|rating|stats|fitness)\b", lowered))
-        return explicit_metric or personal_history or bool(re.search(r"\bhow (?:am i doing|have i been playing)\b", lowered))
+        explicit_metric = bool(re.search(r"\b(cmr|rating|ratings|feedback|review|stats|statistics|calories|steps|heart rate|distance|wearable|progress|trend|fitness|form|improve|improvement|strongest|weakest|reliability|attendance|skill level)\b", lowered))
+        personal_history = bool(re.search(r"\b(my|me|i|mine|i've|i have)\b", lowered)) and bool(re.search(r"\b(performance|history|played|games|activity|progress|trend|form|improve|rating|stats|fitness|level)\b", lowered))
+        asks_current_level = bool(re.search(r"\bwhat(?:'s| is) my (?:current )?level\b|\bhow good am i\b", lowered))
+        return explicit_metric or personal_history or asks_current_level or bool(re.search(r"\bhow (?:am i doing|have i been playing)\b", lowered))
 
     def discuss_performance(self, query: str, player: Player, history: dict, activity_proofs: list[dict]) -> str:
         """Answer only from the player's stored game and wearable evidence."""
@@ -547,6 +548,31 @@ This screenshot is being attached to a completed racket-sport game."""
                 key=lambda point: str(point.get("session_date", "")),
                 reverse=True,
             )
+
+            if re.search(r"\b(skill level|current level|what level|how good am i)\b", lowered):
+                if rating < 2:
+                    level = "Complete beginner"
+                elif rating < 3:
+                    level = "Beginner"
+                elif rating < 4:
+                    level = "Learning / recreational"
+                elif rating < 5:
+                    level = "Intermediate"
+                elif rating < 6:
+                    level = "Strong intermediate"
+                elif rating < 7:
+                    level = "Advanced"
+                elif rating < 8:
+                    level = "Very advanced"
+                elif rating < 9:
+                    level = "Expert"
+                elif rating < 10:
+                    level = "Elite"
+                else:
+                    level = "Competitive / professional"
+                if requested_sport:
+                    return f"Your current {sport_name} skill level is {level}, based on a {rating:.2f}/10 CMR across {games} rated game{'' if games == 1 else 's'}."
+                return f"Your strongest current skill level is {level} in {sport_name}, based on a {rating:.2f}/10 CMR across {games} rated game{'' if games == 1 else 's'}. CourtMate tracks a separate skill level for each sport."
 
             if re.search(r"\b(progress|progression|trend|trending|changing|change over time|movement)\b", lowered):
                 progression = []
@@ -614,7 +640,7 @@ This screenshot is being attached to a completed racket-sport game."""
             return f"{rating_copy}{trend}{evidence}{next_step}"
 
         grounded_intent = bool(re.search(
-            r"\b(cmr|rating|trend|progress|improve|improvement|work on|focus on|summary|summarize|summarise|recap|recent games?|last games?|history|feedback)\b",
+            r"\b(cmr|rating|trend|progress|improve|improvement|work on|focus on|summary|summarize|summarise|recap|recent games?|last games?|history|feedback|skill level|current level)\b|\bhow good am i\b|\bwhat(?:'s| is) my (?:current )?level\b",
             query.lower(),
         ))
         has_wearable_question = bool(re.search(r"\b(wearable|calories|steps|heart rate|distance|fitness tracker)\b", query.lower()))
