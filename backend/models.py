@@ -761,7 +761,7 @@ class ChatPost(BaseModel):
 
 
 class SocialPostCreateRequest(BaseModel):
-    caption: str = Field(min_length=1, max_length=500)
+    caption: str = Field(default="", max_length=500)
     sport: Sport = "pickleball"
     session_id: str | None = None
     media_url: str | None = Field(default=None, max_length=2048)

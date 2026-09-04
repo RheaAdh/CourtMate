@@ -498,13 +498,15 @@ def _map_session_visible_to_player(session: Session, visibility_filter: str, fol
 @app.post("/v1/social/posts", response_model=SocialPostView)
 def create_social_post(request: SocialPostCreateRequest, player: Player = Depends(get_current_player)) -> SocialPostView:
     caption = request.caption.strip()
-    if not caption:
-        raise HTTPException(status_code=422, detail="Post caption is required")
     media_urls = list(dict.fromkeys(
         value.strip()
         for value in [request.media_url, *request.media_urls]
         if value and value.strip()
     ))
+    if not caption and not media_urls:
+        raise HTTPException(status_code=422, detail="Add a message or photo before posting")
+    if not caption:
+        caption = "Shared a CourtMate game moment."
     if len(media_urls) > 6:
         raise HTTPException(status_code=422, detail="Attach no more than 6 photos")
     inline_media_sizes = [len(value.encode("utf-8")) for value in media_urls if value.lower().startswith("data:image/")]
@@ -1610,13 +1612,19 @@ def search(request: ParseRequest, player: Player = Depends(get_current_player)) 
             })
 
     sessions = candidate_sessions if candidate_sessions is not None else refreshed_sessions
-    sessions = [session for session in sessions if _session_visible_to_player(session, player)]
+    sessions = [
+        session for session in sessions
+        if session.organizer_id != player.id and _session_visible_to_player(session, player)
+    ]
     players = repository.list_players()
     recommendations = search_sessions(sessions, intent, players, player, exact=request.mode == "exact")
     if not recommendations and retrieval_mode == "vector":
         fallback_reason = "vector_candidates_failed_validation"
         retrieval_mode = "deterministic_fallback"
-        sessions = [session for session in refreshed_sessions if _session_visible_to_player(session, player)]
+        sessions = [
+            session for session in refreshed_sessions
+            if session.organizer_id != player.id and _session_visible_to_player(session, player)
+        ]
         recommendations = search_sessions(sessions, intent, players, player, exact=request.mode == "exact")
     decision = intent_parser.decide(request.query, intent, sessions, recommendations, player)
     proposal = _group_proposal(intent, player.id, decision.proposed_group_name, request.query) if not recommendations else None

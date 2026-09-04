@@ -46,7 +46,7 @@ class ApiFlowTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
 
     def test_search_returns_existing_dupr_compatible_group(self):
-        response = self.client.post("/v1/sessions/search", json={"query": "Find a casual intermediate game near Whitefield this Sunday morning", "player_id": "p1"})
+        response = self.client.post("/v1/sessions/search", json={"query": "Find a casual intermediate game near Whitefield this Sunday morning"}, headers={"X-CourtMate-Player-ID": "p2"})
         payload = response.json()
         self.assertEqual(response.status_code, 200)
         self.assertEqual(payload["action"], "join_existing")
@@ -348,12 +348,14 @@ class ApiFlowTests(unittest.TestCase):
 
     def test_chat_followup_keeps_previous_game_context(self):
         original = "Find a pickleball game near Whitefield this Sunday morning"
-        first = self.client.post("/v1/sessions/search", json={"query": original})
+        headers = {"X-CourtMate-Player-ID": "p2"}
+        first = self.client.post("/v1/sessions/search", json={"query": original}, headers=headers)
         self.assertEqual(first.status_code, 200)
 
         followup = self.client.post(
             "/v1/sessions/search",
             json={"query": "make it more casual", "context": original},
+            headers=headers,
         )
         self.assertEqual(followup.status_code, 200)
         self.assertEqual(followup.json()["scope"], "court_discovery")
@@ -361,6 +363,16 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(followup.json()["intent"]["area"], "Whitefield")
         self.assertEqual(followup.json()["recommendations"][0]["session"]["id"], "s1")
         self.assertIn("Sunday Rally Crew", followup.json()["message"])
+
+    def test_chat_search_never_recommends_a_game_created_by_the_player(self):
+        response = self.client.post(
+            "/v1/sessions/search",
+            json={"query": "Find a casual intermediate pickleball game near Whitefield this Sunday morning"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(all(item["session"]["organizer_id"] != "p1" for item in response.json()["recommendations"]))
 
     def test_unrelated_followup_does_not_inherit_game_context(self):
         response = self.client.post(
@@ -395,7 +407,7 @@ class ApiFlowTests(unittest.TestCase):
         intent = response.json()["intent"]
         self.assertEqual(response.status_code, 200)
         self.assertEqual(intent["area"], "Whitefield")
-        self.assertEqual([item["session"]["id"] for item in response.json()["recommendations"]], ["s1", "s2"])
+        self.assertEqual([item["session"]["id"] for item in response.json()["recommendations"]], ["s2"])
 
     def test_chat_search_keeps_skill_phrase_out_of_locality(self):
         response = self.client.post(
@@ -443,7 +455,8 @@ class ApiFlowTests(unittest.TestCase):
         fake_client.models.generate_content.return_value.text = "requirement: Explain when"
 
         scenarios = {
-            "How is my CMR changing?": ("5.15", "up 0.45"),
+            "How is my CMR changing?": ("4.80 to 5.15", "up 0.35"),
+            "Tell me my CMR progression": ("Badminton: 4.80 to 5.15", "Pickleball: 4.20 to 4.20"),
             "What should I improve?": ("result data", "shot-level data"),
             "Summarise my recent games": ("Sunday Smash", "Brookefield Doubles"),
             "Analyze my existing Badminton CMR and game history. What should I work on next?": ("Badminton", "5.15"),
@@ -483,7 +496,7 @@ class ApiFlowTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn("too little evidence", response.json()["answer"])
-        self.assertIn("2 more confirmed competitive games", response.json()["answer"])
+        self.assertIn("2 more rated games", response.json()["answer"])
 
     def test_performance_chat_rejects_malformed_gemini_wearable_answer(self):
         player = repository.get_player("p1").model_copy(update={
@@ -819,6 +832,22 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(created.status_code, 200)
         self.assertEqual(created.json()["player_id"], "p2")
         self.assertEqual(created.json()["session_id"], "s1")
+
+    def test_confirmed_player_can_publish_a_photo_without_a_caption(self):
+        created = self.client.post(
+            "/v1/social/posts",
+            json={
+                "sport": "pickleball",
+                "session_id": "s1",
+                "media_urls": ["https://storage.googleapis.com/example/game-photo.jpg"],
+                "media_type": "image",
+            },
+            headers={"X-CourtMate-Player-ID": "p2"},
+        )
+
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(created.json()["caption"], "Shared a CourtMate game moment.")
+        self.assertEqual(created.json()["media_urls"], ["https://storage.googleapis.com/example/game-photo.jpg"])
 
     def test_only_the_post_owner_can_delete_a_social_post(self):
         created = self.client.post(

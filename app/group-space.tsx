@@ -320,7 +320,7 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
   async function publishPersonalPost(event: FormEvent) {
     event.preventDefault();
     const caption = shareCaption.trim();
-    if (!caption || sharePublishing) return;
+    if ((!caption && !sharePhotoUrls.length) || sharePublishing) return;
     try {
       setSharePublishing(true);
       const response = await authorizedFetch(`${apiUrl}/v1/social/posts`, {
@@ -421,7 +421,7 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
           <form className="group-space-share-composer" onSubmit={publishPersonalPost}>
             <div><span className="kicker">POST ON FEED</span><h2>Share your rally</h2><p>Add the moments you want your circle to remember.</p></div>
             <label><span>YOUR MESSAGE</span><textarea value={shareCaption} onChange={(event) => setShareCaption(event.target.value)} maxLength={500} placeholder={`What made ${group.group_name} memorable?`} aria-label="Message for your personal feed" /></label>
-            <div className="group-space-share-composer-actions"><label className="group-space-share-photo-button"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; if (file) void addSharePhoto(file); }} disabled={sharePhotoUploading || sharePhotoUrls.length >= 6} />{sharePhotoUploading ? "Uploading..." : `Add photos${sharePhotoUrls.length ? ` (${sharePhotoUrls.length}/6)` : ""}`}</label><button type="submit" className="dark-button" disabled={!shareCaption.trim() || sharePhotoUploading || sharePublishing}>{sharePublishing ? "Publishing..." : "Post on feed"} <span>→</span></button></div>
+            <div className="group-space-share-composer-actions"><label className="group-space-share-photo-button"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; if (file) void addSharePhoto(file); }} disabled={sharePhotoUploading || sharePhotoUrls.length >= 6} />{sharePhotoUploading ? "Uploading..." : `Add photos${sharePhotoUrls.length ? ` (${sharePhotoUrls.length}/6)` : ""}`}</label><button type="submit" className="dark-button" disabled={(!shareCaption.trim() && !sharePhotoUrls.length) || sharePhotoUploading || sharePublishing}>{sharePublishing ? "Publishing..." : "Post on feed"} <span>→</span></button></div>
             {sharePhotoUrls.length > 0 && <div className="group-space-share-previews">{sharePhotoUrls.map((url, index) => <button type="button" key={url} onClick={() => setSharePhotoUrls((current) => current.filter((_, photoIndex) => photoIndex !== index))} aria-label={`Remove photo ${index + 1}`}>
               {/* Uploaded previews can be Firebase URLs or local data URLs. */}
               {/* eslint-disable-next-line @next/next/no-img-element */}

@@ -520,7 +520,7 @@ This screenshot is being attached to a completed racket-sport game."""
                 }.items()
             ]
             if re.search(r"\bwhat is cmr\b|\bwhat does cmr mean\b|\bexplain cmr\b", query.lower()):
-                return "CMR means CourtMate Rating. It is a sport-specific score from 1.00 to 10.00 that starts with your confirmed level and updates from confirmed competitive match results. It is a guide to progress, not a permanent label."
+                return "CMR means CourtMate Rating. It is a sport-specific score from 1.00 to 10.00 built from feedback by confirmed players after completed games. It is a guide to progress, not a permanent label."
             if not ratings:
                 return "You do not have a CMR history yet. Play a completed racket-sport game and check in to start tracking your form."
             sport_aliases = {
@@ -548,6 +548,23 @@ This screenshot is being attached to a completed racket-sport game."""
                 reverse=True,
             )
 
+            if re.search(r"\b(progress|progression|trend|trending|changing|change over time|movement)\b", lowered):
+                progression = []
+                progression_ratings = [item for item in ratings if item[0] == requested_sport] if requested_sport else sorted(ratings, key=lambda item: item[2], reverse=True)
+                for progress_sport, current_rating, game_count in progression_ratings:
+                    points = sorted(
+                        (point for point in history.get(progress_sport, []) if point.get("rating") is not None),
+                        key=lambda point: str(point.get("session_date", "")),
+                    )
+                    starting_rating = float(points[0]["rating"]) if points else float(current_rating)
+                    movement = float(current_rating) - starting_rating
+                    direction = "up" if movement > .01 else "down" if movement < -.01 else "steady"
+                    progression.append(
+                        f"{progress_sport.replace('_', ' ').title()}: {starting_rating:.2f} to {float(current_rating):.2f} "
+                        f"({direction}{f' {abs(movement):.2f}' if direction != 'steady' else ''}) across {game_count} rated game{'' if game_count == 1 else 's'}"
+                    )
+                return "Your CMR progression is " + "; ".join(progression) + "."
+
             if re.search(r"\b(strongest|best sport|highest)\b", lowered):
                 return f"Your strongest current CourtMate signal is {sport_name} at {rating:.2f}/10 CMR across {games} game{'' if games == 1 else 's'}."
             if re.search(r"\b(weakest|lowest)\b", lowered):
@@ -569,7 +586,7 @@ This screenshot is being attached to a completed racket-sport game."""
             if re.search(r"\b(improve|improvement|work on|focus on|better|next step|next)\b", lowered):
                 if games < 3:
                     remaining = 3 - games
-                    return f"Your {sport_name} CMR is {rating:.2f}/10, but {games} game{'' if games == 1 else 's'} is too little evidence for a technical recommendation. Complete {remaining} more confirmed competitive game{'' if remaining == 1 else 's'} first; CourtMate does not yet have shot-level data to claim which skill needs work."
+                    return f"Your {sport_name} CMR is {rating:.2f}/10, but {games} game{'' if games == 1 else 's'} is too little evidence for a technical recommendation. Complete {remaining} more rated game{'' if remaining == 1 else 's'} first; CourtMate does not yet have shot-level data to claim which skill needs work."
                 if recent_delta < -0.01:
                     direction = f"down {abs(recent_delta):.2f} across the latest {len(recent_points)} rated games"
                     action = "Use the next 2-3 games against similar-CMR players to check whether the decline continues."
@@ -593,7 +610,7 @@ This screenshot is being attached to a completed racket-sport game."""
                 if requested_sport
                 else f"Your strongest current signal is {sport_name} at {rating:.2f}/10 CMR across {games} game{'' if games == 1 else 's'}."
             )
-            next_step = " Keep logging confirmed competitive results so I can give you a stronger trend analysis." if games < 3 else " Use your next confirmed games to see whether that direction continues."
+            next_step = " Keep collecting completed-game feedback so I can give you a stronger trend analysis." if games < 3 else " Use your next confirmed games to see whether that direction continues."
             return f"{rating_copy}{trend}{evidence}{next_step}"
 
         grounded_intent = bool(re.search(

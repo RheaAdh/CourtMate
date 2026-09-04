@@ -20,6 +20,9 @@ type Theme = "light" | "dark";
 type ExploreTimeFilter = "all" | "morning" | "day" | "evening" | "night";
 type ExploreCmrFilter = "all" | "beginner" | "intermediate" | "advanced";
 type LiveStateKey = "notifications" | "activity" | "connections" | "social-profile" | "profile" | "feed" | "recommendations" | "group-space";
+type DiscoveryStep = "sport" | "area" | "date" | "time" | "skill";
+type DiscoveryDraft = { sport: Sport | null; area: string; date: string; time: string; skill: string };
+type CreationStep = "sport" | "area" | "date" | "time" | "skill" | "vibe" | "format" | "capacity" | "visibility" | "name" | "confirm";
 
 const sportOptions: { value: Sport; label: string }[] = [
   { value: "pickleball", label: "Pickleball" },
@@ -560,6 +563,17 @@ function isPerformanceQuery(query: string): boolean {
     || (/\b(my|me|i|mine|i've|i have)\b/.test(normalized) && /\b(performance|history|played|games|activity|progress|trend|improve|form)\b/.test(normalized));
 }
 
+function isCreateGameQuery(query: string): boolean {
+  return /\b(?:create|host|organize|organise|set\s*up|start|make)\b[\s\S]*\b(?:game|match|session|group)\b/i.test(query)
+    || /\b(?:game|match|session|group)\b[\s\S]*\b(?:create|host|organize|organise|set\s*up)\b/i.test(query);
+}
+
+function isFindGameQuery(query: string): boolean {
+  return /\b(?:find|search|show|discover|looking for|want to join|play)\b[\s\S]*\b(?:game|games|match|matches|session|sessions|group|groups)\b/i.test(query)
+    || /\b(?:game|games|match|matches|session|sessions|group|groups)\b[\s\S]*\b(?:near me|nearby|available|today|tomorrow|weekend)\b/i.test(query)
+    || /\b(?:find|show|play|join|looking for|want to play)\b[\s\S]*\b(?:pickleball|badminton|tennis|padel|squash|table tennis|ping pong)\b/i.test(query);
+}
+
 function MicrophoneIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="12" rx="4" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" /></svg>;
 }
@@ -771,7 +785,9 @@ export default function Home() {
   const [createGroupError, setCreateGroupError] = useState("");
   const [createGameVisibility, setCreateGameVisibility] = useState<SessionVisibility>("public");
   const [showCraftedGame, setShowCraftedGame] = useState(false);
-  const [creationStep, setCreationStep] = useState<"confirm" | "sport" | "time" | "area" | "skill" | "vibe">("confirm");
+  const [creationStep, setCreationStep] = useState<CreationStep>("confirm");
+  const [discoveryStep, setDiscoveryStep] = useState<DiscoveryStep | null>(null);
+  const [discoveryDraft, setDiscoveryDraft] = useState<DiscoveryDraft>({ sport: null, area: "", date: "", time: "", skill: "" });
   const [createGroupLoading, setCreateGroupLoading] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
@@ -1756,6 +1772,20 @@ export default function Home() {
     const recent = history.slice(-3);
     const recentDelta = recent.reduce((total, point) => total + (point.delta ?? 0), 0);
     const sportName = sportLabel(sport);
+    if (/\b(progress|progression|trend|trending|changing|change over time|movement)\b/.test(normalized)) {
+      const progressionRatings = requestedSport
+        ? ratings.filter(([name]) => name === requestedSport)
+        : [...ratings].sort((left, right) => (profile?.cmr_game_counts?.[right[0]] ?? 0) - (profile?.cmr_game_counts?.[left[0]] ?? 0));
+      const progression = progressionRatings.map(([name, currentRating]) => {
+        const points = [...(profile?.cmr_history?.[name] ?? [])].sort((left, right) => left.session_date.localeCompare(right.session_date));
+        const startingRating = points[0]?.rating ?? currentRating;
+        const movement = currentRating - startingRating;
+        const direction = movement > 0.01 ? `up ${movement.toFixed(2)}` : movement < -0.01 ? `down ${Math.abs(movement).toFixed(2)}` : "steady";
+        const gameCount = profile?.cmr_game_counts?.[name] ?? points.length;
+        return `${sportLabel(name as Sport)}: ${startingRating.toFixed(2)} to ${currentRating.toFixed(2)} (${direction}) across ${gameCount} rated game${gameCount === 1 ? "" : "s"}`;
+      });
+      return `Your CMR progression is ${progression.join("; ")}.`;
+    }
     if (/\b(strongest|best sport|highest)\b/.test(normalized)) return `Your strongest current CourtMate signal is ${sportName} at ${rating.toFixed(2)}/10 CMR across ${games} game${games === 1 ? "" : "s"}.`;
     if (/\b(weakest|lowest)\b/.test(normalized)) return `Your lowest current CourtMate signal is ${sportName} at ${rating.toFixed(2)}/10 CMR across ${games} game${games === 1 ? "" : "s"}. Treat it cautiously when the game count is small.`;
     if (/\b(summarize|summarise|summary|recap)\b|\brecent games?\b/.test(normalized)) {
@@ -1779,6 +1809,7 @@ export default function Home() {
       return;
     }
     const requestQuery = nextQuery ?? query;
+    setDiscoveryStep(null);
     const performanceRequest = isPerformanceQuery(requestQuery);
     const requestVersion = ++chatRequestVersionRef.current;
     const shouldShowMessage = exact && requestQuery.trim().length > 0;
@@ -1839,7 +1870,7 @@ export default function Home() {
       const shouldStartCreation = isInScope && payload.recommendations.length === 0 && Boolean(payload.group_proposal);
       const needsSport = shouldStartCreation && !sportFromText(requestQuery);
       setShowCraftedGame(false);
-      if (shouldStartCreation) setCreationStep(needsSport ? "sport" : "time");
+      if (shouldStartCreation) setCreationStep(needsSport ? "sport" : "vibe");
       setCreateQuery(requestQuery);
       if (payload.group_proposal) {
         setCreateGroupDraft({
@@ -1862,7 +1893,7 @@ export default function Home() {
         setChatMessages((messages) => [...messages.slice(-8), { id: `${requestTimestamp}-assistant`, role: "assistant", text: payload.message || (payload.recommendations.length ? "I found a few games that could work." : "I could not find an exact match yet.") }]);
       }
       if (shouldStartCreation) {
-        const firstStep = needsSport ? "sport" : "time";
+        const firstStep = needsSport ? "sport" : "vibe";
         setChatMessages((messages) => [...messages.slice(-8), { id: `${requestTimestamp}-creation-assistant`, role: "assistant", text: `I can create one around those requirements. ${creationQuestion(firstStep)}` }]);
       }
     } catch {
@@ -1885,12 +1916,13 @@ export default function Home() {
     }
   }
 
-  function openCreateGame() {
+  function openCreateGame(sourceMessage = "") {
     if (!user) {
       void signIn();
       return;
     }
-    const sourceQuery = query.trim() || createQuery.trim();
+    const sourceQuery = sourceMessage.trim();
+    setDiscoveryStep(null);
     const explicitSport = sportFromText(sourceQuery);
     const requestSport = explicitSport ?? selectedSport;
     const area = profile?.area || "Whitefield";
@@ -1919,12 +1951,13 @@ export default function Home() {
     setCreateGroupError("");
     setShowCraftedGame(false);
     setShowCreateGame(false);
-    const firstStep = explicitSport ? "time" : "sport";
+    const firstStep: CreationStep = explicitSport ? "area" : "sport";
     setCreationStep(firstStep);
     setCreateQuery(sourceQuery || `Create a ${sportLabel(requestSport)} game near ${area}`);
     setCreateGroupDraft({ sport: nextProposal.sport, area: nextProposal.area, session_date: nextProposal.session_date ?? schedule.session_date, start_time: nextProposal.start_time ?? schedule.start_time, end_time: nextProposal.end_time ?? schedule.end_time, skill_min: nextProposal.skill_min.toString(), skill_max: nextProposal.skill_max.toString(), style: nextProposal.style === "social" ? "social" : "casual", rating_mode: "competitive", game_format: nextProposal.game_format, capacity: nextProposal.capacity });
     setCreateGameVisibility(profile?.default_session_visibility ?? "public");
-    setChatMessages((messages) => [...messages.slice(-8), { id: `${Date.now()}-creation-assistant`, role: "assistant", text: `I can create a ${sportLabel(requestSport)} game. ${creationQuestion(firstStep)}` }]);
+    const introduction = explicitSport ? `I can create a ${sportLabel(requestSport)} game.` : "Let's create a game.";
+    setChatMessages((messages) => [...messages.slice(-8), { id: `${Date.now()}-creation-assistant`, role: "assistant", text: `${introduction} ${creationQuestion(firstStep)}` }]);
   }
 
   function toggleGamesForm() {
@@ -1962,12 +1995,105 @@ export default function Home() {
     return legacyRating != null ? cmrFromLegacySkillBand(legacyRating) : 1;
   }
 
+  function discoveryQuestion(step: DiscoveryStep) {
+    if (step === "sport") return "Which sport do you want to play? Pickleball, badminton, tennis, padel, squash, or table tennis?";
+    if (step === "area") return "Which area should I search? You can name a locality or say near me.";
+    if (step === "date") return "Which date works? You can say today, tomorrow, this weekend, or any date.";
+    if (step === "time") return "What time works: morning, daytime, evening, night, or any time?";
+    return "What CMR level should I match: beginner, intermediate, advanced, a specific range, or any level?";
+  }
+
+  function discoveryQuickPrompts() {
+    if (discoveryStep === "sport") return ["Pickleball", "Badminton", "Tennis", "Padel"];
+    if (discoveryStep === "area") return ["Near me", "Whitefield", "Indiranagar", "HSR Layout"];
+    if (discoveryStep === "date") return ["Today", "Tomorrow", "This weekend", "Any date"];
+    if (discoveryStep === "time") return ["Morning", "Evening", "After work", "Any time"];
+    return ["Beginner", "Intermediate", "Advanced", "Any level"];
+  }
+
+  function parseDiscoveryReply(message: string, current: DiscoveryDraft, step: DiscoveryStep | null) {
+    const normalized = message.trim().replace(/[,.!?]+$/, "").trim();
+    const lowered = normalized.toLowerCase();
+    const next = { ...current };
+    const sport = sportFromText(message);
+    if (sport) next.sport = sport;
+    if (/\b(?:near|around) me\b|\bmy (?:area|location|locality)\b/.test(lowered)) {
+      next.area = profile?.area?.trim() || "Whitefield";
+    } else {
+      const areaMatch = message.match(/\b(?:near|around|in)\s+([A-Za-z0-9][A-Za-z0-9'.-]*(?:\s+[A-Za-z0-9][A-Za-z0-9'.-]*)*?)(?=\s+(?:on|this|next|at|today|tomorrow|morning|evening|night|beginner|intermediate|advanced|cmr)\b|\s*[,.!?]|$)/i);
+      if (areaMatch) next.area = areaMatch[1].trim();
+      else if (step === "area" && normalized.length >= 2 && normalized.length <= 80) next.area = normalized.replace(/^(?:near|around|in)\s+/i, "");
+    }
+    const dateMatch = lowered.match(/\b(today|tomorrow|this weekend|next weekend|any date|mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?|\d{4}-\d{2}-\d{2})\b/);
+    if (dateMatch) next.date = dateMatch[1];
+    else if (step === "date" && normalized) next.date = normalized;
+    const timeMatch = lowered.match(/\b(any time|morning|daytime|afternoon|evening|night|after work|tonight|\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/);
+    if (timeMatch) next.time = timeMatch[1];
+    else if (step === "time" && normalized) next.time = normalized;
+    const skillMatch = lowered.match(/\b(any level|beginner|intermediate|advanced|(?:10|[1-9](?:\.\d)?)\s*(?:-|to)\s*(?:10|[1-9](?:\.\d)?))\b/);
+    if (skillMatch) next.skill = skillMatch[1];
+    else if (step === "skill" && normalized) next.skill = normalized;
+    return next;
+  }
+
+  function nextDiscoveryStep(draft: DiscoveryDraft): DiscoveryStep | null {
+    if (!draft.sport) return "sport";
+    if (!draft.area) return "area";
+    if (!draft.date) return "date";
+    if (!draft.time) return "time";
+    if (!draft.skill) return "skill";
+    return null;
+  }
+
+  function discoverySearchQuery(draft: DiscoveryDraft) {
+    const date = draft.date === "any date" ? "" : ` ${draft.date}`;
+    const time = draft.time === "any time" ? "" : ` ${draft.time}`;
+    const skill = draft.skill === "any level" ? "" : `${draft.skill} `;
+    return `Find ${skill}${sportLabel(draft.sport as Sport)} games near ${draft.area}${date}${time}`.trim();
+  }
+
+  function startDiscovery(message: string) {
+    const initial = parseDiscoveryReply(message, { sport: null, area: "", date: "", time: "", skill: "" }, null);
+    const nextStep = nextDiscoveryStep(initial);
+    setSessions([]);
+    setGroupProposal(null);
+    setDiscoveryDraft(initial);
+    setDiscoveryStep(nextStep);
+    if (!nextStep) {
+      void search(undefined, discoverySearchQuery(initial), true, user, message);
+      return;
+    }
+    const timestamp = Date.now();
+    setQuery("");
+    setChatMessages((messages) => [...messages.slice(-8), { id: `${timestamp}-discovery-user`, role: "user", text: message.trim() }, { id: `${timestamp}-discovery-assistant`, role: "assistant", text: discoveryQuestion(nextStep) }]);
+  }
+
+  function handleDiscoveryReply(message: string) {
+    if (!discoveryStep) return;
+    const updated = parseDiscoveryReply(message, discoveryDraft, discoveryStep);
+    const nextStep = nextDiscoveryStep(updated);
+    setDiscoveryDraft(updated);
+    setDiscoveryStep(nextStep);
+    setQuery("");
+    if (!nextStep) {
+      void search(undefined, discoverySearchQuery(updated), true, user, message);
+      return;
+    }
+    const timestamp = Date.now();
+    setChatMessages((messages) => [...messages.slice(-8), { id: `${timestamp}-discovery-user`, role: "user", text: message.trim() }, { id: `${timestamp}-discovery-assistant`, role: "assistant", text: discoveryQuestion(nextStep) }]);
+  }
+
   function creationQuestion(step = creationStep) {
     if (step === "sport") return "Which sport should I use? Pickleball, badminton, tennis, padel, squash, or table tennis?";
-    if (step === "time") return "What day and time should I post it?";
     if (step === "area") return "Which area should I use? A neighbourhood is enough.";
+    if (step === "date") return "What date should the game be? You can say tomorrow, Saturday, or a specific date.";
+    if (step === "time") return "What start and end time should I use? For example, 7 PM to 9 PM.";
     if (step === "skill") return "Who should this game be for? Beginner, intermediate, advanced, or a CMR range?";
     if (step === "vibe") return "What should the game feel like: relaxed or social?";
+    if (step === "format") return "Is this singles or doubles?";
+    if (step === "capacity") return "How many players in total: 4, 6, or 8?";
+    if (step === "visibility") return "Who can join: anyone nearby, your followers, or only people with the private link?";
+    if (step === "name") return `Would you like a custom game name, or should I use “${groupNameDraft || "the suggested name"}”?`;
     return "Here is the game plan. Ready to create it, or would you like to change something?";
   }
 
@@ -1975,16 +2101,29 @@ export default function Home() {
     const dateLabel = draft.session_date
       ? new Date(`${draft.session_date}T12:00:00`).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })
       : "Date to be decided";
-    return `${sportLabel(draft.sport)} · ${dateLabel} · ${draft.start_time}–${draft.end_time} availability window · 1-hour game · ${draft.area || "Area to be decided"}`;
+    const accessLabel = createGameVisibility === "public" ? "anyone nearby" : createGameVisibility === "followers" ? "followers" : "private link";
+    return `${sportLabel(draft.sport)} · ${dateLabel} · ${draft.start_time}–${draft.end_time} · ${draft.area || "Area to be decided"} · ${draft.game_format} · ${draft.capacity} players · ${accessLabel}`;
   }
 
   function creationQuickPrompts() {
     if (creationStep === "sport") return ["Pickleball", "Badminton", "Tennis", "Padel"];
-    if (creationStep === "time") return ["Saturday at 8 AM", "Tomorrow at 7 PM", "Sunday at 9 AM"];
     if (creationStep === "area") return ["Use my saved area", "Near me"];
+    if (creationStep === "date") return ["Tomorrow", "Saturday", "Sunday"];
+    if (creationStep === "time") return ["7 PM to 9 PM", "8 AM to 10 AM", "6 PM to 8 PM"];
     if (creationStep === "skill") return ["Beginner", "Intermediate", "Advanced"];
-    if (creationStep === "vibe") return ["Casual", "Social", "Competitive"];
+    if (creationStep === "vibe") return ["Casual", "Social"];
+    if (creationStep === "format") return ["Singles", "Doubles"];
+    if (creationStep === "capacity") return ["4 players", "6 players", "8 players"];
+    if (creationStep === "visibility") return ["Anyone nearby", "Followers only", "Private link"];
+    if (creationStep === "name") return ["Use suggested name"];
     return ["Create this game", "Change time", "Change area"];
+  }
+
+  function nextCreationStep(step: CreationStep, draft: CreateGroupDraft): CreationStep {
+    const order: CreationStep[] = ["sport", "area", "date", "time", "skill", "vibe", "format", "capacity", "visibility", "name", "confirm"];
+    let nextStep = order[order.indexOf(step) + 1] ?? "confirm";
+    if (nextStep === "capacity" && draft.game_format === "singles") nextStep = "visibility";
+    return nextStep;
   }
 
   function formatCreationDate(value: Date) {
@@ -1996,6 +2135,7 @@ export default function Home() {
 
   function parseCreationReply(reply: string) {
     const lowered = reply.toLowerCase().trim();
+    const normalizedReply = reply.trim().replace(/[,.!?]+$/, "").trim();
     const nextDraft = { ...createGroupDraft };
     let changed = false;
     const detectedSport = sportFromText(reply);
@@ -2023,6 +2163,17 @@ export default function Home() {
       nextDraft.end_time = `${String((hour + 2) % 24).padStart(2, "0")}:${timeMatch[2] ?? "00"}`;
       changed = true;
     }
+    const timeRange = lowered.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:to|–|-)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/);
+    if (timeRange) {
+      const endMeridiem = timeRange[6];
+      const startMeridiem = timeRange[3] ?? endMeridiem;
+      let startHour = Number(timeRange[1]) % 12 + (startMeridiem === "pm" ? 12 : 0);
+      let endHour = Number(timeRange[4]) % 12 + (endMeridiem === "pm" ? 12 : 0);
+      if (!timeRange[3] && endMeridiem === "pm" && startHour > endHour) startHour -= 12;
+      nextDraft.start_time = `${String(startHour).padStart(2, "0")}:${timeRange[2] ?? "00"}`;
+      nextDraft.end_time = `${String(endHour).padStart(2, "0")}:${timeRange[5] ?? "00"}`;
+      changed = true;
+    }
     if (lowered.includes("today") || lowered.includes("tomorrow") || /\b(mon|tue|wed|thu|fri|sat|sun)(day)?\b/.test(lowered)) {
       const nextDate = new Date();
       if (lowered.includes("tomorrow")) nextDate.setDate(nextDate.getDate() + 1);
@@ -2038,8 +2189,40 @@ export default function Home() {
       nextDraft.session_date = formatCreationDate(nextDate);
       changed = true;
     }
+    if (creationStep === "date" && !changed) {
+      const parsedDate = new Date(`${normalizedReply} 12:00`);
+      if (!Number.isNaN(parsedDate.getTime())) {
+        nextDraft.session_date = formatCreationDate(parsedDate);
+        changed = true;
+      }
+    }
+    if (/\bsingles?\b/.test(lowered)) {
+      nextDraft.game_format = "singles";
+      nextDraft.capacity = 2;
+      changed = true;
+    } else if (/\bdoubles?\b/.test(lowered)) {
+      nextDraft.game_format = "doubles";
+      if (nextDraft.capacity < 4) nextDraft.capacity = 6;
+      changed = true;
+    }
+    if (creationStep === "capacity") {
+      const capacity = Number(lowered.match(/\b(4|6|8)\b/)?.[1]);
+      if (capacity) {
+        nextDraft.capacity = capacity;
+        changed = true;
+      }
+    }
+    if (/\b(?:anyone|public|nearby)\b/.test(lowered)) {
+      setCreateGameVisibility("public");
+      changed = true;
+    } else if (/\bfollowers?\b/.test(lowered)) {
+      setCreateGameVisibility("followers");
+      changed = true;
+    } else if (/\b(?:private|link)\b/.test(lowered)) {
+      setCreateGameVisibility("private");
+      changed = true;
+    }
     const savedArea = profile?.area?.trim() || createGroupDraft.area.trim();
-    const normalizedReply = reply.trim().replace(/[,.!?]+$/, "").trim();
     const usesSavedArea = /^(?:use|keep) (?:my )?(?:saved )?(?:area|location)$/i.test(normalizedReply) || /^(?:near|around) me$/i.test(normalizedReply) || /^my location$/i.test(normalizedReply);
     if (usesSavedArea) {
       if (savedArea) {
@@ -2061,7 +2244,9 @@ export default function Home() {
         changed = true;
       }
     }
-    return { nextDraft, changed };
+    const useSuggestedName = creationStep === "name" && /^(?:use |keep )?(?:the )?(?:suggested|default)(?: name)?$/i.test(normalizedReply);
+    const customName = creationStep === "name" && !useSuggestedName && normalizedReply.length >= 2 && normalizedReply.length <= 80 ? normalizedReply : null;
+    return { nextDraft, changed: changed || useSuggestedName || Boolean(customName), customName };
   }
 
   async function handleCreationReply(reply: string) {
@@ -2099,15 +2284,34 @@ export default function Home() {
       setChatMessages((messages) => [...messages.slice(-8), { id: `${Date.now()}-creation-assistant`, role: "assistant", text: creationQuestion("sport") }]);
       return;
     }
-    const { nextDraft, changed } = parseCreationReply(cleanReply);
+    if (creationStep === "confirm") {
+      const requestedEdit: CreationStep | null = lowered.includes("date") || lowered.includes("day")
+        ? "date"
+        : lowered.includes("format") || lowered.includes("single") || lowered.includes("double")
+          ? "format"
+          : lowered.includes("player") || lowered.includes("capacity") || lowered.includes("spot")
+            ? createGroupDraft.game_format === "singles" ? "format" : "capacity"
+            : lowered.includes("visibility") || lowered.includes("who can join") || lowered.includes("private") || lowered.includes("public") || lowered.includes("follower")
+              ? "visibility"
+              : lowered.includes("name") || lowered.includes("title")
+                ? "name"
+                : null;
+      if (requestedEdit) {
+        setCreationStep(requestedEdit);
+        setShowCraftedGame(false);
+        setChatMessages((messages) => [...messages.slice(-8), { id: `${Date.now()}-creation-assistant`, role: "assistant", text: creationQuestion(requestedEdit) }]);
+        return;
+      }
+    }
+    const { nextDraft, changed, customName } = parseCreationReply(cleanReply);
     if (changed) {
       const previousGeneratedName = `${createGroupDraft.area || "Whitefield"} ${sportLabel(createGroupDraft.sport)} Game`;
       const nextGeneratedName = `${nextDraft.area || "Whitefield"} ${sportLabel(nextDraft.sport)} Game`;
-      const nextGroupName = !groupNameDraft || groupNameDraft === previousGeneratedName ? nextGeneratedName : groupNameDraft;
+      const nextGroupName = customName ?? (!groupNameDraft || groupNameDraft === previousGeneratedName ? nextGeneratedName : groupNameDraft);
       setCreateGroupDraft(nextDraft);
       setGroupNameDraft(nextGroupName);
       setGroupProposal((proposal) => proposal ? { ...proposal, group_name: nextGroupName, sport: nextDraft.sport, area: nextDraft.area, session_date: nextDraft.session_date, start_time: nextDraft.start_time, end_time: nextDraft.end_time, skill_min: Number(nextDraft.skill_min), skill_max: Number(nextDraft.skill_max), style: nextDraft.style } : proposal);
-      const nextStep = creationStep === "sport" ? "time" : creationStep === "time" ? "area" : creationStep === "area" ? "skill" : creationStep === "skill" ? "vibe" : "confirm";
+      const nextStep = nextCreationStep(creationStep, nextDraft);
       setCreationStep(nextStep);
       setShowCraftedGame(nextStep === "confirm");
       const nextMessage = nextStep === "confirm"
@@ -2159,6 +2363,8 @@ export default function Home() {
     setShowCreateGame(false);
     setShowCraftedGame(false);
     setCreationStep("confirm");
+    setDiscoveryStep(null);
+    setDiscoveryDraft({ sport: null, area: "", date: "", time: "", skill: "" });
     setQuery("");
     setScoreSessionId(null);
     setScorePickerOpen(false);
@@ -2196,6 +2402,7 @@ export default function Home() {
     setFeedbackSessionId(null);
     setFeedbackPickerOpen(false);
     setFeedbackMembers([]);
+    setDiscoveryStep(null);
     setScoreSessionId(null);
     setScorePickerSport(null);
     setScorePickerOpen(scoreableGames().length > 0);
@@ -2218,6 +2425,7 @@ export default function Home() {
     setScoreSessionId(null);
     setScorePickerOpen(false);
     setScorePickerSport(null);
+    setDiscoveryStep(null);
     setFeedbackSessionId(null);
     setFeedbackMembers([]);
     setFeedbackPickerOpen(pastGames.length > 0);
@@ -2349,6 +2557,10 @@ export default function Home() {
       void postHomeFeedback(prompt);
       return;
     }
+    if (discoveryStep) {
+      handleDiscoveryReply(prompt);
+      return;
+    }
     if (prompt === "Back to game search") {
       setScoreSessionId(null);
       setScorePickerOpen(false);
@@ -2363,6 +2575,10 @@ export default function Home() {
       void handleCreationReply(prompt);
       return;
     }
+    if (isFindGameQuery(prompt) || (!sessions.length && ["This weekend", "Casual after work"].includes(prompt))) {
+      startDiscovery(prompt);
+      return;
+    }
     setQuery(prompt);
     void search(undefined, prompt);
   }
@@ -2372,6 +2588,7 @@ export default function Home() {
     if (feedbackPickerOpen) return ["Back to game search"];
     if (scoreSessionId) return ["Back to game search", "Create a game"];
     if (scorePickerOpen) return ["Back to game search"];
+    if (discoveryStep) return discoveryQuickPrompts();
     const feedbackPrompt = pastGames.length ? ["Give game feedback"] : [];
     if (searchScope === "performance") return ["How is my CMR changing?", "What should I improve?", "Summarise my recent games", "Create a game", ...feedbackPrompt];
     if (groupProposal && !sessions.length) return creationQuickPrompts();
@@ -2380,7 +2597,7 @@ export default function Home() {
   }
 
   function quickPromptGroups() {
-    const contextual = Boolean(feedbackSessionId || feedbackPickerOpen || scoreSessionId || scorePickerOpen || groupProposal);
+    const contextual = Boolean(feedbackSessionId || feedbackPickerOpen || scoreSessionId || scorePickerOpen || groupProposal || discoveryStep);
     if (contextual) {
       return [{ label: "SUGGESTED REPLIES", description: "Continue the current task", prompts: quickPrompts() }];
     }
@@ -2409,9 +2626,13 @@ export default function Home() {
 
   function handleChatSubmit(event: FormEvent) {
     event.preventDefault();
-    if (!scoreSessionId && !feedbackSessionId && !groupProposal && /\b(?:create|host|organize|organise|set\s*up|start)\b.*\b(?:game|match|session)\b/i.test(query)) {
-      openCreateGame();
+    if (!scoreSessionId && !feedbackSessionId && !groupProposal && !discoveryStep && isCreateGameQuery(query)) {
+      openCreateGame(query);
       setQuery("");
+      return;
+    }
+    if (discoveryStep) {
+      handleDiscoveryReply(query);
       return;
     }
     if (feedbackPickerOpen && analyzeFeedbackForSport(query)) {
@@ -2441,6 +2662,10 @@ export default function Home() {
     }
     if (groupProposal) {
       void handleCreationReply(query);
+      return;
+    }
+    if (isFindGameQuery(query)) {
+      startDiscovery(query);
       return;
     }
     void search(undefined, query);
