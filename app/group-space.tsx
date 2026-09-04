@@ -45,6 +45,7 @@ type GroupSpacePost = {
   poll_status?: "open" | "resolved" | null;
   poll_winner_id?: string | null;
   created_at: string;
+  delivery_state?: "sending";
 };
 
 type GroupSpaceProps = {
@@ -154,6 +155,8 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
   const [sharePublishing, setSharePublishing] = useState(false);
   const [chatDraft, setChatDraft] = useState("");
   const [chatPosting, setChatPosting] = useState(false);
+  const [optimisticChatPosts, setOptimisticChatPosts] = useState<GroupSpacePost[]>([]);
+  const chatFeedRef = useRef<HTMLDivElement | null>(null);
   const refreshChatRef = useRef(onChatPosted);
   useEffect(() => { refreshChatRef.current = onChatPosted; }, [onChatPosted]);
 
@@ -183,9 +186,14 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
   const canRatePlayers = currentPlayerIsConfirmed && completedPhase;
   const canPostGame = currentPlayerIsConfirmed && completedPhase;
   const canLeaveGame = currentPlayerIsConfirmed && currentUserId !== group.organizer_id && !completedPhase && inputGroup.status !== "cancelled";
+  const visiblePosts = [...posts, ...optimisticChatPosts.filter((pending) => !posts.some((post) => post.id === pending.id))];
   const timeDescription = flexibleTime
     ? `${clock(group.time_window_start ?? group.start_time)}–${clock(group.time_window_end ?? group.end_time)} window · ${group.duration_minutes ?? 60}-minute game`
     : `${clock(group.start_time)}–${clock(group.end_time)}`;
+
+  useEffect(() => {
+    chatFeedRef.current?.scrollTo({ top: chatFeedRef.current.scrollHeight, behavior: "smooth" });
+  }, [visiblePosts.length, mobileSection]);
 
   async function markDone() {
     if (markingDone) return;
@@ -264,18 +272,32 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
     event.preventDefault();
     const message = chatDraft.trim();
     if (!message || chatPosting || !currentPlayerIsConfirmed) return;
+    const clientMessageId = `client-${crypto.randomUUID()}`;
+    const optimisticPost: GroupSpacePost = {
+      id: clientMessageId,
+      player_id: currentUserId ?? "",
+      player_display_name: members.find((member) => member.id === currentUserId)?.display_name ?? "You",
+      message,
+      post_type: "message",
+      created_at: new Date().toISOString(),
+      delivery_state: "sending",
+    };
+    setChatDraft("");
+    setOptimisticChatPosts((current) => [...current, optimisticPost]);
+    setChatPosting(true);
     try {
-      setChatPosting(true);
       const response = await authorizedFetch(`${apiUrl}/v1/sessions/${group.id}/chat`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, client_message_id: clientMessageId }),
       });
       const payload = await response.json().catch(() => ({})) as GroupSpacePost & { detail?: string };
       if (!response.ok) throw new Error(payload.detail ?? "Could not post to the common chat");
-      setChatDraft("");
       onChatPosted(payload);
+      setOptimisticChatPosts((current) => current.filter((post) => post.id !== clientMessageId));
     } catch (error) {
+      setOptimisticChatPosts((current) => current.filter((post) => post.id !== clientMessageId));
+      setChatDraft((current) => current || message);
       onToast(error instanceof Error ? error.message : "Could not post to the common chat");
     } finally {
       setChatPosting(false);
@@ -377,8 +399,8 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
       <div className="group-space-v2-grid">
         <section className={`group-space-v2-chat ${mobileSection !== "chat" ? "mobile-section-hidden" : ""}`} id="rally-common-chat">
           <div className="group-space-v2-heading"><div><span className="kicker">RALLY CIRCLE</span><h3>Common chat</h3><p className="group-space-v2-subtitle">Coordinate the game and keep the final result together.</p></div><div className="group-space-v2-heading-actions"><button className="workspace-refresh" type="button" onClick={onRefresh}>Refresh</button>{canRatePlayers && <button className="group-space-feedback-button" type="button" onClick={openFeedback}>{feedbackOpen ? "Ratings open" : "Rate players"}</button>}</div></div>
-          <div className="group-space-v2-feed">
-            {posts.length ? posts.map((post) => {
+          <div className="group-space-v2-feed" ref={chatFeedRef} aria-live="polite">
+            {visiblePosts.length ? visiblePosts.map((post) => {
               if (post.post_type === "time_poll") {
                 const voterId = currentUserId ?? "";
                 const selectedOptionId = post.poll_options?.find((option) => option.voter_ids.includes(voterId))?.id;
@@ -403,9 +425,9 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
               if (post.post_type === "system") {
                 return <article className="chat-post system-chat-post" key={post.id}><div className="group-space-v2-post-copy"><span className="kicker">COURTMATE</span><p>{post.message}</p><small>{new Date(post.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</small></div></article>;
               }
-              return <article className={`chat-post ${post.player_id === currentUserId ? "mine" : ""}`} key={post.id}>
+              return <article className={`chat-post ${post.player_id === currentUserId ? "mine" : ""} ${post.delivery_state === "sending" ? "sending" : ""}`} key={post.id}>
                 <button type="button" className="group-profile-trigger" onClick={() => onViewProfile(post.player_id)} aria-label={`View ${post.player_display_name}'s profile`}><span className="chat-avatar">{initials(post.player_display_name)}</span></button>
-                <div className="group-space-v2-post-copy"><button type="button" className="group-profile-name" onClick={() => onViewProfile(post.player_id)}>{post.player_display_name}</button><p>{post.message}</p><small>{new Date(post.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</small></div>
+                <div className="group-space-v2-post-copy"><button type="button" className="group-profile-name" onClick={() => onViewProfile(post.player_id)}>{post.player_display_name}</button><p>{post.message}</p><small>{post.delivery_state === "sending" ? "Sending…" : new Date(post.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</small></div>
               </article>;
             }) : <div className="group-chat-empty"><span className="chat-avatar" aria-hidden="true">CM</span><div><strong>{completedPhase ? "Keep the circle going" : "Start the conversation"}</strong><p>{completedPhase ? "No messages yet. Share a highlight or plan the next game." : "No messages yet. Coordinate the session here."}</p></div></div>}
           </div>

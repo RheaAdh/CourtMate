@@ -1278,6 +1278,7 @@ body::after {
 .workspace-panel,.member-profile { border-radius:15px; }
 .workspace-panel-heading h3 { font-size:20px; }
 .chat-post.mine { border:1px solid #dceab9; background:linear-gradient(135deg,#f5fbdc,#f0f7dd); }
+.chat-post.sending { opacity:.72; }
 .leaderboard-row { padding:11px 7px; border-radius:10px; }
 .leaderboard-row:hover { background:#f1f8dc; }
 .leaderboard-row b { color:#6258c0; }

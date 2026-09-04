@@ -715,6 +715,7 @@ class GroupViewResponse(BaseModel):
 
 class ChatPostRequest(BaseModel):
     message: str = Field(default="", max_length=500)
+    client_message_id: str | None = Field(default=None, min_length=8, max_length=80, pattern=r"^client-[A-Za-z0-9-]+$")
     post_type: Literal["message", "match_result"] = "message"
     teams: list["MatchTeam"] = Field(default_factory=list, max_length=2)
 

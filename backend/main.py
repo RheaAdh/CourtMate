@@ -2689,8 +2689,14 @@ def post_group_chat(session_id: str, request: ChatPostRequest, player: Player = 
                 return f"{team.name} ({' + '.join(names)})"
 
             message = f"Match result: {team_label(request.teams[0])} {request.teams[0].score}–{request.teams[1].score} {team_label(request.teams[1])}"
+    post_id = request.client_message_id or uuid4().hex
+    existing = next((candidate for candidate in repository.list_chat_posts(session_id) if candidate.id == post_id), None)
+    if existing:
+        if existing.player_id == player.id and existing.message == message:
+            return existing
+        raise HTTPException(status_code=409, detail="This chat message id is already in use")
     post = repository.save_chat_post(ChatPost(
-        id=uuid4().hex,
+        id=post_id,
         session_id=session_id,
         player_id=player.id,
         player_display_name=player.display_name,

@@ -569,6 +569,31 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["post_type"], "message")
 
+    def test_group_chat_preserves_client_message_id_and_retries_idempotently(self):
+        request = {
+            "message": "Court 2 is booked",
+            "client_message_id": "client-12345678-abcd-4321-abcd-123456789abc",
+        }
+        first = self.client.post(
+            "/v1/sessions/s1/chat",
+            json=request,
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        retry = self.client.post(
+            "/v1/sessions/s1/chat",
+            json=request,
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json()["id"], request["client_message_id"])
+        self.assertEqual(retry.status_code, 200)
+        self.assertEqual(retry.json()["id"], request["client_message_id"])
+        self.assertEqual(
+            len([post for post in repository.list_chat_posts("s1") if post.id == request["client_message_id"]]),
+            1,
+        )
+
     def test_casual_game_result_is_saved_but_does_not_change_cmr(self):
         session = repository.get_session("s1").model_copy(update={"status": "completed", "rating_mode": "casual"})
         repository.save_session(session)
