@@ -712,15 +712,23 @@ def _optimize_image_fallback(
     """Produce a bounded data URI only when Cloud Storage is temporarily unavailable."""
     try:
         from PIL import Image
-        img = Image.open(io.BytesIO(image_bytes))
-        img = img.convert("RGB")
-        img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-        buf = io.BytesIO()
-        img.save(buf, format="WEBP", quality=quality)
-        data_uri = f"data:image/webp;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
+        source = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        target_dim = max_dim
+        target_quality = quality
+        for _ in range(8):
+            img = source.copy()
+            img.thumbnail((target_dim, target_dim), Image.Resampling.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="WEBP", quality=target_quality, method=6)
+            data_uri = f"data:image/webp;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
+            if len(data_uri.encode("utf-8")) <= max_data_uri_bytes:
+                return data_uri
+            target_dim = max(240, round(target_dim * 0.78))
+            target_quality = max(45, target_quality - 7)
     except Exception:
         data_uri = f"data:image/jpeg;base64,{base64.b64encode(image_bytes).decode('ascii')}"
-    return data_uri if len(data_uri.encode("utf-8")) <= max_data_uri_bytes else None
+        return data_uri if len(data_uri.encode("utf-8")) <= max_data_uri_bytes else None
+    return None
 
 
 @app.post("/v1/me/profile-image/upload", response_model=Player)

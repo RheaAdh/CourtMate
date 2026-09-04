@@ -1,3 +1,4 @@
+import io
 import os
 import unittest
 from datetime import date, datetime, time, timedelta
@@ -1907,6 +1908,23 @@ class ApiFlowTests(unittest.TestCase):
         payload = response.json()
         self.assertIn("media_url", payload)
         self.assertTrue(payload["media_url"].startswith("http") or payload["media_url"].startswith("data:image/"))
+
+    def test_social_media_upload_compresses_a_large_photo_when_storage_is_unavailable(self):
+        from PIL import Image
+
+        image = Image.effect_noise((1200, 1200), 100).convert("RGB")
+        image_buffer = io.BytesIO()
+        image.save(image_buffer, format="PNG")
+        with patch("backend.main._profile_storage_client", side_effect=RuntimeError("storage unavailable")):
+            response = self.client.post(
+                "/v1/social/media/upload",
+                content=image_buffer.getvalue(),
+                headers={"Content-Type": "image/png", "X-CourtMate-Player-ID": "p1"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["media_url"].startswith("data:image/webp;base64,"))
+        self.assertLessEqual(len(response.json()["media_url"].encode("utf-8")), 120 * 1024)
 
 
 if __name__ == "__main__":

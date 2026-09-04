@@ -295,6 +295,8 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
       onToast("You can attach up to 6 photos");
       return;
     }
+    const localPreviewUrl = URL.createObjectURL(file);
+    setSharePhotoUrls((current) => [...current, localPreviewUrl]);
     try {
       setSharePhotoUploading(true);
       const compactedPhoto = await compactSocialPhoto(file);
@@ -305,10 +307,12 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
       });
       const payload = await response.json().catch(() => ({})) as { media_url?: string; detail?: string };
       if (!response.ok || !payload.media_url) throw new Error(payload.detail ?? "Could not upload photo");
-      setSharePhotoUrls((current) => [...current, payload.media_url!]);
+      setSharePhotoUrls((current) => current.map((url) => url === localPreviewUrl ? payload.media_url! : url));
     } catch (error) {
+      setSharePhotoUrls((current) => current.filter((url) => url !== localPreviewUrl));
       onToast(error instanceof Error ? error.message : "Could not upload photo");
     } finally {
+      URL.revokeObjectURL(localPreviewUrl);
       setSharePhotoUploading(false);
     }
   }
