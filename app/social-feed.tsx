@@ -168,6 +168,10 @@ function ShareIcon() {
   return <svg className="social-share-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V3m0 0L7 8m5-5 5 5M5 13v7h14v-7" /></svg>;
 }
 
+function SendUpIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6.5 10.5 12 5l5.5 5.5" /></svg>;
+}
+
 function SocialPostEngagement({ post, currentUserName, currentProfileImage, comments, commentDraft, fireBusy, commentsBusy, commentBusy, shareBusy, shareLabel = "Share", onFire, onShare, onFocusComments, onLoadComments, onCommentDraftChange, onAddComment, onViewProfile }: {
   post: SocialPost;
   currentUserName: string;
@@ -202,7 +206,7 @@ function SocialPostEngagement({ post, currentUserName, currentProfileImage, comm
       <form className="social-comment-form" onSubmit={(event) => onAddComment(event, post.id)}>
         <Avatar name={currentUserName} imageUrl={currentProfileImage} />
         <input id={`social-comment-input-${post.id}`} value={commentDraft} onChange={(event) => onCommentDraftChange(post.id, event.target.value)} placeholder="Add a comment..." maxLength={300} aria-label="Add a comment" />
-        <button type="submit" className="social-comment-submit" disabled={!commentDraft.trim() || commentBusy}>{commentBusy ? "Posting..." : "Post"}</button>
+        <button type="submit" className="social-comment-submit composer-send-button" disabled={!commentDraft.trim() || commentBusy} aria-label={commentBusy ? "Posting comment" : "Post comment"}><SendUpIcon /></button>
       </form>
     </div>
   </>;

@@ -362,22 +362,28 @@ def follow_player(player_id: str, player: Player = Depends(get_current_player)) 
         raise HTTPException(status_code=409, detail="You cannot follow yourself")
     if repository.is_following(player.id, target.id):
         return _public_profile(target, player.id)
-    if not repository.is_follow_request_pending(player.id, target.id):
+    created_pending_request = not repository.is_follow_request_pending(player.id, target.id)
+    if created_pending_request:
         repository.save_follow(FollowRecord(id=f"{player.id}_{target.id}", follower_id=player.id, following_id=target.id, status="pending", created_at=datetime.now(timezone.utc)))
         _clear_social_feed_cache()
-        try:
-            repository.save_notification(AppNotification(
-                id=f"follow-{player.id}-{target.id}",
-                player_id=target.id,
-                kind="follow",
-                title="Follow request",
-                message=f"{player.display_name} wants to follow you.",
-                session_id="",
-                actor_id=player.id,
-                created_at=datetime.now(timezone.utc),
-            ))
-        except Exception:
-            pass
+    try:
+        # Always upsert the alert. This repairs a pending request whose original
+        # notification write was interrupted before the client retried.
+        repository.save_notification(AppNotification(
+            id=f"follow-{player.id}-{target.id}",
+            player_id=target.id,
+            kind="follow",
+            title="Follow request",
+            message=f"{player.display_name} wants to follow you.",
+            session_id="",
+            actor_id=player.id,
+            created_at=datetime.now(timezone.utc),
+        ))
+    except Exception as error:
+        if created_pending_request:
+            repository.delete_follow(player.id, target.id)
+        logger.exception("Could not create follow notification for %s -> %s", player.id, target.id)
+        raise HTTPException(status_code=503, detail="Could not send the follow request. Please try again.") from error
     return _public_profile(target, player.id)
 
 
@@ -1196,13 +1202,28 @@ def _leaderboard(
     sport: str | None = None,
     players: list[Player] | None = None,
     sessions: list[Session] | None = None,
+    since: date | None = None,
 ) -> LeaderboardResponse:
     players_by_id = {candidate.id: candidate for candidate in (players or repository.list_players()) if candidate.id in session_ids}
     sessions = sessions if sessions is not None else repository.list_sessions()
     entries = []
     for candidate in players_by_id.values():
-        score = candidate.cmr_ratings.get(sport) if sport else candidate.community_score
-        ratings_count = candidate.cmr_game_counts.get(sport, 0) if sport else 0
+        period_history = sorted(
+            (
+                point
+                for point in candidate.cmr_history.get(sport, [])
+                if sport and since and point.session_date >= since and point.rating is not None
+            ),
+            key=lambda point: point.session_date,
+        )
+        if since and sport:
+            if not period_history:
+                continue
+            score = period_history[-1].rating
+            ratings_count = len({point.session_id for point in period_history})
+        else:
+            score = candidate.cmr_ratings.get(sport) if sport else candidate.community_score
+            ratings_count = candidate.cmr_game_counts.get(sport, 0) if sport else 0
         if score is None:
             score = candidate.community_scores.get(sport) if sport else candidate.community_score
             ratings_count = candidate.community_rating_counts.get(sport, 0) if sport else candidate.community_rating_count
@@ -1224,6 +1245,56 @@ def _leaderboard(
                 ratings_count=count,
             )
             for index, (candidate, score, count) in enumerate(entries, start=1)
+        ],
+    )
+
+
+def _session_activity_leaderboard(
+    player_ids: set[str],
+    scope: str,
+    players: list[Player],
+    since: date,
+    sport: Sport | None = None,
+) -> LeaderboardResponse:
+    today = _local_today()
+    sessions = repository.list_sessions()
+    game_counts = {
+        player_id: sum(
+            1
+            for session in sessions
+            if player_id in session.confirmed_player_ids
+            and session.status != "cancelled"
+            and (sport is None or session.sport == sport)
+            and since <= session.session_date <= today
+            and (
+                session.session_date < today
+                or session.status in {"awaiting_feedback", "completed"}
+                or player_id in session.completed_player_ids
+            )
+        )
+        for player_id in player_ids
+    }
+    ranked_players = [
+        candidate for candidate in players
+        if candidate.id in player_ids and game_counts.get(candidate.id, 0) > 0
+    ]
+    ranked_players.sort(
+        key=lambda candidate: (
+            -game_counts[candidate.id],
+            -candidate.reliability,
+            candidate.display_name.lower(),
+        )
+    )
+    return LeaderboardResponse(
+        scope=scope,
+        entries=[
+            LeaderboardEntry(
+                rank=index,
+                player=_public_profile(candidate, sessions=sessions, include_relations=False, include_activity=False),
+                score=float(game_counts[candidate.id]),
+                ratings_count=game_counts[candidate.id],
+            )
+            for index, candidate in enumerate(ranked_players, start=1)
         ],
     )
 
@@ -1889,12 +1960,42 @@ def my_requests(player: Player = Depends(get_current_player)) -> MyRequestsRespo
 @app.get("/v1/me/notifications", response_model=NotificationsResponse)
 def notifications(player: Player = Depends(get_current_player)) -> NotificationsResponse:
     _ensure_upcoming_game_reminders()
-    cache_key = _read_view_cache_key("notifications", player.id)
-    cached = _get_cached_read_view(cache_key)
-    if cached is not None:
-        return cached
-    items = [_notification_with_action_status(notification, player) for notification in repository.list_notifications_for_player(player.id)]
-    return _cache_read_view(cache_key, NotificationsResponse(notifications=items))
+    stored_notifications = repository.list_notifications_for_player(player.id)
+    notification_ids = {notification.id for notification in stored_notifications}
+    # Recover pending follow requests created before an interrupted notification
+    # write. This also heals records produced by an older deployment.
+    for follow in repository.list_pending_followers(player.id):
+        notification_id = f"follow-{follow.follower_id}-{player.id}"
+        if notification_id in notification_ids:
+            continue
+        requester = repository.get_player(follow.follower_id)
+        if not requester:
+            continue
+        notification = AppNotification(
+            id=notification_id,
+            player_id=player.id,
+            kind="follow",
+            title="Follow request",
+            message=f"{requester.display_name} wants to follow you.",
+            session_id="",
+            actor_id=requester.id,
+            created_at=datetime.now(timezone.utc),
+        )
+        try:
+            repository.save_notification(notification)
+            stored_notifications.append(notification)
+            notification_ids.add(notification_id)
+        except Exception:
+            logger.exception("Could not repair follow notification %s", notification_id)
+    stored_notifications.sort(key=lambda item: item.created_at, reverse=True)
+    resolved_items = [_notification_with_action_status(notification, player) for notification in stored_notifications]
+    items = [
+        notification for notification in resolved_items
+        if not notification.read or notification.action_status == "pending"
+    ]
+    # Alerts are polled specifically for cross-user changes. A process-local
+    # cache can hide a request written by another Cloud Run instance.
+    return NotificationsResponse(notifications=items)
 
 
 @app.post("/v1/me/notifications/{notification_id}/read", response_model=AppNotification)
@@ -1911,7 +2012,8 @@ def mark_all_notifications_read(player: Player = Depends(get_current_player)) ->
     for notification in repository.list_notifications_for_player(player.id):
         if not notification.read:
             repository.mark_notification_read(notification.id, player.id)
-    items = [_notification_with_action_status(notification, player) for notification in repository.list_notifications_for_player(player.id)]
+    resolved_items = [_notification_with_action_status(notification, player) for notification in repository.list_notifications_for_player(player.id)]
+    items = [notification for notification in resolved_items if notification.action_status == "pending"]
     return NotificationsResponse(notifications=items)
 
 
@@ -2755,9 +2857,12 @@ def local_leaderboard(area: str | None = None, sport: Sport = "pickleball", play
 def circle_leaderboard(
     scope: Literal["circle", "locality", "bengaluru"] = "circle",
     sport: Sport = "pickleball",
+    period: Literal["week", "30_days", "3_months", "year"] | None = None,
+    metric: Literal["sessions", "cmr"] = "cmr",
+    session_sport: Sport | None = None,
     player: Player = Depends(get_current_player),
 ) -> LeaderboardResponse:
-    """Rank the player's accepted circle, locality, or Bengaluru by sport CMR."""
+    """Rank players by completed-session volume or sport CMR."""
     players = repository.list_players()
     if scope == "circle":
         player_ids = {player.id}
@@ -2768,7 +2873,25 @@ def circle_leaderboard(
         player_ids = {candidate.id for candidate in players if candidate.area.strip().lower() == requested_area and (candidate.id == player.id or not candidate.is_profile_private)}
     else:
         player_ids = {candidate.id for candidate in players if candidate.id == player.id or not candidate.is_profile_private}
-    return _leaderboard(list(player_ids), f"circle:{scope}:{player.area}:{sport}", sport, players=players)
+    period_start = None
+    if period:
+        today = _local_today()
+        period_start = {
+            "week": today - timedelta(days=today.weekday()),
+            "30_days": today - timedelta(days=29),
+            "3_months": today - timedelta(days=89),
+            "year": today - timedelta(days=364),
+        }[period]
+    leaderboard_scope = f"circle:{scope}:{player.area}:{metric}:{session_sport or sport}:{period or 'all'}"
+    if metric == "sessions":
+        return _session_activity_leaderboard(player_ids, leaderboard_scope, players, period_start or date.min, session_sport)
+    return _leaderboard(
+        list(player_ids),
+        leaderboard_scope,
+        sport,
+        players=players,
+        since=period_start,
+    )
 
 
 @app.post("/v1/sessions/{session_id}/complete", response_model=Session)

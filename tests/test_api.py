@@ -17,7 +17,7 @@ os.environ["COURTMATE_VECTOR_SEARCH_ENABLED"] = "false"
 from fastapi.testclient import TestClient
 
 from backend.main import _clear_read_view_cache, _clear_social_feed_cache, app, intent_parser, local_timezone, repository
-from backend.models import CMRHistoryPoint, FollowRecord, Session
+from backend.models import AppNotification, CMRHistoryPoint, FollowRecord, Session
 from backend.seed_synthetic_firestore import seed
 from tests.fixtures import load_repository_fixture
 
@@ -149,7 +149,7 @@ class ApiFlowTests(unittest.TestCase):
         self.assertIn("s1", game_ids)
         self.assertNotIn("guest-hidden-game", game_ids)
 
-    def test_notifications_show_resolved_join_and_follow_actions(self):
+    def test_notifications_clear_resolved_join_and_follow_actions(self):
         join = self.client.post("/v1/sessions/s1/join", headers={"X-CourtMate-Player-ID": "p5"})
         self.assertEqual(join.status_code, 200)
         request_id = join.json()["id"]
@@ -166,9 +166,7 @@ class ApiFlowTests(unittest.TestCase):
         )
         self.assertEqual(decision.status_code, 200)
         resolved_notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": "p1"})
-        resolved_notification = next(item for item in resolved_notifications.json()["notifications"] if item["request_id"] == request_id)
-        self.assertEqual(resolved_notification["action_status"], "approved")
-        self.assertTrue(resolved_notification["read"])
+        self.assertFalse(any(item["request_id"] == request_id for item in resolved_notifications.json()["notifications"]))
 
         follow = self.client.post("/v1/players/p2/follow", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(follow.status_code, 200)
@@ -183,9 +181,26 @@ class ApiFlowTests(unittest.TestCase):
         )
         self.assertEqual(accepted.status_code, 200)
         resolved_follow_notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": "p2"})
-        resolved_follow = next(item for item in resolved_follow_notifications.json()["notifications"] if item["id"] == follow_notification["id"])
-        self.assertEqual(resolved_follow["action_status"], "approved")
-        self.assertTrue(resolved_follow["read"])
+        self.assertFalse(any(item["id"] == follow_notification["id"] for item in resolved_follow_notifications.json()["notifications"]))
+
+    def test_read_notifications_are_cleared_but_pending_actions_remain(self):
+        repository.save_notification(AppNotification(
+            id="plain-alert",
+            player_id="p2",
+            title="New game nearby",
+            message="A new game matches your preferences.",
+            session_id="s1",
+            created_at=datetime.now().astimezone(),
+        ))
+        follow = self.client.post("/v1/players/p2/follow", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(follow.status_code, 200)
+
+        self.client.post("/v1/me/notifications/plain-alert/read", headers={"X-CourtMate-Player-ID": "p2"})
+        self.client.post("/v1/me/notifications/follow-p1-p2/read", headers={"X-CourtMate-Player-ID": "p2"})
+        visible = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": "p2"}).json()["notifications"]
+
+        self.assertFalse(any(item["id"] == "plain-alert" for item in visible))
+        self.assertTrue(any(item["id"] == "follow-p1-p2" and item["action_status"] == "pending" for item in visible))
 
     def test_mutual_connections_join_an_open_game_without_approval(self):
         now = datetime.now(local_timezone)
@@ -1336,6 +1351,28 @@ class ApiFlowTests(unittest.TestCase):
         self.assertFalse(unfollowed.json()["is_following"])
         self.assertEqual(unfollowed.json()["followers_count"], 0)
 
+    def test_notification_poll_repairs_a_missing_follow_notification(self):
+        repository.save_follow(FollowRecord(
+            id="p1_p2",
+            follower_id="p1",
+            following_id="p2",
+            status="pending",
+            created_at=datetime.now(),
+        ))
+
+        response = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": "p2"})
+
+        self.assertEqual(response.status_code, 200)
+        notifications = response.json()["notifications"]
+        self.assertTrue(any(item["id"] == "follow-p1-p2" and not item["read"] for item in notifications))
+
+    def test_follow_notification_failure_does_not_leave_a_stuck_request(self):
+        with patch.object(repository, "save_notification", side_effect=RuntimeError("write failed")):
+            response = self.client.post("/v1/players/p2/follow", headers={"X-CourtMate-Player-ID": "p1"})
+
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(repository.is_follow_request_pending("p1", "p2"))
+
     def test_circle_leaderboard_supports_connection_locality_and_bengaluru_scopes(self):
         repository.save_follow(FollowRecord(id="p1_p4", follower_id="p1", following_id="p4", status="accepted", created_at=datetime.now()))
         repository.save_follow(FollowRecord(id="p2_p1", follower_id="p2", following_id="p1", status="accepted", created_at=datetime.now()))
@@ -1352,6 +1389,70 @@ class ApiFlowTests(unittest.TestCase):
         self.assertNotIn("p3", {entry["player"]["id"] for entry in locality.json()["entries"]})
         self.assertIn("p4", {entry["player"]["id"] for entry in city.json()["entries"]})
         self.assertNotIn("p3", {entry["player"]["id"] for entry in city.json()["entries"]})
+
+    def test_circle_leaderboard_filters_cmr_history_by_period(self):
+        today = date.today()
+        p1 = repository.get_player("p1")
+        p2 = repository.get_player("p2")
+        repository.save_player(p1.model_copy(update={"cmr_history": {"pickleball": [
+            CMRHistoryPoint(session_id="recent-1", session_date=today, group_name="Recent rally", rating=6.2),
+        ]}}))
+        repository.save_player(p2.model_copy(update={"cmr_history": {"pickleball": [
+            CMRHistoryPoint(session_id="old-1", session_date=today - timedelta(days=40), group_name="Old rally", rating=7.8),
+        ]}}))
+
+        response = self.client.get(
+            "/v1/me/circle-leaderboard?scope=bengaluru&sport=pickleball&period=30_days",
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        entries = response.json()["entries"]
+        self.assertEqual([entry["player"]["id"] for entry in entries], ["p1"])
+        self.assertEqual(entries[0]["score"], 6.2)
+        self.assertEqual(entries[0]["ratings_count"], 1)
+
+    def test_circle_leaderboard_ranks_completed_sessions_across_sports(self):
+        today = date.today()
+        for session_id, sport, played_on, player_ids in [
+            ("activity-1", "pickleball", today - timedelta(days=2), ["p1", "p2"]),
+            ("activity-2", "badminton", today - timedelta(days=10), ["p1"]),
+            ("activity-old", "tennis", today - timedelta(days=45), ["p2"]),
+        ]:
+            repository.save_session(Session(
+                id=session_id,
+                sport=sport,
+                group_name=f"{sport.title()} session",
+                organizer_id=player_ids[0],
+                area="Whitefield",
+                session_date=played_on,
+                start_time=time(18),
+                end_time=time(20),
+                skill_min=3.0,
+                skill_max=4.0,
+                style="casual",
+                capacity=8,
+                confirmed_player_ids=player_ids,
+                status="completed",
+            ))
+
+        response = self.client.get(
+            "/v1/me/circle-leaderboard?scope=bengaluru&metric=sessions&period=30_days",
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        entries = response.json()["entries"]
+        self.assertEqual([entry["player"]["id"] for entry in entries[:2]], ["p1", "p2"])
+        self.assertEqual([entry["score"] for entry in entries[:2]], [2.0, 1.0])
+
+        badminton = self.client.get(
+            "/v1/me/circle-leaderboard?scope=bengaluru&metric=sessions&session_sport=badminton&period=30_days",
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(badminton.status_code, 200)
+        self.assertEqual([entry["player"]["id"] for entry in badminton.json()["entries"]], ["p1"])
+        self.assertEqual(badminton.json()["entries"][0]["score"], 1.0)
 
     def test_public_profile_exposes_recent_games_and_activity_heatmap(self):
         played_on = date.today() - timedelta(days=3)

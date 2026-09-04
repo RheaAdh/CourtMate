@@ -85,6 +85,10 @@ function initials(name: string) {
   return name.trim().split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "CM";
 }
 
+function SendUpIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6.5 10.5 12 5l5.5 5.5" /></svg>;
+}
+
 function memberNames(ids: string[], members: GroupSpaceMember[]) {
   return ids.map((id) => members.find((member) => member.id === id)?.display_name ?? "Player").join(" + ");
 }
@@ -433,7 +437,7 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
           </div>
           {currentPlayerIsConfirmed && <form className="chat-composer group-space-v2-composer" onSubmit={postChat}>
             <input value={chatDraft} onChange={(event) => setChatDraft(event.target.value)} placeholder="Message the group..." aria-label="Message the common chat" maxLength={500} />
-            <button className="dark-button" type="submit" disabled={!chatDraft.trim() || chatPosting}>{chatPosting ? "Sending" : "Post"}</button>
+            <button className="composer-send-button" type="submit" disabled={!chatDraft.trim() || chatPosting} aria-label={chatPosting ? "Sending message" : "Send message"}><SendUpIcon /></button>
           </form>}
           {!completedPhase && !currentPlayerIsConfirmed && <p className="group-space-v2-hint">Only confirmed players can post in the common chat.</p>}
         </section>

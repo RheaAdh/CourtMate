@@ -3,6 +3,10 @@
 import { FormEvent, useState } from "react";
 import { TennisBallLoader } from "./tennis-ball-loader";
 
+function SendUpIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6.5 10.5 12 5l5.5 5.5" /></svg>;
+}
+
 type ActivityProof = {
   id: string;
   sport: string;
@@ -111,7 +115,7 @@ export function PerformanceCoach({ sport, sportLabel, proofs, apiUrl, authorized
   return <section className="performance-coach" aria-label="Performance coach">
     <div className="performance-coach-heading"><div><span className="kicker">YOUR PERFORMANCE</span><h2>Talk through your game</h2><p>Your CMR history and wearable check-ins, in one place.</p></div><span className="performance-sport-chip">{sportLabel}</span></div>
     <div className="performance-coach-grid">
-      <div className="performance-chat-card"><div className="performance-chat-feed" aria-live="polite">{messages.map((message) => <div className={`performance-message ${message.role}`} key={message.id}><span>{message.role === "assistant" ? "CM" : "You"}</span><p>{message.text}</p></div>)}{loading && <div className="performance-message assistant"><span>CM</span><TennisBallLoader compact label="Reading your history" /></div>}</div><form className="performance-chat-form" onSubmit={ask}><input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="How is my form trending?" aria-label="Ask about performance" /><button type="submit" disabled={!draft.trim() || loading} aria-label="Ask performance coach">↗</button></form></div>
+      <div className="performance-chat-card"><div className="performance-chat-feed" aria-live="polite">{messages.map((message) => <div className={`performance-message ${message.role}`} key={message.id}><span>{message.role === "assistant" ? "CM" : "You"}</span><p>{message.text}</p></div>)}{loading && <div className="performance-message assistant"><span>CM</span><TennisBallLoader compact label="Reading your history" /></div>}</div><form className="performance-chat-form" onSubmit={ask}><input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="How is my form trending?" aria-label="Ask about performance" /><button className="composer-send-button" type="submit" disabled={!draft.trim() || loading} aria-label="Ask performance coach"><SendUpIcon /></button></form></div>
       <div className="performance-proof-card"><div className="performance-proof-heading"><div><strong>Wearable check-in</strong><small>Gemini reads visible stats only.</small></div><label className="performance-upload-button"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void upload(event)} disabled={uploading} />{uploading ? <TennisBallLoader compact label="Reading screenshot" /> : "+ Add screenshot"}</label></div>{proofs.length ? <div className="performance-proof-list">{proofs.slice(0, 3).map((proof) => <article className="performance-proof-row" key={proof.id}><img src={proof.image_url} alt="Wearable check-in" /><div><strong>{proof.sport.replaceAll("_", " ")}</strong><p>{metricLine(proof)}</p><small>{proof.analysis.summary}</small><button type="button" onClick={() => void share(proof)} disabled={sharingId === proof.id}>{sharingId === proof.id ? "Sharing..." : "Share to Social"}</button></div></article>)}</div> : <p className="performance-proof-empty">Add a watch screenshot after a game to keep an evidence-backed activity log.</p>}</div>
     </div>
   </section>;
