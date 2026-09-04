@@ -1637,7 +1637,11 @@ def join_session(session_id: str, player: Player = Depends(get_current_player)) 
     if player.id in session.confirmed_player_ids:
         raise HTTPException(status_code=409, detail="Player is already confirmed for this session")
     status = "pending"
-    if session.visibility == "private" and session.open_slots > 0:
+    mutually_connected = (
+        repository.is_following(player.id, session.organizer_id)
+        and repository.is_following(session.organizer_id, player.id)
+    )
+    if (session.visibility == "private" or mutually_connected) and session.open_slots > 0:
         session.confirmed_player_ids.append(player.id)
         saved_session = repository.save_session(session)
         _index_session_best_effort(saved_session)
@@ -1930,11 +1934,14 @@ def my_groups(player: Player = Depends(get_current_player)) -> MyGroupsResponse:
 def my_games(player: Player = Depends(get_current_player)) -> MyGamesResponse:
     _refresh_all_session_statuses()
     player_sessions = repository.list_sessions_for_player(player.id)
-    games = [session for session in player_sessions if session.session_date >= _local_today() and session.status not in {"awaiting_feedback", "completed", "cancelled"}]
+    submitted_feedback_session_ids = {
+        item.session_id for item in repository.list_feedback() if item.player_id == player.id
+    }
+    games = [session for session in player_sessions if session.session_date >= _local_today() and session.status not in {"awaiting_feedback", "completed", "cancelled"} and player.id not in session.completed_player_ids]
     games.sort(key=lambda session: (session.session_date, session.start_time))
     past_games = []
     for session in player_sessions:
-        if session.status != "completed" or player.id not in session.confirmed_player_ids:
+        if (session.status != "completed" and session.id not in submitted_feedback_session_ids) or player.id not in session.confirmed_player_ids:
             continue
         entries = _leaderboard(session.confirmed_player_ids, f"group:{session.id}", session.sport).entries
         player_entry = next((entry for entry in entries if entry.player.id == player.id), None)
@@ -1979,7 +1986,7 @@ def my_activity(player: Player = Depends(get_current_player), refresh: bool = Qu
     incoming_requests.sort(key=lambda item: item.request.created_at, reverse=True)
 
     player_sessions = [session for session in sessions if player.id in session.confirmed_player_ids]
-    games = [session for session in player_sessions if session.session_date >= _local_today() and session.status not in {"awaiting_feedback", "completed", "cancelled"}]
+    games = [session for session in player_sessions if session.session_date >= _local_today() and session.status not in {"awaiting_feedback", "completed", "cancelled"} and player.id not in session.completed_player_ids]
     games.sort(key=lambda session: (session.session_date, session.start_time))
     submitted_feedback_session_ids = {
         item.session_id
@@ -1989,12 +1996,12 @@ def my_activity(player: Player = Depends(get_current_player), refresh: bool = Qu
     awaiting_feedback = [
         session
         for session in player_sessions
-        if session.status == "awaiting_feedback" and session.id not in submitted_feedback_session_ids
+        if (session.status == "awaiting_feedback" or player.id in session.completed_player_ids) and session.id not in submitted_feedback_session_ids
     ]
     awaiting_feedback.sort(key=lambda session: (session.session_date, session.start_time), reverse=True)
     past_games = []
     for session in player_sessions:
-        if session.status != "completed":
+        if session.status != "completed" and session.id not in submitted_feedback_session_ids:
             continue
         entries = _leaderboard(session.confirmed_player_ids, f"group:{session.id}", session.sport, players=players, sessions=sessions).entries
         player_entry = next((entry for entry in entries if entry.player.id == player.id), None)
@@ -2764,19 +2771,23 @@ def complete_session(session_id: str, background_tasks: BackgroundTasks, player:
         session = repository.save_session(session.model_copy(update={"time_finalized": True}))
     if session.status == "cancelled":
         raise HTTPException(status_code=409, detail="Cancelled games cannot be completed")
-    if session.status == "completed":
+    if session.status == "completed" or player.id in session.completed_player_ids:
         return session
     if session.status == "awaiting_feedback":
         # Feedback closes automatically once every confirmed player submits.
         # Repeating the action must never discard the remaining private ratings.
         return session
-    # Closing a game opens the private feedback round. Players may later share
-    # their own post; completing a game never creates a group feed post.
-    session.status = "awaiting_feedback"
+    # Manual completion is personal. The scheduled end-time transition remains
+    # shared, but one player finishing early must not close the game for others.
+    completed_player_ids = list(dict.fromkeys([*session.completed_player_ids, player.id]))
+    all_players_done = set(session.confirmed_player_ids).issubset(completed_player_ids)
+    session.completed_player_ids = completed_player_ids
+    if all_players_done:
+        session.status = "awaiting_feedback"
     session.social_activity_published = False
     saved = repository.save_session(session)
+    _clear_read_view_cache()
     _clear_social_feed_cache()
-    _notify_confirmed_players_game_completed(saved, player)
     background_tasks.add_task(_index_session_best_effort, saved)
     return saved
 
@@ -2864,7 +2875,7 @@ def replacement(session_id: str, player: Player = Depends(get_current_player)) -
 @app.post("/v1/sessions/{session_id}/feedback", response_model=Feedback)
 def feedback(session_id: str, request: FeedbackRequest, background_tasks: BackgroundTasks, player: Player = Depends(get_current_player)) -> Feedback:
     session = _member_session(session_id, player)
-    if session.status not in {"awaiting_feedback", "completed"}:
+    if session.status not in {"awaiting_feedback", "completed"} and player.id not in session.completed_player_ids:
         raise HTTPException(status_code=409, detail="Rate players after the game is marked done")
     confirmed_others = [player_id for player_id in session.confirmed_player_ids if player_id != player.id]
     skipped_player_ids = set(request.skipped_player_ids)

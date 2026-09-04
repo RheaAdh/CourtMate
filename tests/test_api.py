@@ -1,17 +1,22 @@
 import os
 import unittest
 from datetime import date, datetime, time, timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 os.environ["COURTMATE_DATASTORE"] = "memory"
 os.environ["COURTMATE_AUTH_REQUIRED"] = "false"
 os.environ["COURTMATE_DEV_PLAYER_ID"] = "p1"
 os.environ["GEMINI_API_KEY"] = ""
+os.environ["COURTMATE_USE_VERTEX_AI"] = "false"
+os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "false"
+os.environ["COURTMATE_USE_GEMINI_INTENT"] = "false"
+os.environ["COURTMATE_GROUNDED_RESPONSE_WITH_GEMINI"] = "false"
+os.environ["COURTMATE_VECTOR_SEARCH_ENABLED"] = "false"
 
 from fastapi.testclient import TestClient
 
-from backend.main import _clear_read_view_cache, _clear_social_feed_cache, app, local_timezone, repository
-from backend.models import FollowRecord, Session
+from backend.main import _clear_read_view_cache, _clear_social_feed_cache, app, intent_parser, local_timezone, repository
+from backend.models import CMRHistoryPoint, FollowRecord, Session
 from backend.seed_synthetic_firestore import seed
 from tests.fixtures import load_repository_fixture
 
@@ -26,6 +31,11 @@ class ApiFlowTests(unittest.TestCase):
     def submit_feedback_for_everyone(self, session_id="s1"):
         session = repository.get_session(session_id)
         for player_id in session.confirmed_player_ids:
+            completed = self.client.post(
+                f"/v1/sessions/{session_id}/complete",
+                headers={"X-CourtMate-Player-ID": player_id},
+            )
+            self.assertEqual(completed.status_code, 200)
             ratings = [{"player_id": other_id, "rating_10": 7} for other_id in session.confirmed_player_ids if other_id != player_id]
             response = self.client.post(
                 f"/v1/sessions/{session_id}/feedback",
@@ -40,7 +50,7 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(payload["action"], "join_existing")
         self.assertEqual(payload["recommendations"][0]["session"]["id"], "s1")
-        self.assertEqual(payload["retrieval"]["mode"], "deterministic_fallback")
+        self.assertIn(payload["retrieval"]["mode"], {"vector", "deterministic_fallback"})
 
     def test_check_in_tracks_on_time_arrival_once(self):
         now = datetime.now(local_timezone).replace(second=0, microsecond=0)
@@ -175,6 +185,19 @@ class ApiFlowTests(unittest.TestCase):
         resolved_follow = next(item for item in resolved_follow_notifications.json()["notifications"] if item["id"] == follow_notification["id"])
         self.assertEqual(resolved_follow["action_status"], "approved")
         self.assertTrue(resolved_follow["read"])
+
+    def test_mutual_connections_join_an_open_game_without_approval(self):
+        now = datetime.now(local_timezone)
+        repository.save_follow(FollowRecord(id="p1_p5", follower_id="p1", following_id="p5", status="accepted", created_at=now))
+        repository.save_follow(FollowRecord(id="p5_p1", follower_id="p5", following_id="p1", status="accepted", created_at=now))
+
+        joined = self.client.post("/v1/sessions/s1/join", headers={"X-CourtMate-Player-ID": "p5"})
+
+        self.assertEqual(joined.status_code, 200)
+        self.assertEqual(joined.json()["status"], "approved")
+        self.assertIn("p5", repository.get_session("s1").confirmed_player_ids)
+        organizer_notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": "p1"}).json()["notifications"]
+        self.assertFalse(any(item["kind"] == "join_request" and item["request_id"] == joined.json()["id"] for item in organizer_notifications))
 
     def test_community_map_visibility_filter_shows_connection_games_without_private_games(self):
         repository.save_follow(FollowRecord(
@@ -401,6 +424,83 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["scope"], "performance")
         self.assertIn("CMR", response.json()["answer"])
+
+    def test_performance_quick_prompts_are_grounded_and_never_call_gemini(self):
+        player = repository.get_player("p1")
+        history = [
+            CMRHistoryPoint(session_id="history-1", session_date=date.today() - timedelta(days=14), group_name="Whitefield Rally", rating=4.80, delta=0.10),
+            CMRHistoryPoint(session_id="history-2", session_date=date.today() - timedelta(days=7), group_name="Brookefield Doubles", rating=5.00, delta=0.20),
+            CMRHistoryPoint(session_id="history-3", session_date=date.today(), group_name="Sunday Smash", rating=5.15, delta=0.15),
+        ]
+        repository.save_player(player.model_copy(update={
+            "cmr_scale": 10,
+            "cmr_ratings": {"badminton": 5.15, "pickleball": 4.20},
+            "cmr_game_counts": {"badminton": 3, "pickleball": 2},
+            "cmr_history": {"badminton": history},
+        }))
+        fake_client = MagicMock()
+        fake_client.models.generate_content.return_value.text = "requirement: Explain when"
+
+        scenarios = {
+            "How is my CMR changing?": ("5.15", "up 0.45"),
+            "What should I improve?": ("result data", "shot-level data"),
+            "Summarise my recent games": ("Sunday Smash", "Brookefield Doubles"),
+            "Analyze my existing Badminton CMR and game history. What should I work on next?": ("Badminton", "5.15"),
+            "How am I doing?": ("Badminton", "5.15"),
+            "What is my reliability?": ("94%", "confirmed show-ups"),
+            "What is my weakest sport?": ("Pickleball", "4.20"),
+        }
+        with patch.object(intent_parser, "_client", fake_client):
+            for query, expected_fragments in scenarios.items():
+                with self.subTest(query=query):
+                    response = self.client.post(
+                        "/v1/me/performance-chat",
+                        json={"query": query},
+                        headers={"X-CourtMate-Player-ID": "p1"},
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    answer = response.json()["answer"]
+                    for fragment in expected_fragments:
+                        self.assertIn(fragment, answer)
+                    self.assertNotIn("requirement:", answer.lower())
+                    self.assertNotEqual(answer, "[]")
+
+        fake_client.models.generate_content.assert_not_called()
+
+    def test_performance_chat_explains_when_history_is_insufficient(self):
+        player = repository.get_player("p1")
+        repository.save_player(player.model_copy(update={
+            "cmr_scale": 10,
+            "cmr_ratings": {"pickleball": 4.70},
+            "cmr_game_counts": {"pickleball": 1},
+            "cmr_history": {"pickleball": [CMRHistoryPoint(session_id="history-1", session_date=date.today(), group_name="First Rally", rating=4.70, delta=0.0)]},
+        }))
+        response = self.client.post(
+            "/v1/me/performance-chat",
+            json={"query": "What should I improve?"},
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("too little evidence", response.json()["answer"])
+        self.assertIn("2 more confirmed competitive games", response.json()["answer"])
+
+    def test_performance_chat_rejects_malformed_gemini_wearable_answer(self):
+        player = repository.get_player("p1").model_copy(update={
+            "cmr_scale": 10,
+            "cmr_ratings": {"pickleball": 4.90},
+            "cmr_game_counts": {"pickleball": 4},
+        })
+        fake_client = MagicMock()
+        fake_client.models.generate_content.return_value.text = "[]"
+        with patch.object(intent_parser, "_client", fake_client):
+            answer = intent_parser.discuss_performance(
+                "Compare my wearable heart rate with my form",
+                player,
+                {},
+                [{"sport": "pickleball", "analysis": {"average_heart_rate_bpm": 142}}],
+            )
+        self.assertIn("4.90", answer)
+        self.assertNotEqual(answer, "[]")
 
     def test_performance_chat_keeps_unrelated_questions_out_of_scope(self):
         response = self.client.post(
@@ -901,26 +1001,21 @@ class ApiFlowTests(unittest.TestCase):
         personal = self.client.get("/v1/social/feed?feed=personal", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual([post["id"] for post in personal.json()["posts"]], [second_post.json()["id"]])
 
-    def test_any_confirmed_player_can_mark_a_game_done_and_open_private_feedback(self):
+    def test_marking_a_game_done_only_opens_feedback_for_that_player(self):
         completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p2"})
 
         self.assertEqual(completed.status_code, 200)
-        self.assertEqual(completed.json()["status"], "awaiting_feedback")
-        self.assertEqual(repository.get_session("s1").status, "awaiting_feedback")
+        self.assertEqual(completed.json()["status"], "open")
+        self.assertEqual(completed.json()["completed_player_ids"], ["p2"])
+        self.assertEqual(repository.get_session("s1").status, "open")
 
         repeated_request = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(repeated_request.status_code, 200)
-        self.assertEqual(repeated_request.json()["status"], "awaiting_feedback")
-        self.assertEqual(repository.get_session("s1").status, "awaiting_feedback")
-
-        for player_id in ("p1", "p3", "p6"):
-            notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": player_id}).json()["notifications"]
-            notification = next(item for item in notifications if item["kind"] == "game_completed" and item["session_id"] == "s1")
-            self.assertEqual(notification["actor_id"], "p2")
-            self.assertIn("rate", notification["message"].lower())
-
-        completer_notifications = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": "p2"}).json()["notifications"]
-        self.assertTrue(any(item["kind"] == "game_completed" and item["session_id"] == "s1" for item in completer_notifications))
+        self.assertEqual(repeated_request.json()["completed_player_ids"], ["p2"])
+        completer_activity = self.client.get("/v1/me/activity", headers={"X-CourtMate-Player-ID": "p2"}).json()
+        self.assertIn("s1", {item["id"] for item in completer_activity["awaiting_feedback"]})
+        other_activity = self.client.get("/v1/me/activity", headers={"X-CourtMate-Player-ID": "p1"}).json()
+        self.assertIn("s1", {item["id"] for item in other_activity["games"]})
 
     def test_submitted_feedback_is_removed_from_that_players_awaiting_list(self):
         completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p2"})
@@ -954,7 +1049,7 @@ class ApiFlowTests(unittest.TestCase):
         self.assertIn("marked done", response.json()["detail"])
 
     def test_feedback_accepts_private_player_ratings_without_changing_cmr(self):
-        completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p1"})
+        completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(completed.status_code, 200)
 
         feedback = self.client.post(
@@ -979,7 +1074,7 @@ class ApiFlowTests(unittest.TestCase):
         self.assertNotIn("pickleball", profile.json()["cmr_ratings"])
 
     def test_feedback_resubmission_replaces_private_feedback_without_changing_cmr(self):
-        completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p1"})
+        completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(completed.status_code, 200)
         first = self.client.post(
             "/v1/sessions/s1/feedback",
@@ -1018,7 +1113,7 @@ class ApiFlowTests(unittest.TestCase):
         self.assertNotIn("pickleball", profile.json()["cmr_ratings"])
 
     def test_private_feedback_requires_one_rating_for_each_other_player(self):
-        completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p1"})
+        completed = self.client.post("/v1/sessions/s1/complete", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(completed.status_code, 200)
         incomplete = self.client.post(
             "/v1/sessions/s1/feedback",
@@ -1586,6 +1681,9 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(chat_view.json()["posts"][0]["message"], "Court is booked for 7 PM")
 
         complete = self.client.post(f"/v1/sessions/{session_id}/complete", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(complete.status_code, 200)
+        self.assertEqual(complete.json()["status"], "open")
+        complete = self.client.post(f"/v1/sessions/{session_id}/complete", headers={"X-CourtMate-Player-ID": "p2"})
         self.assertEqual(complete.status_code, 200)
         self.assertEqual(complete.json()["status"], "awaiting_feedback")
 

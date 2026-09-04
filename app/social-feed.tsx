@@ -219,7 +219,7 @@ function SessionActivityCard({ post, currentUserName, currentProfileImage, comme
     <div className="social-session-activity-intro"><strong>{post.caption}</strong><span>{post.session_name} · {post.session_date} · {post.session_area}</span></div>
     <div className="social-session-leaderboard"><div className="social-session-leaderboard-heading"><strong>Session leaderboard</strong><span>{post.session_status === "completed" ? "Based on this game" : "Current CMR order"}</span></div>{leaderboard.length ? leaderboard.map((entry) => { const delta = entry.cmr_delta ?? 0; return <button type="button" className={`social-session-rank-row rank-${entry.rank <= 3 ? entry.rank : "other"}`} key={entry.player_id} onClick={() => onViewProfile(entry.player_id)} aria-label={`View ${entry.display_name}'s profile to follow`} title={`View ${entry.display_name}'s profile`}><b className="social-session-rank-badge">{entry.rank}</b><Avatar name={entry.display_name} imageUrl={entry.profile_image_url} /><span><strong>{entry.display_name}</strong><small>{entry.cmr_rating != null ? `${entry.cmr_rating.toFixed(1)} CMR` : "CMR building"}</small></span><em>{entry.cmr_rating != null ? entry.cmr_rating.toFixed(1) : "--"}<small className={`social-session-trend ${delta > 0 ? "up" : delta < 0 ? "down" : "steady"}`}>{entry.cmr_delta == null ? "·" : `${delta > 0 ? "↑" : delta < 0 ? "↓" : "→"} ${Math.abs(delta).toFixed(1)}`}</small></em></button>; }) : <span className="social-session-empty">CMR rankings appear after players complete feedback.</span>}</div>
     {post.media_url && <div className="social-post-media social-session-media"><img src={(mediaUrls.length ? mediaUrls[photoIndex % mediaUrls.length] : post.media_url)} alt={`Court moment ${photoIndex + 1} from ${post.session_name ?? "this game"}`} />{mediaUrls.length > 1 && <div className="social-session-carousel-controls"><button type="button" onClick={() => setPhotoIndex((index) => (index - 1 + mediaUrls.length) % mediaUrls.length)} aria-label="Previous game photo">←</button><span>{(photoIndex % mediaUrls.length) + 1} / {mediaUrls.length}</span><button type="button" onClick={() => setPhotoIndex((index) => (index + 1) % mediaUrls.length)} aria-label="Next game photo">→</button></div>}</div>}
-    <SocialPostEngagement post={post} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments} commentDraft={commentDraft} fireBusy={fireBusy} commentsBusy={commentsBusy} commentBusy={commentBusy} shareBusy={shareBusy} shareLabel="Share leaderboard" onFire={onFire} onShare={onShare} onFocusComments={onFocusComments} onLoadComments={onLoadComments} onCommentDraftChange={onCommentDraftChange} onAddComment={onAddComment} onViewProfile={onViewProfile} />
+    <SocialPostEngagement post={post} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments} commentDraft={commentDraft} fireBusy={fireBusy} commentsBusy={commentsBusy} commentBusy={commentBusy} shareBusy={shareBusy} shareLabel="Share post" onFire={onFire} onShare={(socialPost) => { const selectedPhoto = mediaUrls[photoIndex % Math.max(mediaUrls.length, 1)]; onShare(selectedPhoto ? { ...socialPost, media_url: selectedPhoto, media_urls: [selectedPhoto] } : socialPost); }} onFocusComments={onFocusComments} onLoadComments={onLoadComments} onCommentDraftChange={onCommentDraftChange} onAddComment={onAddComment} onViewProfile={onViewProfile} />
   </article>;
 }
 
@@ -240,7 +240,7 @@ function PlayerPostCard({ post, currentUserName, currentProfileImage, comments, 
       <img src={mediaUrls[photoIndex % mediaUrls.length]} alt={`Photo ${photoIndex + 1} from ${post.player_display_name}'s game`} />
       {mediaUrls.length > 1 && <div className="social-post-pagination" aria-label="Post photos">{mediaUrls.map((_, index) => <button className={index === photoIndex % mediaUrls.length ? "active" : ""} type="button" key={index} onClick={() => setPhotoIndex(index)} aria-label={`Show photo ${index + 1}`} aria-pressed={index === photoIndex % mediaUrls.length} />)}</div>}
     </div>}
-    <SocialPostEngagement post={post} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments} commentDraft={commentDraft} fireBusy={fireBusy} commentsBusy={commentsBusy} commentBusy={commentBusy} shareBusy={shareBusy} shareLabel="Share post" onFire={onFire} onShare={onShare} onFocusComments={onFocusComments} onLoadComments={onLoadComments} onCommentDraftChange={onCommentDraftChange} onAddComment={onAddComment} onViewProfile={onViewProfile} />
+    <SocialPostEngagement post={post} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments} commentDraft={commentDraft} fireBusy={fireBusy} commentsBusy={commentsBusy} commentBusy={commentBusy} shareBusy={shareBusy} shareLabel="Share post" onFire={onFire} onShare={(socialPost) => { const selectedPhoto = mediaUrls[photoIndex % Math.max(mediaUrls.length, 1)]; onShare(selectedPhoto ? { ...socialPost, media_url: selectedPhoto, media_urls: [selectedPhoto] } : socialPost); }} onFocusComments={onFocusComments} onLoadComments={onLoadComments} onCommentDraftChange={onCommentDraftChange} onAddComment={onAddComment} onViewProfile={onViewProfile} />
   </article>;
 }
 
@@ -309,7 +309,40 @@ function downloadShareFile(file: File) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+export function isDesktopShareView() {
+  if (typeof window === "undefined" || typeof navigator === "undefined") return false;
+  const phoneUserAgent = /iPhone|iPod|Windows Phone|Android.+Mobile|Mobile.+Android/i.test(navigator.userAgent);
+  return !phoneUserAgent;
+}
+
+export async function copyShareText(text: string) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Some desktop browsers expose Clipboard API but deny writes; use the
+      // synchronous selection fallback while the share click still has focus.
+    }
+  }
+  const fallback = document.createElement("textarea");
+  fallback.value = text;
+  fallback.setAttribute("readonly", "");
+  fallback.style.position = "fixed";
+  fallback.style.opacity = "0";
+  document.body.appendChild(fallback);
+  fallback.select();
+  fallback.setSelectionRange(0, fallback.value.length);
+  const copied = document.execCommand("copy");
+  fallback.remove();
+  if (!copied) throw new Error("Clipboard unavailable");
+}
+
 export async function shareImageFile(file: File, title: string, text: string, url?: string) {
+  if (isDesktopShareView()) {
+    await copyShareText(url ?? text);
+    return "copied" as const;
+  }
   const shareData: ShareData = { title, text, files: [file] };
   if (url) shareData.url = url;
   if (navigator.share && navigator.canShare?.(shareData)) {
@@ -356,9 +389,8 @@ async function createShareCard(post: SocialPost): Promise<File | null> {
   context.fillRect(80, 184, 70, 10);
   context.fillStyle = "#192321";
   context.font = "700 23px 'DM Mono', monospace";
-  const hasLeaderboard = Boolean(post.session_leaderboard?.length);
-  const isLeaderboard = post.activity_type === "session" || hasLeaderboard;
-  context.fillText(isLeaderboard ? "SESSION LEADERBOARD" : "COURT MOMENT", 80, 245);
+  const isLeaderboard = false;
+  context.fillText("COURT MOMENT", 80, 245);
   context.font = "800 54px Manrope, sans-serif";
   wrapCanvasText(context, post.session_name ?? `${sportLabel(post.sport)} session`, 80, 325, 900, 66, 2);
   context.fillStyle = "#65736e";
@@ -848,6 +880,29 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
 
   async function sharePost(post: SocialPost) {
     const shareUrl = `${window.location.origin}/home#social-post-${post.id}`;
+    if (isDesktopShareView()) {
+      setBusyAction(`share-${post.id}`);
+      try {
+        await copyShareText(shareUrl);
+        onToast("Copied link to clipboard");
+        void authorizedFetch(`${apiUrl}/v1/social/posts/${post.id}/share`, { method: "POST" })
+          .then(async (response) => {
+            if (!response.ok) return;
+            const updated = await response.json() as SocialPost;
+            setPosts((current) => current.map((item) => item.id === updated.id ? updated : item));
+            clearFeedCache();
+            onInvalidate?.(["feed"]);
+          })
+          .catch(() => {
+            // Copying is the desktop action; analytics must never replace its success state.
+          });
+      } catch {
+        onToast("Could not copy this post link");
+      } finally {
+        setBusyAction("");
+      }
+      return;
+    }
     try {
       setBusyAction(`share-${post.id}`);
       const response = await authorizedFetch(`${apiUrl}/v1/social/posts/${post.id}/share`, { method: "POST" });
@@ -859,6 +914,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       const file = await createShareCard(post);
       if (!file) throw new Error("Could not create the CourtMate share image");
       const outcome = await shareImageFile(file, `${post.player_display_name} on CourtMate`, post.caption, shareUrl);
+      if (outcome === "copied") onToast("Copied link to clipboard");
       if (outcome === "downloaded") {
         await navigator.clipboard?.writeText(shareUrl);
         onToast("Branded post image downloaded and link copied");
@@ -871,33 +927,19 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
     }
   }
 
-  async function shareSessionLeaderboard(post: SocialPost) {
-    const shareUrl = `${window.location.origin}/home#social-post-${post.id}`;
-    const text = `${post.session_name ?? "CourtMate game"} on CourtMate`;
-    try {
-      setBusyAction(`share-${post.id}`);
-      const file = await createShareCard(post);
-      if (!file) throw new Error("Could not create the CourtMate share image");
-      const outcome = await shareImageFile(file, text, text, shareUrl);
-      if (outcome === "downloaded") {
-        await navigator.clipboard?.writeText(shareUrl);
-        onToast("Branded leaderboard image downloaded and link copied");
-      }
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      onToast("Could not share this leaderboard");
-    } finally {
-      setBusyAction("");
-    }
-  }
-
   async function shareStreak() {
     try {
       setBusyAction("share-streak");
+      if (isDesktopShareView()) {
+        await copyShareText(`${window.location.origin}/home`);
+        onToast("Copied link to clipboard");
+        return;
+      }
       const file = await createStreakShareCard(currentUserName, weeklyStreak, activityByDate);
       if (!file) throw new Error("Could not create the streak image");
       const text = `${weeklyStreak}-week CourtMate streak. Keep showing up.`;
       const outcome = await shareImageFile(file, "My CourtMate streak", text, `${window.location.origin}/home`);
+      if (outcome === "copied") onToast("Copied link to clipboard");
       if (outcome === "downloaded") onToast("CourtMate streak image downloaded");
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
@@ -928,7 +970,7 @@ export function SocialFeed({ apiUrl, currentUserId, currentUserName, currentProf
       {loading && <div className="social-feed-loader"><TennisBallLoader label="Rallying..." /></div>}
       {!loading && loadError && <div className="social-feed-error" role="alert"><strong>Social is taking a breather.</strong><p>We couldn&apos;t load the latest court activity.</p><button type="button" onClick={() => void loadFeed(feedFilter, true)}>Try again <span>↗</span></button></div>}
       {!loading && !loadError && posts.length === 0 && <div className="social-empty"><strong>{feedFilter === "personal" ? "Share a completed game when you have a moment worth keeping." : feedFilter === "following" ? "Follow players to build your Rally Circle." : "Player stories from completed games will appear here."}</strong><p>Every post is written and shared by its player.</p></div>}
-      {!loading && posts.map((post) => post.activity_type === "session" ? <SessionActivityCard key={post.id} post={post} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments[post.id]} commentDraft={commentDrafts[post.id] ?? ""} fireBusy={busyAction === `fire-${post.id}`} commentsBusy={busyAction === `comments-${post.id}`} commentBusy={busyAction === `comment-${post.id}`} shareBusy={busyAction === `share-${post.id}`} onFire={(socialPost) => void toggleFire(socialPost)} onViewProfile={onViewProfile} onShare={(sessionPost) => void shareSessionLeaderboard(sessionPost)} onLoadComments={(postId) => void loadComments(postId)} onFocusComments={focusComments} onCommentDraftChange={(postId, value) => setCommentDrafts((current) => ({ ...current, [postId]: value }))} onAddComment={(event, postId) => void addComment(event, postId)} /> : <PlayerPostCard key={post.id} post={post} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments[post.id]} commentDraft={commentDrafts[post.id] ?? ""} fireBusy={busyAction === `fire-${post.id}`} commentsBusy={busyAction === `comments-${post.id}`} commentBusy={busyAction === `comment-${post.id}`} shareBusy={busyAction === `share-${post.id}`} canDelete={post.player_id === currentUserId} onDelete={(socialPost) => void deletePost(socialPost)} onFire={(socialPost) => void toggleFire(socialPost)} onViewProfile={onViewProfile} onShare={(socialPost) => void sharePost(socialPost)} onLoadComments={(postId) => void loadComments(postId)} onFocusComments={focusComments} onCommentDraftChange={(postId, value) => setCommentDrafts((current) => ({ ...current, [postId]: value }))} onAddComment={(event, postId) => void addComment(event, postId)} />)}
+      {!loading && posts.map((post) => post.activity_type === "session" ? <SessionActivityCard key={post.id} post={post} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments[post.id]} commentDraft={commentDrafts[post.id] ?? ""} fireBusy={busyAction === `fire-${post.id}`} commentsBusy={busyAction === `comments-${post.id}`} commentBusy={busyAction === `comment-${post.id}`} shareBusy={busyAction === `share-${post.id}`} onFire={(socialPost) => void toggleFire(socialPost)} onViewProfile={onViewProfile} onShare={(sessionPost) => void sharePost(sessionPost)} onLoadComments={(postId) => void loadComments(postId)} onFocusComments={focusComments} onCommentDraftChange={(postId, value) => setCommentDrafts((current) => ({ ...current, [postId]: value }))} onAddComment={(event, postId) => void addComment(event, postId)} /> : <PlayerPostCard key={post.id} post={post} currentUserName={currentUserName} currentProfileImage={currentProfileImage} comments={comments[post.id]} commentDraft={commentDrafts[post.id] ?? ""} fireBusy={busyAction === `fire-${post.id}`} commentsBusy={busyAction === `comments-${post.id}`} commentBusy={busyAction === `comment-${post.id}`} shareBusy={busyAction === `share-${post.id}`} canDelete={post.player_id === currentUserId} onDelete={(socialPost) => void deletePost(socialPost)} onFire={(socialPost) => void toggleFire(socialPost)} onViewProfile={onViewProfile} onShare={(socialPost) => void sharePost(socialPost)} onLoadComments={(postId) => void loadComments(postId)} onFocusComments={focusComments} onCommentDraftChange={(postId, value) => setCommentDrafts((current) => ({ ...current, [postId]: value }))} onAddComment={(event, postId) => void addComment(event, postId)} />)}
     </div>
   </section>;
 }

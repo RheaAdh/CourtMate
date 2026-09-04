@@ -490,9 +490,9 @@ This screenshot is being attached to a completed racket-sport game."""
         own_history_context = bool(re.search(r"\b(my|mine|i've|i have)\b", lowered)) and bool(re.search(r"\b(last|recent|history|played|games|game|activity)\b", lowered))
         if discovery_request and not own_history_context:
             return False
-        explicit_metric = bool(re.search(r"\b(cmr|rating|ratings|feedback|review|stats|statistics|calories|steps|heart rate|distance|wearable|progress|trend|fitness|form)\b", lowered))
-        personal_history = bool(re.search(r"\b(my|mine|i've|i have)\b", lowered)) and bool(re.search(r"\b(performance|history|played|games|activity|progress|trend|form|improve|rating|stats|fitness)\b", lowered))
-        return explicit_metric or personal_history
+        explicit_metric = bool(re.search(r"\b(cmr|rating|ratings|feedback|review|stats|statistics|calories|steps|heart rate|distance|wearable|progress|trend|fitness|form|improve|improvement|strongest|weakest|reliability|attendance)\b", lowered))
+        personal_history = bool(re.search(r"\b(my|me|i|mine|i've|i have)\b", lowered)) and bool(re.search(r"\b(performance|history|played|games|activity|progress|trend|form|improve|rating|stats|fitness)\b", lowered))
+        return explicit_metric or personal_history or bool(re.search(r"\bhow (?:am i doing|have i been playing)\b", lowered))
 
     def discuss_performance(self, query: str, player: Player, history: dict, activity_proofs: list[dict]) -> str:
         """Answer only from the player's stored game and wearable evidence."""
@@ -503,25 +503,84 @@ This screenshot is being attached to a completed racket-sport game."""
             "cmr_history": history,
             "wearable_proofs": activity_proofs[:12],
         }
-        def fallback_answer() -> str:
+        def grounded_answer() -> str:
+            lowered = " ".join(query.lower().split())
+            if re.search(r"\b(reliability|reliable|attendance|show up|show-up)\b", lowered):
+                show_ups = player.on_time_check_in_count + player.late_check_in_count
+                return f"Your CourtMate reliability is {round(player.reliability * 100)}%. You have {show_ups} confirmed show-up{'' if show_ups == 1 else 's'}, including {player.late_check_in_count} late check-in{'' if player.late_check_in_count == 1 else 's'}, and {player.withdrawal_count} withdrawal{'' if player.withdrawal_count == 1 else 's'} recorded."
+            history_ratings = {
+                sport: next((point.get("rating") for point in reversed(points) if point.get("rating") is not None), None)
+                for sport, points in history.items()
+            }
             ratings = [
-                (sport, rating, player.cmr_game_counts.get(sport, 0))
-                for sport, rating in player.cmr_ratings.items()
+                (sport, rating, player.cmr_game_counts.get(sport, len(history.get(sport, []))))
+                for sport, rating in {
+                    **{sport: rating for sport, rating in history_ratings.items() if rating is not None},
+                    **player.cmr_ratings,
+                }.items()
             ]
             if re.search(r"\bwhat is cmr\b|\bwhat does cmr mean\b|\bexplain cmr\b", query.lower()):
                 return "CMR means CourtMate Rating. It is a sport-specific score from 1.00 to 10.00 that starts with your confirmed level and updates from confirmed competitive match results. It is a guide to progress, not a permanent label."
             if not ratings:
                 return "You do not have a CMR history yet. Play a completed racket-sport game and check in to start tracking your form."
+            sport_aliases = {
+                "pickle ball": "pickleball",
+                "ping pong": "table_tennis",
+                "table tennis": "table_tennis",
+            }
             requested_sport = next((
                 sport for sport, _, _ in ratings
-                if sport.replace("_", " ") in query.lower()
+                if sport.replace("_", " ") in lowered
             ), None)
-            sport, rating, games = next(
-                (item for item in ratings if item[0] == requested_sport),
-                max(ratings, key=lambda item: item[1]),
-            )
-            recent_points = history.get(sport, [])[-3:]
+            requested_sport = requested_sport or next((sport for alias, sport in sport_aliases.items() if alias in lowered and any(item[0] == sport for item in ratings)), None)
+            default_rating = min(ratings, key=lambda item: item[1]) if "weakest" in lowered or "lowest" in lowered else max(ratings, key=lambda item: item[1])
+            sport, rating, games = next((item for item in ratings if item[0] == requested_sport), default_rating)
+            recent_points = sorted(history.get(sport, []), key=lambda point: str(point.get("session_date", "")))[-3:]
             recent_delta = sum(float(point.get("delta") or 0) for point in recent_points)
+            sport_name = sport.replace('_', ' ').title()
+            all_points = sorted(
+                [
+                    {**point, "sport": point_sport}
+                    for point_sport, points in history.items()
+                    for point in points
+                ],
+                key=lambda point: str(point.get("session_date", "")),
+                reverse=True,
+            )
+
+            if re.search(r"\b(strongest|best sport|highest)\b", lowered):
+                return f"Your strongest current CourtMate signal is {sport_name} at {rating:.2f}/10 CMR across {games} game{'' if games == 1 else 's'}."
+            if re.search(r"\b(weakest|lowest)\b", lowered):
+                return f"Your lowest current CourtMate signal is {sport_name} at {rating:.2f}/10 CMR across {games} game{'' if games == 1 else 's'}. Treat it cautiously when the game count is small."
+
+            if re.search(r"\b(summarize|summarise|summary|recap)\b|\brecent games?\b|\blast games?\b", lowered):
+                if not all_points:
+                    return f"Your current {sport_name} CMR is {rating:.2f}/10 across {games} recorded game{'' if games == 1 else 's'}, but there are no completed-game entries available to summarise yet."
+                recent = all_points[:3]
+                game_labels = []
+                for point in recent:
+                    point_sport = str(point.get("sport", "racket sport")).replace("_", " ").title()
+                    game_name = point.get("group_name") or f"{point_sport} game"
+                    point_rating = point.get("rating")
+                    rating_text = f", ending at {float(point_rating):.2f} CMR" if point_rating is not None else ""
+                    game_labels.append(f"{game_name} ({point_sport}{rating_text})")
+                return f"Your latest recorded games are {'; '.join(game_labels)}. These are the most recent completed-game records CourtMate has for you."
+
+            if re.search(r"\b(improve|improvement|work on|focus on|better|next step|next)\b", lowered):
+                if games < 3:
+                    remaining = 3 - games
+                    return f"Your {sport_name} CMR is {rating:.2f}/10, but {games} game{'' if games == 1 else 's'} is too little evidence for a technical recommendation. Complete {remaining} more confirmed competitive game{'' if remaining == 1 else 's'} first; CourtMate does not yet have shot-level data to claim which skill needs work."
+                if recent_delta < -0.01:
+                    direction = f"down {abs(recent_delta):.2f} across the latest {len(recent_points)} rated games"
+                    action = "Use the next 2-3 games against similar-CMR players to check whether the decline continues."
+                elif recent_delta > 0.01:
+                    direction = f"up {recent_delta:.2f} across the latest {len(recent_points)} rated games"
+                    action = "Test that progress in the next 2-3 games against similar or slightly higher-CMR players."
+                else:
+                    direction = f"stable across the latest {len(recent_points)} rated games"
+                    action = "Use the next 2-3 confirmed games to establish a clearer direction."
+                return f"Your {sport_name} CMR is {rating:.2f}/10 and is {direction}. {action} CourtMate has result data, not shot-level data, so it cannot reliably name a technique weakness yet."
+
             if recent_points and recent_delta != 0:
                 direction = "up" if recent_delta > 0 else "down"
                 trend = f" Your recent recorded CMR movement is {direction} {abs(recent_delta):.2f}."
@@ -529,7 +588,6 @@ This screenshot is being attached to a completed racket-sport game."""
                 trend = " There is not enough recent CMR movement to identify a reliable trend yet."
             proof_count = len(activity_proofs)
             evidence = f" I also have {proof_count} wearable check-in{'' if proof_count == 1 else 's'} to compare." if proof_count else ""
-            sport_name = sport.replace('_', ' ').title()
             rating_copy = (
                 f"Your current {sport_name} rating is {rating:.2f}/10 CMR across {games} game{'' if games == 1 else 's'}."
                 if requested_sport
@@ -538,8 +596,13 @@ This screenshot is being attached to a completed racket-sport game."""
             next_step = " Keep logging confirmed competitive results so I can give you a stronger trend analysis." if games < 3 else " Use your next confirmed games to see whether that direction continues."
             return f"{rating_copy}{trend}{evidence}{next_step}"
 
-        if not self._client:
-            return fallback_answer()
+        grounded_intent = bool(re.search(
+            r"\b(cmr|rating|trend|progress|improve|improvement|work on|focus on|summary|summarize|summarise|recap|recent games?|last games?|history|feedback)\b",
+            query.lower(),
+        ))
+        has_wearable_question = bool(re.search(r"\b(wearable|calories|steps|heart rate|distance|fitness tracker)\b", query.lower()))
+        if grounded_intent or not self._client or not (has_wearable_question and activity_proofs):
+            return grounded_answer()
 
         prompt = f"""You are CourtMate's private performance coach for racket-sport players.
 Answer the user's question using only the stored context below. Discuss CMR trends, completed games, consistency, and clearly extracted wearable metrics. Do not invent scores, medical advice, or metrics. Explain when the data is too limited. Keep the answer to 2-4 short sentences, warm, and actionable.
@@ -551,12 +614,18 @@ Stored player context: {context}
         try:
             response = self._client.models.generate_content(model=self.model, contents=prompt, config={"max_output_tokens": 140})
             answer = response.text.strip()
-            if not answer:
-                raise RuntimeError("Gemini returned an empty performance answer")
+            invalid_answer = (
+                len(answer) < 12
+                or len(answer) > 900
+                or answer.startswith(("[", "{"))
+                or bool(re.search(r"\b(requirement|system prompt|stored player context|user question)\s*:", answer, re.IGNORECASE))
+            )
+            if invalid_answer:
+                raise RuntimeError("Gemini returned an invalid performance answer")
             return answer
         except Exception as error:
             logger.warning("Gemini performance coaching failed (%s); using stored CMR fallback", error)
-            return fallback_answer()
+            return grounded_answer()
 
     def generate_sporty_avatar(self, image_bytes: bytes, mime_type: str, sport: Sport) -> list[str]:
         """Create a few sport-themed avatar options while preserving identity."""

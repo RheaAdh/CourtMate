@@ -343,6 +343,7 @@ function GoogleDensityMap({
               position,
               title,
               content,
+              gmpClickable: true,
             });
             return marker;
           }
@@ -377,6 +378,27 @@ function GoogleDensityMap({
         );
         markersRef.current.push(centerMarker);
 
+        const bindMarkerClick = (marker: any, handler: () => void) => {
+          const markerContent = marker?.content;
+          if (markerContent instanceof HTMLElement) {
+            markerContent.addEventListener("click", (event) => {
+              event.stopPropagation();
+              handler();
+            });
+            markerContent.addEventListener("keydown", (event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              handler();
+            });
+            markerContent.tabIndex = 0;
+            markerContent.setAttribute("role", "button");
+            return;
+          }
+          if (typeof marker?.addListener === "function") {
+            marker.addListener("click", handler);
+          }
+        };
+
         const visibleClusters = clusters.filter((cluster) =>
           cluster.game_ids.some((id) => games.some((game) => game.id === id)),
         );
@@ -395,19 +417,7 @@ function GoogleDensityMap({
             isSelected,
           );
 
-          if (typeof marker.addEventListener === "function") {
-            marker.addEventListener("gmp-click", () => {
-              selectCluster(cluster);
-            });
-          } else if (marker.addListener) {
-            marker.addListener("click", () => {
-              selectCluster(cluster);
-            });
-          } else if (marker.element) {
-            marker.element.addEventListener("click", () => {
-              selectCluster(cluster);
-            });
-          }
+          bindMarkerClick(marker, () => selectCluster(cluster));
           markersRef.current.push(marker);
         });
 
@@ -427,13 +437,7 @@ function GoogleDensityMap({
             "#17231f",
             28,
           );
-          if (typeof marker.addEventListener === "function") {
-            marker.addEventListener("gmp-click", () => selectGame(game, [game.id]));
-          } else if (marker.addListener) {
-            marker.addListener("click", () => selectGame(game, [game.id]));
-          } else if (marker.element) {
-            marker.element.addEventListener("click", () => selectGame(game, [game.id]));
-          }
+          bindMarkerClick(marker, () => selectGame(game, [game.id]));
           markersRef.current.push(marker);
         });
 
@@ -519,10 +523,10 @@ export function CommunityHub({
   const [nearbyGamesState, setNearbyGamesState] = useState<NearbyGame[]>([]);
   const [mapCommunities, setMapCommunities] = useState<MapCommunity[]>([]);
   const [mapClusters, setMapClusters] = useState<MapCluster[]>([]);
-  const [selectedGame, setSelectedGameState] = useState<NearbyGame | null>(null);
   const [selectedMapArea, setSelectedMapArea] = useState<string | null>(null);
   const [selectedGameIds, setSelectedGameIds] = useState<string[] | null>(null);
   const [requestingGameId, setRequestingGameId] = useState<string | null>(null);
+  const mapCarouselRef = useRef<HTMLDivElement>(null);
 
   const [location, setLocation] = useState<{ latitude: number; longitude: number }>(initialLocation);
   const [locationState, setLocationState] = useState<"saved" | "detecting" | "fallback">(
@@ -627,7 +631,6 @@ export function CommunityHub({
           setNearbyGamesState(payload.nearby_games || []);
           setMapLoaded(true);
           setSelectedPoint(null);
-          setSelectedGameState(null);
           setSelectedMapArea(null);
           setSelectedGameIds(null);
         }
@@ -659,6 +662,7 @@ export function CommunityHub({
   const isJoined = (sessionId: string) => joinedSessionIds.includes(sessionId);
 
   const revealSelectedGames = () => {
+    if (window.matchMedia("(max-width: 700px)").matches) return;
     window.requestAnimationFrame(() => {
       document.getElementById("nearby-games-title")?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
@@ -671,8 +675,6 @@ export function CommunityHub({
     }
     setSelectedMapArea(cluster.area);
     setSelectedGameIds(cluster.game_ids);
-    const firstGame = nearbyGamesState.find((candidate) => cluster.game_ids.includes(candidate.id)) ?? null;
-    setSelectedGameState(firstGame);
     const point = densityPoints.find((p) => p.area.toLowerCase() === cluster.area.toLowerCase()) ?? null;
     setSelectedPoint(point);
     revealSelectedGames();
@@ -683,7 +685,6 @@ export function CommunityHub({
       onSignIn?.();
       return;
     }
-    setSelectedGameState(game);
     setSelectedMapArea(game.area);
     setSelectedGameIds(gameIds);
     revealSelectedGames();
@@ -737,6 +738,12 @@ export function CommunityHub({
     ? nearbyGamesState.filter((game) => game.area.trim().toLowerCase() === selectedMapArea.trim().toLowerCase())
     : nearbyGamesState;
 
+  const moveMapCarousel = (direction: -1 | 1) => {
+    const carousel = mapCarouselRef.current;
+    if (!carousel) return;
+    carousel.scrollBy({ left: direction * carousel.clientWidth, behavior: "smooth" });
+  };
+
   const project = (point: DensityPoint) => {
     if (point.latitude == null || point.longitude == null) return { x: 200, y: 130 };
     const xKm = (point.longitude - center.longitude) * 111.32 * Math.cos((center.latitude * Math.PI) / 180);
@@ -770,7 +777,6 @@ export function CommunityHub({
       location: nextLocation,
     });
     setHasSearched(true);
-    setSelectedGameState(null);
     setSelectedMapArea(null);
     setSelectedGameIds(null);
     setMapRefresh((value) => value + 1);
@@ -783,7 +789,6 @@ export function CommunityHub({
           value={sportFilter}
           onChange={(event) => {
             setSportFilter(event.target.value as SportFilter);
-            setSelectedGameState(null);
             setSelectedMapArea(null);
             setSelectedGameIds(null);
           }}
@@ -802,7 +807,8 @@ export function CommunityHub({
           value={radiusKm}
           onChange={(event) => {
             setRadiusKm(Number(event.target.value));
-            setSelectedGameState(null);
+            setSelectedMapArea(null);
+            setSelectedGameIds(null);
           }}
           aria-label="Choose map radius"
         >
@@ -818,7 +824,6 @@ export function CommunityHub({
             value={visibilityFilter}
             onChange={(event) => {
               setVisibilityFilter(event.target.value as MapVisibilityFilter);
-              setSelectedGameState(null);
               setSelectedMapArea(null);
               setSelectedGameIds(null);
             }}
@@ -836,7 +841,6 @@ export function CommunityHub({
             const nextArea = event.target.value;
             manualAreaRef.current = true;
             setAreaFilter(nextArea);
-            setSelectedGameState(null);
             setSelectedMapArea(null);
             setSelectedGameIds(null);
           }}
@@ -987,6 +991,8 @@ export function CommunityHub({
                           }
                           setSelectedPoint(point);
                           setSelectedMapArea(point.area);
+                          const areaGames = nearbyGamesState.filter((game) => game.area.trim().toLowerCase() === point.area.trim().toLowerCase());
+                          setSelectedGameIds(areaGames.map((game) => game.id));
                         }}
                         role="button"
                         tabIndex={0}
@@ -1016,6 +1022,20 @@ export function CommunityHub({
                   <span>Try another sport, area, or radius.</span>
                 </div>
               )}
+              {!isGuest && selectedMapArea && (
+                <aside className="map-game-sheet map-game-carousel" aria-live="polite" aria-label={`${displayedGames.length} games selected in ${selectedMapArea}`}>
+                  <header className="map-game-carousel-header">
+                    <div><span>{selectedMapArea}</span><strong>{displayedGames.length} active game{displayedGames.length === 1 ? "" : "s"}</strong></div>
+                    {displayedGames.length > 1 && <nav aria-label="Browse selected games"><button type="button" onClick={() => moveMapCarousel(-1)} aria-label="Previous game">←</button><button type="button" onClick={() => moveMapCarousel(1)} aria-label="Next game">→</button></nav>}
+                  </header>
+                  {displayedGames.length ? <div className="map-game-carousel-track" ref={mapCarouselRef}>
+                    {displayedGames.map((game, index) => <article className="map-game-carousel-card" key={game.id}>
+                      <div><span>{labels[game.sport]} · {index + 1} of {displayedGames.length}</span><strong>{game.group_name}</strong><small>{game.session_date} · {game.start_time.slice(0, 5)}–{game.end_time.slice(0, 5)} · {game.open_slots} spot{game.open_slots === 1 ? "" : "s"}</small></div>
+                      <button type="button" onClick={() => void handleGameAction(game)} disabled={requestingGameId === game.id}>{requestingGameId === game.id ? "Working..." : isJoined(game.id) ? "Open game" : isRequested(game.id) ? "View request" : "Join game"}</button>
+                    </article>)}
+                  </div> : <p className="map-game-carousel-empty">No active games in this circle. Try another circle or broaden the map filters.</p>}
+                </aside>
+              )}
             </div>
 
             {!isGuest && mapControls}
@@ -1031,7 +1051,6 @@ export function CommunityHub({
                   onClick={() => {
                     setSelectedMapArea(null);
                     setSelectedGameIds(null);
-                    setSelectedGameState(null);
                   }}
                 >
                   Show all nearby games

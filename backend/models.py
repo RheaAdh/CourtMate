@@ -319,6 +319,9 @@ class Session(BaseModel):
     confirmed_player_ids: list[str] = Field(default_factory=list)
     waitlist_player_ids: list[str] = Field(default_factory=list)
     checked_in_player_ids: list[str] = Field(default_factory=list)
+    # A player can finish their own game flow early without changing the
+    # session state for everyone else.
+    completed_player_ids: list[str] = Field(default_factory=list)
     external_booking_url: str | None = None
     booking_provider: str | None = None
     booking_reference: str | None = None
