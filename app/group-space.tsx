@@ -162,7 +162,17 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
   const [optimisticChatPosts, setOptimisticChatPosts] = useState<GroupSpacePost[]>([]);
   const chatFeedRef = useRef<HTMLDivElement | null>(null);
   const refreshChatRef = useRef(onChatPosted);
+  const wasCompletedPhaseRef = useRef(completedPhase);
   useEffect(() => { refreshChatRef.current = onChatPosted; }, [onChatPosted]);
+
+  useEffect(() => {
+    if (completedPhase && !wasCompletedPhaseRef.current) {
+      setFeedbackRequired(true);
+      setFeedbackOpen(true);
+      setMobileSection("feedback");
+    }
+    wasCompletedPhaseRef.current = completedPhase;
+  }, [completedPhase]);
 
   useEffect(() => {
     const refreshChat = () => {
@@ -207,6 +217,7 @@ export function GroupSpace({ group: inputGroup, members, waitlist, posts, curren
       if (markedDone) {
         setFeedbackRequired(true);
         setFeedbackOpen(true);
+        setMobileSection("feedback");
       }
     } finally {
       setMarkingDone(false);

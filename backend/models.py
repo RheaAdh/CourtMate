@@ -290,6 +290,7 @@ class SportyAvatarResponse(BaseModel):
 
 class Session(BaseModel):
     id: str
+    created_at: datetime | None = None
     group_name: str
     organizer_id: str
     area: str

@@ -69,14 +69,46 @@ const exploreTimeOfDay = (startTime: string): ExploreTimeFilter => {
 };
 const ACTIVITY_CACHE_TTL_MS = 30_000;
 const SOCIAL_PROFILE_CACHE_TTL_MS = 5 * 60_000;
+const PENDING_SHARED_GAME_KEY = "courtmate:pending-shared-game";
 
 const compareSessionDateDesc = (
   left: { session_date: string; start_time: string },
   right: { session_date: string; start_time: string },
 ) => `${right.session_date} ${right.start_time}`.localeCompare(`${left.session_date} ${left.start_time}`);
 
+const compareUpcomingGames = (
+  left: { created_at?: string | null; session_date: string; start_time: string },
+  right: { created_at?: string | null; session_date: string; start_time: string },
+) => {
+  if (left.created_at && right.created_at && left.created_at !== right.created_at) {
+    return right.created_at.localeCompare(left.created_at);
+  }
+  if (left.created_at) return -1;
+  if (right.created_at) return 1;
+  return compareSessionDateDesc(left, right);
+};
+
 function hasStateChanged<T>(current: T, next: T) {
   return JSON.stringify(current) !== JSON.stringify(next);
+}
+
+function sharedGameIdFromBrowser() {
+  const currentUrl = new URL(window.location.href);
+  const linkedGameId = currentUrl.searchParams.get("rally-circle");
+  if (linkedGameId) {
+    try { window.sessionStorage.setItem(PENDING_SHARED_GAME_KEY, linkedGameId); } catch { /* Storage is optional. */ }
+    return linkedGameId;
+  }
+  try {
+    const pendingGameId = window.sessionStorage.getItem(PENDING_SHARED_GAME_KEY);
+    if (pendingGameId) {
+      currentUrl.searchParams.set("rally-circle", pendingGameId);
+      window.history.replaceState(window.history.state, "", `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
+    }
+    return pendingGameId;
+  } catch {
+    return null;
+  }
 }
 
 function ShareIcon() {
@@ -174,6 +206,7 @@ function AssistantReply({ text }: { text: string }) {
 
 type Session = {
   id: string;
+  created_at?: string | null;
   organizer_id: string;
   group_name: string;
   sport: Sport;
@@ -341,6 +374,7 @@ type JoinRequest = {
 
 type ActivityGroup = {
   id: string;
+  created_at?: string | null;
   organizer_id: string;
   group_name: string;
   sport: Sport;
@@ -593,6 +627,10 @@ function BellIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></svg>;
 }
 
+function InfoIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7.5v.5" /></svg>;
+}
+
 function EditIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 4.2-1 10.2-10.2a2.2 2.2 0 0 0-3.1-3.1L5.1 15.9 4 20Z" /><path d="m13.8 7.2 3.1 3.1" /></svg>;
 }
@@ -723,7 +761,7 @@ function ProfileSportOverview({ profile, sports, selectedSport, onSelect, headin
       games,
       locked: games === 0,
     };
-  });
+  }).sort((left, right) => Number(right.locked) - Number(left.locked));
 
   const totalSessions = cards.reduce((sum, sport) => sum + sport.games, 0);
   return <section className="profile-sport-overview" aria-label="Sport-wise CMR stats"><div className="profile-sport-overview-heading"><div><span className="kicker">{headingLabel}</span><h2>CMR by sport</h2></div><span>Built from completed-game feedback</span></div><div className="profile-sport-overview-grid"><button type="button" className={`profile-sport-stat profile-sport-all ${selectedSport === null ? "selected" : ""}`} onClick={() => onSelect(null)} aria-label={`All sports overview, ${totalSessions} sessions`} aria-pressed={selectedSport === null}><span className="cmr-ring cmr-all-ring"><span><OverviewTrendIcon /></span></span><strong>Overview</strong><small>{totalSessions} session{totalSessions === 1 ? "" : "s"}</small></button>{cards.map((sport) => <button type="button" className={`profile-sport-stat ${selectedSport === sport.value ? "selected" : ""} ${sport.locked ? "locked" : ""}`} key={sport.value} onClick={() => { if (!sport.locked) onSelect(sport.value); }} disabled={sport.locked} aria-label={`${sport.label}, ${sport.locked ? "yet to unlock" : `${sport.rating.toFixed(2)} CMR`}`} aria-pressed={selectedSport === sport.value}><span className="cmr-ring" style={{ background: sport.locked ? "var(--line)" : `conic-gradient(var(--lime) ${Math.max(0, Math.min(100, ((sport.rating - 1) / 9) * 100))}%, #e5eadc 0)` }}><span>{sport.locked ? <span className="cmr-locked-icon" aria-hidden="true"><LockIcon /></span> : <b>{sport.rating.toFixed(2)}</b>}</span></span><strong>{sport.label}</strong>{sport.locked && <small>Play a game to unlock</small>}</button>)}</div></section>;
@@ -978,7 +1016,7 @@ export default function Home() {
       setAuthReady(true);
       if (nextUser) {
         const searchParams = new URLSearchParams(window.location.search);
-        const hasSharedRallyCircle = searchParams.has("rally-circle");
+        const hasSharedRallyCircle = Boolean(sharedGameIdFromBrowser());
         const tabParam = searchParams.get("tab");
         const viewParam = searchParams.get("view");
         if (hasSharedRallyCircle) {
@@ -1012,14 +1050,15 @@ export default function Home() {
 
   useEffect(() => {
     if (!authReady || !user) return;
-    const searchParams = new URLSearchParams(window.location.search);
-    const sharedGameId = searchParams.get("rally-circle");
+    const sharedGameId = sharedGameIdFromBrowser();
     if (!sharedGameId) return;
     const handledKey = `${sharedGameId}:${user.uid}`;
     if (sharedGameHandledRef.current === handledKey) return;
     sharedGameHandledRef.current = handledKey;
     setActiveTab("games");
-    void openSharedGame(sharedGameId, user);
+    void openSharedGame(sharedGameId, user).finally(() => {
+      try { window.sessionStorage.removeItem(PENDING_SHARED_GAME_KEY); } catch { /* Storage is optional. */ }
+    });
   }, [authReady, user]);
 
   useEffect(() => {
@@ -1609,6 +1648,7 @@ export default function Home() {
       return;
     }
     try {
+      sharedGameIdFromBrowser();
       await signInWithPopup(auth, new GoogleAuthProvider());
     } catch {
       setToast("Google sign-in was cancelled or failed");
@@ -3032,6 +3072,7 @@ export default function Home() {
   function toActivityGroup(group: ActivityGroup | Session): ActivityGroup {
     return {
       id: group.id,
+      created_at: group.created_at,
       organizer_id: group.organizer_id,
       group_name: group.group_name,
       sport: group.sport,
@@ -3400,40 +3441,47 @@ export default function Home() {
     void refreshLiveStateFor(keys);
   }
 
-  async function copyGroupSpaceLink(game: Pick<ShareableGame, "id">) {
+  function gameInviteMessage(game: ShareableGame) {
+    const gameDate = new Date(`${game.session_date}T12:00:00`);
+    const weekday = gameDate.toLocaleDateString("en-IN", { weekday: "long" });
+    const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][gameDate.getMonth()];
+    const dateLabel = `${weekday}, ${gameDate.getDate()} ${month}`;
+    const location = game.venue_name ? `${game.venue_name}, ${game.area}` : game.area;
+    const groupSpaceUrl = getGroupSpaceUrl(game);
+    const sportEmoji: Record<Sport, string> = { pickleball: "🏓", badminton: "🏸", tennis: "🎾", padel: "🎾", squash: "🎾", table_tennis: "🏓" };
+    return `${sportEmoji[game.sport]} ${game.group_name}\n📅 ${dateLabel}\n⏰ ${game.start_time.slice(0, 5)} - ${game.end_time.slice(0, 5)}\n📍 ${location}\n🔗 Join Game: ${groupSpaceUrl}`;
+  }
+
+  async function copyGroupSpaceLink(game: ShareableGame) {
     try {
-      await copyText(getGroupSpaceUrl(game));
-      setToast("Rally Circle link copied");
+      await copyText(gameInviteMessage(game));
+      setToast("Game invite copied");
     } catch {
-      setToast("Could not copy the Rally Circle link");
+      setToast("Could not copy the game invite");
     }
     window.setTimeout(() => setToast(""), 2600);
   }
 
   async function shareGame(game: ShareableGame) {
-    const dateLabel = new Date(`${game.session_date}T12:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short" });
-    const location = game.venue_name ? `${game.venue_name}, ${game.area}` : game.area;
-    const groupSpaceUrl = getGroupSpaceUrl(game);
-    const sportEmoji: Record<Sport, string> = { pickleball: "🏓", badminton: "🏸", tennis: "🎾", padel: "🎾", squash: "🎾", table_tennis: "🏓" };
-    const title = `${sportEmoji[game.sport]} Join me for ${game.group_name}`;
-    const message = `${sportEmoji[game.sport]} ${sportLabel(game.sport)} · 📅 ${dateLabel} · ⏰ ${game.start_time}–${game.end_time}\n📍 ${location}\n\n🔗 Open the CourtMate Rally Circle: ${groupSpaceUrl}`;
+    const title = `Join ${game.group_name} on CourtMate`;
+    const message = gameInviteMessage(game);
     try {
       if (isDesktopShareView()) {
-        await copyText(groupSpaceUrl);
-        setToast("Copied link to clipboard");
+        await copyText(message);
+        setToast("Game invite copied");
         return;
       }
       if (navigator.share) {
         await navigator.share({ title, text: message });
         setToast("Game details shared");
       } else {
-        await copyText(`${title}\n${message}`);
+        await copyText(message);
         setToast("Game details copied");
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       try {
-        await copyText(`${title}\n${message}`);
+        await copyText(message);
         setToast("Game details copied");
       } catch {
         setToast("Could not share game details");
@@ -3663,7 +3711,7 @@ export default function Home() {
   const isSessionRequested = (sessionId: string) =>
     sessionId === justRequestedSessionId || requestedGames.some(({ request }) => request.session_id === sessionId);
   const today = new Date().toISOString().slice(0, 10);
-  const upcomingGames = Array.from(new Map([...approvedGames, ...myGroups.filter((group) => group.session_date >= today && group.status !== "awaiting_feedback" && group.status !== "completed" && group.status !== "cancelled")].map((game) => [game.id, game])).values()).sort(compareSessionDateDesc);
+  const upcomingGames = Array.from(new Map([...approvedGames, ...myGroups.filter((group) => group.session_date >= today && group.status !== "awaiting_feedback" && group.status !== "completed" && group.status !== "cancelled")].map((game) => [game.id, game])).values()).sort(compareUpcomingGames);
   const filteredExploreGames = exploreGames.filter((game) => {
     const searchTerms = exploreSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const searchableGame = `${game.group_name} ${game.area} ${sportLabel(game.sport)} ${game.style} ${game.session_date} ${game.start_time} ${game.end_time} ${game.venue_name ?? ""}`.toLowerCase();
@@ -3737,7 +3785,7 @@ export default function Home() {
     <main className={`shell ${settingsOpen || notificationsOpen || howItWorksOpen || calendarOpen || connectionsOpen || cmrDetailsOpen ? "utility-page-open" : ""} ${workspaceGroup || viewedGroup ? "detail-page-open" : ""} ${rankingGame ? "ranking-page-open" : ""}`}>
       <nav className="nav">
         <div className="brand" aria-label="CourtMate"><img className="brand-icon brand-logo-light" src="/courtmate-header-logo-light.png" alt="CourtMate" /><img className="brand-icon brand-logo-dark" src="/courtmate-header-logo-dark.png" alt="" aria-hidden="true" /></div>
-        <div className="nav-right"><button className={`about-link ${howItWorksOpen ? "active" : ""}`} type="button" onClick={openHowItWorks} aria-expanded={howItWorksOpen}>How it works</button><span className="location-pill"><span className="dot" /> {profile?.area || "Whitefield"}, Bengaluru</span><button className="theme-toggle" type="button" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}><ThemeIcon dark={theme === "dark"} /></button>{user ? <><div className="notification-wrap">
+        <div className="nav-right"><button className={`mobile-info-button ${howItWorksOpen ? "active" : ""}`} type="button" onClick={openHowItWorks} aria-label="How CourtMate works" title="How CourtMate works" aria-expanded={howItWorksOpen}><InfoIcon /></button><button className={`about-link ${howItWorksOpen ? "active" : ""}`} type="button" onClick={openHowItWorks} aria-expanded={howItWorksOpen}>How it works</button><span className="location-pill"><span className="dot" /> {profile?.area || "Whitefield"}, Bengaluru</span><button className="theme-toggle" type="button" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}><ThemeIcon dark={theme === "dark"} /></button>{user ? <><div className="notification-wrap">
           <button className={`notification-button ${notificationsOpen ? "active" : ""}`} type="button" onClick={openNotifications} aria-label={`Notifications${unreadNotifications ? `, ${unreadNotifications} unread` : ""}`} title="Notifications"><BellIcon />{unreadNotifications > 0 && <span className="notification-count">{unreadNotifications > 9 ? "9+" : unreadNotifications}</span>}</button>
         </div><span className="user-name">{user.displayName ?? user.email}</span><button className="avatar" onClick={() => selectTab("profile")} title="Open profile">{profile?.profile_image_url ? <img src={profile.profile_image_url} alt="" /> : initials(user.displayName ?? user.email ?? "CourtMate")}</button></> : <button className="sign-in-button" onClick={() => void signIn()}>{authReady ? "Sign in with Google" : "Loading auth"}</button>}</div>
       </nav>
@@ -3780,7 +3828,7 @@ export default function Home() {
       {!loading && <div className="chat-quick-replies chat-context-suggestions" aria-label="Suggested replies">{suggestedPrompts().map((prompt) => <button type="button" key={prompt} onClick={() => prompt === "Create this game" ? openCreateGame() : sendQuickPrompt(prompt)}><span>{prompt}</span></button>)}</div>}
         </div>
         {joiningSessionId && <div className="chat-request-sending" role="status">Sending your request to the group...</div>}
-        <form className="chat-input-shell" onSubmit={handleChatSubmit}><div className="chat-input-row"><input value={query} placeholder={feedbackSessionId ? "How was the game?" : scoreSessionId ? "e.g. Rhea beat Ananya 11 to 8" : showCraftedGame ? "Change the time, area, level, or vibe" : "Message CourtMate"} onChange={(event) => { setQuery(event.target.value); const detectedSport = sportFromText(event.target.value); if (detectedSport) selectDetectedSport(detectedSport); }} aria-label="Message CourtMate" autoComplete="off" /><button className="chat-send-action composer-send-button" type="submit" disabled={loading || !query.trim()} aria-label="Send message"><SendUpIcon /></button></div></form>
+        <form className="chat-input-shell" onSubmit={handleChatSubmit}><div className="chat-input-row"><input value={query} placeholder={feedbackSessionId ? "How was the game?" : scoreSessionId ? "e.g. Rhea beat Ananya 11 to 8" : showCraftedGame ? "Change the time, area, level, or vibe" : "Message CourtMate"} onChange={(event) => { setQuery(event.target.value); const detectedSport = sportFromText(event.target.value); if (detectedSport) selectDetectedSport(detectedSport); }} aria-label="Message CourtMate" autoComplete="off" /><button className={`ask-voice-button ${isListening ? "listening" : ""}`} type="button" onClick={startVoice} disabled={loading} aria-label={isListening ? "Listening for your question" : "Ask with your voice"} title="Voice search"><MicrophoneIcon /></button><button className="chat-send-action composer-send-button" type="submit" disabled={loading || !query.trim()} aria-label="Send message"><SendUpIcon /></button></div></form>
       </section>
       {scorePickerOpen && <div className="home-score-picker" aria-label="Choose an active game to score"><div className="home-score-picker-heading"><span className="eyebrow">{scorePickerSport ? `YOUR ${sportLabel(scorePickerSport).toUpperCase()} GAMES` : "CHOOSE AN ACTIVE GAME"}</span><button type="button" onClick={() => { setScorePickerOpen(false); setScorePickerSport(null); }} aria-label="Close score picker">×</button></div>{visibleScoreGames.length ? visibleScoreGames.map((game) => <button className="home-score-session" type="button" key={game.id} onClick={() => chooseScoreSession(game)}><span className="date-badge"><strong>{new Date(game.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><small>{new Date(game.session_date).getDate()}</small></span><span><strong>{game.group_name}</strong><small>{sportLabel(game.sport)} · {game.start_time}–{game.end_time} · {game.area}</small></span><b>→</b></button>) : <p className="home-score-empty">No active {scorePickerSport ? `${sportLabel(scorePickerSport)} ` : ""}games found yet.</p>}</div>}
       {feedbackPickerOpen && <div className="home-score-picker" aria-label="Choose a completed game for feedback"><div className="home-score-picker-heading"><span className="eyebrow">REVIEW A GAME</span><button type="button" onClick={() => setFeedbackPickerOpen(false)} aria-label="Close feedback picker">×</button></div>{sortedPastGames.map((pastGame) => <button className="home-score-session" type="button" key={pastGame.session.id} onClick={() => void chooseFeedbackSession(pastGame)}><span className="date-badge"><strong>{new Date(pastGame.session.session_date).toLocaleDateString("en-IN", { weekday: "short" })}</strong><small>{new Date(pastGame.session.session_date).getDate()}</small></span><span><strong>{pastGame.session.group_name}</strong><small>{sportLabel(pastGame.session.sport)} · {pastGame.session.start_time}–{pastGame.session.end_time} · {pastGame.session.area}</small></span><b>→</b></button>)}</div>}

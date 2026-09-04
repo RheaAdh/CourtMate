@@ -2973,6 +2973,7 @@ def create_group(background_tasks: BackgroundTasks, request: CreateGroupRequest,
         raise HTTPException(status_code=422, detail="Doubles games must have 4, 6, or 8 total players")
     session = Session(
         id=f"g-{uuid4().hex[:10]}",
+        created_at=datetime.now(timezone.utc),
         group_name=proposal.group_name,
         organizer_id=player.id,
         area=proposal.area,

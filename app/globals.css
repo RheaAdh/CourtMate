@@ -13684,3 +13684,84 @@ html[data-theme="dark"] .circle-leaderboard-tabs button.active {
     min-height: 76px;
   }
 }
+
+.mobile-info-button {
+  display: none;
+}
+
+.ask-conversation .ask-voice-button {
+  display: grid;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #718714;
+}
+
+.ask-conversation .ask-voice-button:hover,
+.ask-conversation .ask-voice-button.listening {
+  background: color-mix(in srgb, var(--lime) 24%, var(--paper));
+  color: var(--ink);
+}
+
+.ask-conversation .ask-voice-button.listening {
+  box-shadow: 0 0 0 4px rgba(207, 247, 52, .2);
+}
+
+.ask-conversation .ask-voice-button:disabled {
+  color: #a2aaa2;
+  cursor: not-allowed;
+}
+
+.ask-conversation .ask-voice-button svg,
+.mobile-info-button svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.how-it-works-grid .how-it-works-cmr,
+html[data-theme="dark"] .how-it-works-grid .how-it-works-cmr {
+  border-color: #a8c725;
+  background: linear-gradient(140deg, var(--lime), #a9d92c);
+  box-shadow: 0 12px 28px rgba(112, 143, 18, .16);
+}
+
+.how-it-works-grid .how-it-works-cmr h2,
+.how-it-works-grid .how-it-works-cmr p,
+.how-it-works-grid .how-it-works-cmr > span,
+html[data-theme="dark"] .how-it-works-grid .how-it-works-cmr h2,
+html[data-theme="dark"] .how-it-works-grid .how-it-works-cmr p,
+html[data-theme="dark"] .how-it-works-grid .how-it-works-cmr > span {
+  color: #10211a;
+}
+
+@media (max-width: 600px) {
+  .mobile-info-button {
+    display: grid;
+    width: 34px;
+    height: 34px;
+    place-items: center;
+    border: 1px solid #c9dc69;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--paper) 90%, var(--lime));
+    color: var(--ink);
+  }
+
+  .mobile-info-button.active {
+    background: var(--lime);
+  }
+
+  .ask-conversation .ask-voice-button {
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+  }
+}

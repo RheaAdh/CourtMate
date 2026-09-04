@@ -1759,6 +1759,7 @@ class ApiFlowTests(unittest.TestCase):
         )
         self.assertEqual(created.status_code, 200)
         self.assertEqual(created.json()["session"]["rating_mode"], "casual")
+        self.assertIsNotNone(created.json()["session"]["created_at"])
 
         activity = self.client.get("/v1/me/activity", headers={"X-CourtMate-Player-ID": "p1"})
         self.assertEqual(activity.status_code, 200)
