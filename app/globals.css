@@ -13373,41 +13373,6 @@ html[data-theme="dark"] .always-visible-requests {
   .unified-public-profile-activity { grid-template-columns: 1fr; }
 }
 
-.toast.share-copy-toast {
-  top: 86px;
-  right: auto;
-  bottom: auto;
-  left: 28px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  max-width: min(340px, calc(100vw - 56px));
-  width: auto;
-  padding: 12px 16px 12px 11px;
-  transform: none;
-  border: 1px solid #e6e9e2;
-  border-radius: 8px;
-  background: #fff;
-  color: #30352f;
-  box-shadow: 0 8px 24px rgba(17, 35, 27, .16);
-  font-size: 13px;
-  text-align: left;
-}
-
-.share-copy-toast-icon {
-  display: grid;
-  width: 22px;
-  height: 22px;
-  flex: none;
-  place-items: center;
-  border-radius: 50%;
-  background: #55d85b;
-  color: #fff;
-  font-size: 14px;
-  font-weight: 900;
-  line-height: 1;
-}
-
 /* Completed Rally Circles expose the three post-game jobs as direct tabs. */
 .cmr-all-ring { background: linear-gradient(145deg, var(--ink), #2f4b35) !important; }
 .cmr-all-ring > span { background: transparent !important; color: var(--lime); }
