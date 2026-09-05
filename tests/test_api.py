@@ -149,6 +149,39 @@ class ApiFlowTests(unittest.TestCase):
         self.assertIn("s1", game_ids)
         self.assertNotIn("guest-hidden-game", game_ids)
 
+    def test_created_game_immediately_invalidates_the_community_map_cache(self):
+        map_params = {
+            "sport": "badminton",
+            "latitude": 12.9698,
+            "longitude": 77.7499,
+            "radius_km": 20,
+            "activity_type": "games",
+        }
+        viewer_headers = {"X-CourtMate-Player-ID": "p2"}
+        before = self.client.get("/v1/me/community-map", params=map_params, headers=viewer_headers)
+        self.assertEqual(before.status_code, 200)
+
+        created = self.client.post(
+            "/v1/groups",
+            json={
+                "query": "Create a badminton game near Whitefield",
+                "group_name": "Fresh Whitefield Badminton",
+                "sport": "badminton",
+                "area": "Whitefield",
+                "session_date": str(date.today() + timedelta(days=2)),
+                "start_time": "18:00",
+                "end_time": "20:00",
+                "visibility": "public",
+            },
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(created.status_code, 200)
+        created_game_id = created.json()["session"]["id"]
+
+        after = self.client.get("/v1/me/community-map", params=map_params, headers=viewer_headers)
+        self.assertEqual(after.status_code, 200)
+        self.assertIn(created_game_id, {game["id"] for game in after.json()["nearby_games"]})
+
     def test_notifications_clear_resolved_join_and_follow_actions(self):
         join = self.client.post("/v1/sessions/s1/join", headers={"X-CourtMate-Player-ID": "p5"})
         self.assertEqual(join.status_code, 200)

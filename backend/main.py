@@ -2998,6 +2998,7 @@ def create_group(background_tasks: BackgroundTasks, request: CreateGroupRequest,
         visibility=session_visibility,
     )
     saved_session = repository.save_session(session)
+    _clear_read_view_cache()
     background_tasks.add_task(_index_session_best_effort, saved_session)
     background_tasks.add_task(_notify_players_about_game, saved_session)
     return CreatedGroupResponse(session=saved_session, message="Group created. Compatible nearby players have been notified.")

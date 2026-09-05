@@ -400,7 +400,7 @@ function GoogleDensityMap({
         };
 
         const visibleClusters = clusters.filter((cluster) =>
-          cluster.game_ids.some((id) => games.some((game) => game.id === id)),
+          cluster.game_ids.filter((id) => games.some((game) => game.id === id)).length > 1,
         );
 
         visibleClusters.forEach((cluster) => {
