@@ -16,7 +16,7 @@ os.environ["COURTMATE_VECTOR_SEARCH_ENABLED"] = "false"
 
 from fastapi.testclient import TestClient
 
-from backend.main import _clear_read_view_cache, _clear_social_feed_cache, app, intent_parser, local_timezone, repository
+from backend.main import _clear_read_view_cache, _clear_social_feed_cache, _geocode_area, app, intent_parser, local_timezone, repository
 from backend.models import AppNotification, CMRHistoryPoint, FollowRecord, Session
 from backend.seed_synthetic_firestore import seed
 from tests.fixtures import load_repository_fixture
@@ -44,6 +44,30 @@ class ApiFlowTests(unittest.TestCase):
                 headers={"X-CourtMate-Player-ID": player_id},
             )
             self.assertEqual(response.status_code, 200)
+
+    def test_main_bengaluru_areas_have_map_coordinates(self):
+        main_areas = {
+            "Whitefield", "Varthur", "Mahadevapura", "KR Puram", "Indiranagar",
+            "MG Road", "Koramangala", "HSR Layout", "BTM Layout", "Jayanagar",
+            "JP Nagar", "Electronic City", "Bellandur", "Sarjapur", "Hebbal",
+            "Yelahanka", "Hennur", "Thanisandra", "Rajajinagar", "Malleshwaram",
+            "Vijayanagar", "Nagarbhavi", "Yeshwanthpur",
+        }
+        for area in main_areas:
+            with self.subTest(area=area):
+                self.assertIsNotNone(_geocode_area(area))
+
+        self.assertEqual(_geocode_area("HSR"), _geocode_area("HSR Layout"))
+        self.assertEqual(_geocode_area("Malleswaram"), _geocode_area("Malleshwaram"))
+        self.assertEqual(_geocode_area("Sarjapur"), (12.8602, 77.786))
+        self.assertEqual(_geocode_area("Sarjapur Rd"), _geocode_area("Sarjapur Road"))
+
+    def test_organizer_can_delete_open_game_only(self):
+        response = self.client.delete("/v1/sessions/s1", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(repository.get_session("s1"))
+
+        self.assertEqual(self.client.delete("/v1/sessions/s2", headers={"X-CourtMate-Player-ID": "p1"}).status_code, 403)
 
     def test_search_returns_existing_dupr_compatible_group(self):
         response = self.client.post("/v1/sessions/search", json={"query": "Find a casual intermediate game near Whitefield this Sunday morning"}, headers={"X-CourtMate-Player-ID": "p2"})
@@ -199,8 +223,8 @@ class ApiFlowTests(unittest.TestCase):
         )
         self.assertEqual(created.status_code, 200)
         session = created.json()["session"]
-        self.assertAlmostEqual(session["latitude"], 12.9279, places=4)
-        self.assertAlmostEqual(session["longitude"], 77.6271, places=4)
+        self.assertAlmostEqual(session["latitude"], 12.8602, places=4)
+        self.assertAlmostEqual(session["longitude"], 77.786, places=4)
 
         # Older games may have been saved before Sarjapur had fallback coordinates.
         saved_session = repository.get_session(session["id"])
@@ -211,8 +235,8 @@ class ApiFlowTests(unittest.TestCase):
             "/v1/me/community-map",
             params={
                 "sport": "squash",
-                "latitude": 12.9279,
-                "longitude": 77.6271,
+                "latitude": 12.8602,
+                "longitude": 77.786,
                 "radius_km": 5,
                 "activity_type": "games",
             },
@@ -302,6 +326,25 @@ class ApiFlowTests(unittest.TestCase):
 
         self.assertFalse(any(item["id"] == "plain-alert" for item in visible))
         self.assertTrue(any(item["id"] == "follow-p1-p2" and item["action_status"] == "pending" for item in visible))
+
+    def test_clear_read_notifications_removes_history_but_keeps_pending_actions(self):
+        repository.save_notification(AppNotification(
+            id="old-alert",
+            player_id="p2",
+            title="Old alert",
+            message="This has already been seen.",
+            session_id="s1",
+            read=True,
+            created_at=datetime.now().astimezone(),
+        ))
+        follow = self.client.post("/v1/players/p2/follow", headers={"X-CourtMate-Player-ID": "p1"})
+        self.assertEqual(follow.status_code, 200)
+
+        response = self.client.delete("/v1/me/notifications/read", headers={"X-CourtMate-Player-ID": "p2"})
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(any(item["id"] == "old-alert" for item in response.json()["notifications"]))
+        self.assertTrue(any(item["id"] == "follow-p1-p2" and item["action_status"] == "pending" for item in response.json()["notifications"]))
+        self.assertIsNone(next((item for item in repository.list_notifications_for_player("p2") if item.id == "old-alert"), None))
 
     def test_mutual_connections_join_an_open_game_without_approval(self):
         now = datetime.now(local_timezone)
@@ -1402,13 +1445,13 @@ class ApiFlowTests(unittest.TestCase):
         for player_id in session.confirmed_player_ids:
             response = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": player_id})
             self.assertEqual(response.status_code, 200)
-            reminders = [item for item in response.json()["notifications"] if item["kind"] == "game_reminder"]
+            reminders = [item for item in response.json()["notifications"] if item["kind"] == "game_reminder" and item["session_id"] == session.id]
             self.assertEqual(len(reminders), 1)
             self.assertEqual(reminders[0]["session_id"], session.id)
             self.assertIn("book the court", reminders[0]["message"].lower())
 
             repeated = self.client.get("/v1/me/notifications", headers={"X-CourtMate-Player-ID": player_id})
-            repeated_reminders = [item for item in repeated.json()["notifications"] if item["kind"] == "game_reminder"]
+            repeated_reminders = [item for item in repeated.json()["notifications"] if item["kind"] == "game_reminder" and item["session_id"] == session.id]
             self.assertEqual(len(repeated_reminders), 1)
 
     def test_group_view_returns_public_member_profiles(self):

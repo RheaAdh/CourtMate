@@ -3881,6 +3881,7 @@ html[data-theme="dark"] .how-it-works-signals b { color:var(--lime); border-colo
 .utility-back-button,.utility-refresh-button { border: 1px solid #d5dfb5; border-radius: 12px; background: #fbfff0; color: #657a18; font-weight: 800; }
 .utility-back-button { width: 42px; height: 42px; font-size: 20px; }
 .utility-refresh-button { padding: 10px 13px; font-size: 10px; }
+.notification-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .utility-back-button:hover,.utility-refresh-button:hover { border-color: var(--ink); background: var(--ink); color: var(--lime); }
 .utility-notification-list { max-width: 680px; margin: 25px auto 0; padding: 0 4px; }
 .utility-notification-list .notification-item { grid-template-columns: minmax(0, 1fr); padding: 14px 0; border-bottom: 1px solid var(--line); }
@@ -3912,6 +3913,7 @@ html[data-theme="dark"] .how-it-works-signals b { color:var(--lime); border-colo
   .utility-page-header h1 { margin-top: 5px; font-size: 29px; }
   .utility-page-header p { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
   .utility-refresh-button { padding: 8px 9px; font-size: 9px; }
+  .notification-header-actions { gap: 5px; }
   .utility-notification-list { margin-top: 18px; padding: 0; }
   .utility-notification-list .notification-actions { padding-left: 0; }
   .utility-empty { margin-top: 50px; }

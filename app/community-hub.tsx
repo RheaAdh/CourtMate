@@ -102,18 +102,60 @@ const labels: Record<SportFilter, string> = {
 
 const DEFAULT_CENTER = { latitude: 12.9698, longitude: 77.7499 };
 const BENGALURU_AREAS: Record<string, { latitude: number; longitude: number }> = {
+  // East
   Whitefield: { latitude: 12.9698, longitude: 77.7499 },
   Brookefield: { latitude: 12.9665, longitude: 77.7168 },
   Varthur: { latitude: 12.9408, longitude: 77.746 },
   Marathahalli: { latitude: 12.9569, longitude: 77.7011 },
+  Mahadevapura: { latitude: 12.9913, longitude: 77.6874 },
+  "KR Puram": { latitude: 13.0075, longitude: 77.6959 },
+  Kadugodi: { latitude: 13.0068, longitude: 77.7585 },
+  "Ramamurthy Nagar": { latitude: 13.0163, longitude: 77.6785 },
+  // Central
   Indiranagar: { latitude: 12.9784, longitude: 77.6408 },
+  Domlur: { latitude: 12.9609, longitude: 77.6387 },
+  Ulsoor: { latitude: 12.9817, longitude: 77.628 },
+  "MG Road": { latitude: 12.9756, longitude: 77.6068 },
+  "Richmond Town": { latitude: 12.9627, longitude: 77.6006 },
+  // South and southeast
   Koramangala: { latitude: 12.9352, longitude: 77.6245 },
   "HSR Layout": { latitude: 12.9116, longitude: 77.6389 },
+  "BTM Layout": { latitude: 12.9166, longitude: 77.6101 },
+  Jayanagar: { latitude: 12.925, longitude: 77.5938 },
+  "JP Nagar": { latitude: 12.9063, longitude: 77.5857 },
+  Banashankari: { latitude: 12.9255, longitude: 77.5468 },
+  Basavanagudi: { latitude: 12.9417, longitude: 77.575 },
+  "Electronic City": { latitude: 12.8452, longitude: 77.6602 },
+  "Bannerghatta Road": { latitude: 12.8896, longitude: 77.6011 },
+  Haralur: { latitude: 12.9081, longitude: 77.6498 },
   Bellandur: { latitude: 12.9255, longitude: 77.6762 },
-  Sarjapur: { latitude: 12.9279, longitude: 77.6271 },
+  Sarjapur: { latitude: 12.8602, longitude: 77.786 },
+  "Sarjapur Road": { latitude: 12.9103, longitude: 77.6859 },
   Kadubeesanahalli: { latitude: 12.9358, longitude: 77.69 },
+  // North
+  Hebbal: { latitude: 13.0358, longitude: 77.597 },
+  Yelahanka: { latitude: 13.1007, longitude: 77.5963 },
+  Jakkur: { latitude: 13.0782, longitude: 77.6069 },
+  Hennur: { latitude: 13.0359, longitude: 77.6431 },
+  Thanisandra: { latitude: 13.0557, longitude: 77.6327 },
+  Nagawara: { latitude: 13.0438, longitude: 77.62 },
+  "RT Nagar": { latitude: 13.0223, longitude: 77.5952 },
+  "Kalyan Nagar": { latitude: 13.0236, longitude: 77.6407 },
+  // West
+  Rajajinagar: { latitude: 12.9915, longitude: 77.555 },
+  Malleshwaram: { latitude: 13.0035, longitude: 77.5647 },
+  Vijayanagar: { latitude: 12.9719, longitude: 77.5299 },
+  Nagarbhavi: { latitude: 12.9591, longitude: 77.5122 },
+  Yeshwanthpur: { latitude: 13.0285, longitude: 77.546 },
 };
-export const BENGALURU_AREA_NAMES = Object.keys(BENGALURU_AREAS);
+export const BENGALURU_AREA_GROUPS = [
+  { label: "East", areas: ["Whitefield", "Brookefield", "Varthur", "Marathahalli", "Mahadevapura", "KR Puram", "Kadugodi", "Ramamurthy Nagar"] },
+  { label: "Central", areas: ["Indiranagar", "Domlur", "Ulsoor", "MG Road", "Richmond Town"] },
+  { label: "South and southeast", areas: ["Koramangala", "HSR Layout", "BTM Layout", "Jayanagar", "JP Nagar", "Banashankari", "Basavanagudi", "Electronic City", "Bannerghatta Road", "Haralur", "Bellandur", "Sarjapur", "Sarjapur Road", "Kadubeesanahalli"] },
+  { label: "North", areas: ["Hebbal", "Yelahanka", "Jakkur", "Hennur", "Thanisandra", "Nagawara", "RT Nagar", "Kalyan Nagar"] },
+  { label: "West", areas: ["Rajajinagar", "Malleshwaram", "Vijayanagar", "Nagarbhavi", "Yeshwanthpur"] },
+] as const;
+export const BENGALURU_AREA_NAMES: string[] = BENGALURU_AREA_GROUPS.flatMap((group) => [...group.areas]);
 
 function formatGameDate(value: string) {
   const [year, month, day] = value.split("-").map(Number);
@@ -869,10 +911,10 @@ export function CommunityHub({
           }}
           aria-label="Choose Bengaluru area"
         >
-          {Object.keys(BENGALURU_AREAS).map((area) => (
-            <option key={area} value={area}>
-              {area}
-            </option>
+          {BENGALURU_AREA_GROUPS.map((group) => (
+            <optgroup key={group.label} label={group.label}>
+              {group.areas.map((area) => <option key={area} value={area}>{area}</option>)}
+            </optgroup>
           ))}
         </select>
 

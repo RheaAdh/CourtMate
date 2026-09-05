@@ -61,17 +61,72 @@ except ValueError:
 _fallback_area_coordinates = {
     "whitefield": (12.9698, 77.7499),
     "brookefield": (12.9665, 77.7168),
-    "kadugodi": (13.0068, 77.7585),
     "varthur": (12.9408, 77.7460),
     "marathahalli": (12.9569, 77.7011),
+    "mahadevapura": (12.9913, 77.6874),
+    "kr puram": (13.0075, 77.6959),
+    "kadugodi": (13.0068, 77.7585),
+    "ramamurthy nagar": (13.0163, 77.6785),
     "indiranagar": (12.9784, 77.6408),
+    "domlur": (12.9609, 77.6387),
+    "ulsoor": (12.9817, 77.6280),
+    "mg road": (12.9756, 77.6068),
+    "richmond town": (12.9627, 77.6006),
     "koramangala": (12.9352, 77.6245),
     "hsr layout": (12.9116, 77.6389),
+    "btm layout": (12.9166, 77.6101),
+    "jayanagar": (12.9250, 77.5938),
+    "jp nagar": (12.9063, 77.5857),
+    "banashankari": (12.9255, 77.5468),
+    "basavanagudi": (12.9417, 77.5750),
+    "electronic city": (12.8452, 77.6602),
+    "bannerghatta road": (12.8896, 77.6011),
+    "haralur": (12.9081, 77.6498),
     "bellandur": (12.9255, 77.6762),
-    "sarjapur": (12.9279, 77.6271),
+    "sarjapur": (12.8602, 77.7860),
+    "sarjapur road": (12.9103, 77.6859),
     "kadubeesanahalli": (12.9358, 77.6900),
+    "hebbal": (13.0358, 77.5970),
+    "yelahanka": (13.1007, 77.5963),
+    "jakkur": (13.0782, 77.6069),
+    "hennur": (13.0359, 77.6431),
+    "thanisandra": (13.0557, 77.6327),
+    "nagawara": (13.0438, 77.6200),
+    "rt nagar": (13.0223, 77.5952),
+    "kalyan nagar": (13.0236, 77.6407),
+    "rajajinagar": (12.9915, 77.5550),
+    "malleshwaram": (13.0035, 77.5647),
+    "vijayanagar": (12.9719, 77.5299),
+    "nagarbhavi": (12.9591, 77.5122),
+    "yeshwanthpur": (13.0285, 77.5460),
 }
-_known_localities = tuple(_fallback_area_coordinates)
+_area_aliases = {
+    "hsr": "hsr layout",
+    "btm": "btm layout",
+    "k r puram": "kr puram",
+    "r t nagar": "rt nagar",
+    "malleswaram": "malleshwaram",
+    "electronic city phase 1": "electronic city",
+    "electronic city phase 2": "electronic city",
+    "sarjapur rd": "sarjapur road",
+}
+_known_localities = tuple(dict.fromkeys((*_fallback_area_coordinates, *_area_aliases)))
+
+_canonical_area_labels = {
+    "kr puram": "KR Puram",
+    "hsr layout": "HSR Layout",
+    "btm layout": "BTM Layout",
+    "mg road": "MG Road",
+    "jp nagar": "JP Nagar",
+    "rt nagar": "RT Nagar",
+}
+
+
+def _canonical_area_label(area: str) -> str:
+    """Keep supported Bengaluru locality variants consistent across search and filters."""
+    normalized_area = re.sub(r"\s+", " ", area.strip().lower())
+    canonical_key = _area_aliases.get(normalized_area, normalized_area)
+    return _canonical_area_labels.get(canonical_key, canonical_key.title()) if canonical_key else area.strip()
 
 
 def _index_session_best_effort(session: Session) -> None:
@@ -250,9 +305,10 @@ def _require_joinable_session(session: Session) -> None:
 
 def _geocode_area(area: str) -> tuple[float, float] | None:
     """Resolve a locality with Google Maps, falling back to known locality coordinates."""
-    normalized_area = area.strip().lower()
+    normalized_area = re.sub(r"\s+", " ", area.strip().lower())
     if not normalized_area:
         return None
+    normalized_area = _area_aliases.get(normalized_area, normalized_area)
     cached_coordinates = _geocode_cache.get(normalized_area)
     if cached_coordinates is not None:
         return cached_coordinates
@@ -287,7 +343,7 @@ def _parse_intent(query: str, sport: Sport | None = None, player: Player | None 
         and not requested_locality.startswith("the ")
     )
     if has_explicit_locality:
-        intent = intent.model_copy(update={"area": requested_locality.title(), "latitude": None, "longitude": None})
+        intent = intent.model_copy(update={"area": _canonical_area_label(requested_locality), "latitude": None, "longitude": None})
     if not has_explicit_locality and player:
         updates = {"area": player.area}
         if player.latitude is not None and player.longitude is not None:
@@ -1580,7 +1636,7 @@ def _group_proposal(intent: SearchIntent, player_id: str, proposed_name: str | N
     game_format = "singles" if re.search(r"\bsingles?\b", query.lower()) else "doubles"
     return GroupProposal(
         group_name=proposed_name or _query_group_name(query, intent, style),
-        area=intent.area,
+        area=_canonical_area_label(intent.area),
         latitude=intent.latitude,
         longitude=intent.longitude,
         session_date=intent.date,
@@ -2012,15 +2068,25 @@ def mark_notification_read(notification_id: str, player: Player = Depends(get_cu
     return notification
 
 
-@app.post("/v1/me/notifications/read-all", response_model=NotificationsResponse)
-def mark_all_notifications_read(player: Player = Depends(get_current_player)) -> NotificationsResponse:
-    """Mark the alerts visible to this player as seen when the panel opens."""
-    for notification in repository.list_notifications_for_player(player.id):
-        if not notification.read:
-            repository.mark_notification_read(notification.id, player.id)
-    resolved_items = [_notification_with_action_status(notification, player) for notification in repository.list_notifications_for_player(player.id)]
-    items = [notification for notification in resolved_items if notification.action_status == "pending"]
-    return NotificationsResponse(notifications=items)
+@app.delete("/v1/me/notifications/read", response_model=NotificationsResponse)
+def clear_read_notifications(player: Player = Depends(get_current_player)) -> NotificationsResponse:
+    """Remove read inbox history while retaining unread and pending actions."""
+    resolved_items = [
+        _notification_with_action_status(notification, player)
+        for notification in repository.list_notifications_for_player(player.id)
+    ]
+    for notification in resolved_items:
+        if notification.read and notification.action_status != "pending":
+            repository.delete_notification(notification.id, player.id)
+    remaining = [
+        notification
+        for notification in (
+            _notification_with_action_status(item, player)
+            for item in repository.list_notifications_for_player(player.id)
+        )
+        if not notification.read or notification.action_status == "pending"
+    ]
+    return NotificationsResponse(notifications=remaining)
 
 
 @app.get("/v1/me/incoming-requests", response_model=IncomingRequestsResponse)
@@ -2064,6 +2130,23 @@ def my_games(player: Player = Depends(get_current_player)) -> MyGamesResponse:
         past_games.append(PastGame(session=session, rank=player_entry.rank if player_entry else None, score=player_entry.score if player_entry else None, ratings_count=player_entry.ratings_count if player_entry else 0, group_size=len(session.confirmed_player_ids)))
     past_games.sort(key=lambda item: (item.session.session_date, item.session.start_time), reverse=True)
     return MyGamesResponse(games=games, past_games=past_games)
+
+
+@app.delete("/v1/sessions/{session_id}")
+def delete_session(session_id: str, player: Player = Depends(get_current_player)) -> dict[str, bool]:
+    session = _get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Game not found")
+    if session.organizer_id != player.id:
+        raise HTTPException(status_code=403, detail="Only the game organizer can delete this game")
+    if session.status in {"in_progress", "awaiting_feedback", "completed", "cancelled"}:
+        raise HTTPException(status_code=409, detail="This game can no longer be deleted")
+    if not repository.delete_session(session_id):
+        raise HTTPException(status_code=404, detail="Game not found")
+    repository.delete_search_document(f"session__{session_id}")
+    _clear_read_view_cache()
+    _clear_social_feed_cache()
+    return {"deleted": True}
 
 
 @app.get("/v1/me/activity", response_model=MyActivityResponse)
@@ -2948,7 +3031,7 @@ def create_group(background_tasks: BackgroundTasks, request: CreateGroupRequest,
     session_visibility = request.visibility or player.default_session_visibility
     if request.area:
         coordinates = _geocode_area(request.area)
-        overrides.update({"area": request.area, "latitude": coordinates[0] if coordinates else None, "longitude": coordinates[1] if coordinates else None})
+        overrides.update({"area": _canonical_area_label(request.area), "latitude": coordinates[0] if coordinates else None, "longitude": coordinates[1] if coordinates else None})
     proposal = proposal.model_copy(update=overrides)
     session_date = proposal.session_date or _local_today()
     time_window_start = request.time_window_start

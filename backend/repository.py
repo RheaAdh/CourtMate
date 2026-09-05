@@ -50,11 +50,13 @@ class Repository(Protocol):
     def list_join_requests_for_player(self, player_id: str) -> list[JoinRequest]: ...
     def list_sessions_by_organizer(self, organizer_id: str) -> list[Session]: ...
     def list_sessions_for_player(self, player_id: str) -> list[Session]: ...
+    def delete_session(self, session_id: str) -> bool: ...
     def save_session(self, session: Session) -> Session: ...
     def save_notification(self, notification: AppNotification) -> AppNotification: ...
     def list_notifications_for_player(self, player_id: str) -> list[AppNotification]: ...
     def list_notifications(self) -> list[AppNotification]: ...
     def mark_notification_read(self, notification_id: str, player_id: str) -> AppNotification | None: ...
+    def delete_notification(self, notification_id: str, player_id: str) -> bool: ...
     def save_follow(self, follow: FollowRecord) -> FollowRecord: ...
     def delete_follow(self, follower_id: str, following_id: str) -> None: ...
     def is_following(self, follower_id: str, following_id: str) -> bool: ...
@@ -207,6 +209,18 @@ class InMemoryRepository:
     def list_sessions_for_player(self, player_id: str) -> list[Session]:
         return [normalize_session(session) for session in self.sessions.values() if player_id in session.confirmed_player_ids]
 
+    def delete_session(self, session_id: str) -> bool:
+        if session_id not in self.sessions:
+            return False
+        del self.sessions[session_id]
+        self.join_requests = {key: item for key, item in self.join_requests.items() if item.session_id != session_id}
+        self.chat_posts = {key: item for key, item in self.chat_posts.items() if item.session_id != session_id}
+        self.activity_proofs = {key: item for key, item in self.activity_proofs.items() if item.session_id != session_id}
+        session_post_ids = {post.id for post in self.social_posts.values() if post.session_id == session_id}
+        self.social_posts = {key: item for key, item in self.social_posts.items() if item.session_id != session_id}
+        self.social_comments = {key: item for key, item in self.social_comments.items() if item.post_id not in session_post_ids}
+        return True
+
     def save_session(self, session: Session) -> Session:
         normalized = normalize_session(session)
         self.sessions[normalized.id] = normalized
@@ -242,6 +256,13 @@ class InMemoryRepository:
         updated = notification.model_copy(update={"read": True})
         self.notifications[notification_id] = updated
         return updated
+
+    def delete_notification(self, notification_id: str, player_id: str) -> bool:
+        notification = self.notifications.get(notification_id)
+        if not notification or notification.player_id != player_id:
+            return False
+        del self.notifications[notification_id]
+        return True
 
     def save_follow(self, follow: FollowRecord) -> FollowRecord:
         self.follows[follow.id] = follow
@@ -304,8 +325,18 @@ class FirestoreRepository:
             raise RuntimeError("Install google-cloud-firestore to use the Firestore datastore") from error
         self.client = firestore.Client(project=project or os.getenv("GOOGLE_CLOUD_PROJECT"))
         self._FieldFilter = FieldFilter
-        self.max_session_reads = int(os.getenv("COURTMATE_MAX_SESSION_READS", "100"))
+        self.max_session_reads = max(1, int(os.getenv("COURTMATE_MAX_SESSION_READS", "100")))
         self.max_player_reads = int(os.getenv("COURTMATE_MAX_PLAYER_READS", "500"))
+
+    def _all_session_documents(self, query):
+        """Read sessions in pages so a page-size cap never hides older games."""
+        documents = []
+        while True:
+            page = list(query.limit(self.max_session_reads).stream())
+            documents.extend(page)
+            if len(page) < self.max_session_reads:
+                return documents
+            query = query.start_after(page[-1])
 
     @staticmethod
     def _as_player(document) -> Player:
@@ -328,7 +359,7 @@ class FirestoreRepository:
         return model.model_dump(mode="json", exclude={"id"})
 
     def list_sessions(self) -> list[Session]:
-        documents = self.client.collection("sessions").limit(self.max_session_reads).stream()
+        documents = self._all_session_documents(self.client.collection("sessions"))
         return [self._as_session(document) for document in documents]
 
     def get_sessions(self, session_ids: list[str]) -> list[Session]:
@@ -471,12 +502,29 @@ class FirestoreRepository:
         return [JoinRequest.model_validate({**(document.to_dict() or {}), "id": document.id}) for document in documents]
 
     def list_sessions_by_organizer(self, organizer_id: str) -> list[Session]:
-        documents = self.client.collection("sessions").where(filter=self._FieldFilter("organizer_id", "==", organizer_id)).limit(self.max_session_reads).stream()
+        query = self.client.collection("sessions").where(filter=self._FieldFilter("organizer_id", "==", organizer_id))
+        documents = self._all_session_documents(query)
         return [self._as_session(document) for document in documents]
 
     def list_sessions_for_player(self, player_id: str) -> list[Session]:
-        documents = self.client.collection("sessions").where(filter=self._FieldFilter("confirmed_player_ids", "array_contains", player_id)).limit(self.max_session_reads).stream()
+        query = self.client.collection("sessions").where(filter=self._FieldFilter("confirmed_player_ids", "array_contains", player_id))
+        documents = self._all_session_documents(query)
         return [self._as_session(document) for document in documents]
+
+    def delete_session(self, session_id: str) -> bool:
+        reference = self.client.collection("sessions").document(session_id)
+        if not reference.get().exists:
+            return False
+        reference.delete()
+        for collection, field in (("join_requests", "session_id"), ("chat_posts", "session_id"), ("activity_proofs", "session_id"), ("social_posts", "session_id")):
+            documents = self.client.collection(collection).where(filter=self._FieldFilter(field, "==", session_id)).limit(500).stream()
+            for document in documents:
+                document.reference.delete()
+                if collection == "social_posts":
+                    comments = self.client.collection("social_comments").where(filter=self._FieldFilter("post_id", "==", document.id)).limit(500).stream()
+                    for comment in comments:
+                        comment.reference.delete()
+        return True
 
     def save_session(self, session: Session) -> Session:
         normalized = normalize_session(session)
@@ -540,6 +588,17 @@ class FirestoreRepository:
         updated = notification.model_copy(update={"read": True})
         reference.set(self._write_model(updated), merge=True)
         return updated
+
+    def delete_notification(self, notification_id: str, player_id: str) -> bool:
+        reference = self.client.collection("notifications").document(notification_id)
+        document = reference.get()
+        if not document.exists:
+            return False
+        notification = self._as_notification(document)
+        if notification is None or notification.player_id != player_id:
+            return False
+        reference.delete()
+        return True
 
     def save_follow(self, follow: FollowRecord) -> FollowRecord:
         reference = self.client.collection("follows").document(follow.id)
