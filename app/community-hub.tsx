@@ -113,6 +113,7 @@ const BENGALURU_AREAS: Record<string, { latitude: number; longitude: number }> =
   Sarjapur: { latitude: 12.9279, longitude: 77.6271 },
   Kadubeesanahalli: { latitude: 12.9358, longitude: 77.69 },
 };
+export const BENGALURU_AREA_NAMES = Object.keys(BENGALURU_AREAS);
 
 function formatGameDate(value: string) {
   const [year, month, day] = value.split("-").map(Number);
@@ -172,6 +173,7 @@ function GoogleDensityMap({
   onMapClick,
   onSelectCluster,
   onSelectGame,
+  recommendedGameIds,
 }: {
   points: DensityPoint[];
   communities: MapCommunity[];
@@ -186,6 +188,7 @@ function GoogleDensityMap({
   onSelectCommunity: (community: MapCommunity) => void;
   onSelectCluster: (cluster: MapCluster) => void;
   onSelectGame: (game: NearbyGame, gameIds?: string[]) => void;
+  recommendedGameIds: Set<string>;
 }) {
   const mapRef = useRef<HTMLDivElement>(null);
   const [mapReady, setMapReady] = useState(false);
@@ -193,6 +196,7 @@ function GoogleDensityMap({
   const mapInstanceRef = useRef<any>(null);
   const circleInstanceRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
+  const recommendationKey = [...recommendedGameIds].join(",");
 
   const selectCluster = useEffectEvent((cluster: MapCluster) => onSelectCluster(cluster));
   const selectGame = useEffectEvent((game: NearbyGame, gameIds?: string[]) => onSelectGame(game, gameIds));
@@ -290,6 +294,7 @@ function GoogleDensityMap({
           size: number,
           isCurrentLocation = false,
           isSelected = false,
+          captionText?: string,
         ) => {
           if (AdvancedMarkerElement) {
             const content = document.createElement("div");
@@ -334,7 +339,7 @@ function GoogleDensityMap({
                 box-shadow: 0 2px 6px rgba(0,0,0,0.3);
                 pointer-events: none;
               `;
-              label.textContent = `${badgeText} ${Number(badgeText) === 1 ? "game" : "games"}`;
+              label.textContent = captionText ?? `${badgeText} ${Number(badgeText) === 1 ? "game" : "games"}`;
               content.appendChild(label);
             }
 
@@ -406,15 +411,17 @@ function GoogleDensityMap({
         visibleClusters.forEach((cluster) => {
           if (cluster.latitude == null || cluster.longitude == null) return;
           const isSelected = selectedArea?.trim().toLowerCase() === cluster.area.trim().toLowerCase();
+          const hasRecommendation = cluster.game_ids.some((id) => recommendedGameIds.has(id));
           const marker = createMarker(
             { lat: cluster.latitude, lng: cluster.longitude },
-            `${cluster.game_count} active games in ${cluster.area}`,
-            String(cluster.game_count),
-            isSelected ? "#d7f23f" : "#17231f",
-            isSelected ? "#17231f" : "#ffffff",
-            44,
+            `${hasRecommendation ? "Recommended: " : ""}${cluster.game_count} active games in ${cluster.area}`,
+            hasRecommendation ? "★" : String(cluster.game_count),
+            isSelected || hasRecommendation ? "#d7f23f" : "#17231f",
+            isSelected || hasRecommendation ? "#17231f" : "#ffffff",
+            hasRecommendation ? 48 : 44,
             false,
             isSelected,
+            hasRecommendation ? `${cluster.game_count} games · recommended` : undefined,
           );
 
           bindMarkerClick(marker, () => selectCluster(cluster));
@@ -429,13 +436,17 @@ function GoogleDensityMap({
           ) {
             return;
           }
+          const isRecommended = recommendedGameIds.has(game.id);
           const marker = createMarker(
             { lat: game.latitude, lng: game.longitude },
-            `${game.group_name}: ${game.open_slots} spots open`,
-            "1",
-            "#90a91c",
+            `${isRecommended ? "Recommended: " : ""}${game.group_name}: ${game.open_slots} spots open`,
+            isRecommended ? "★" : "1",
+            isRecommended ? "#d7f23f" : "#90a91c",
             "#17231f",
-            28,
+            isRecommended ? 36 : 28,
+            false,
+            false,
+            isRecommended ? "Recommended" : undefined,
           );
           bindMarkerClick(marker, () => selectGame(game, [game.id]));
           markersRef.current.push(marker);
@@ -457,7 +468,7 @@ function GoogleDensityMap({
     return () => {
       cancelled = true;
     };
-  }, [mapKey, center.latitude, center.longitude, radiusKm, games, clusters, points, selectedArea]);
+  }, [mapKey, center.latitude, center.longitude, radiusKm, games, clusters, points, selectedArea, recommendationKey]);
 
   if (!mapKey) {
     return (
@@ -737,6 +748,18 @@ export function CommunityHub({
     : selectedMapArea
     ? nearbyGamesState.filter((game) => game.area.trim().toLowerCase() === selectedMapArea.trim().toLowerCase())
     : nearbyGamesState;
+  const recommendedGameIds = new Set(
+    [...nearbyGamesState]
+      .filter((game) => game.open_slots > 0 && !isRequested(game.id) && !isJoined(game.id))
+      .sort((left, right) => right.match_score - left.match_score || left.session_date.localeCompare(right.session_date) || left.start_time.localeCompare(right.start_time))
+      .slice(0, 3)
+      .map((game) => game.id),
+  );
+  const orderedDisplayedGames = [...displayedGames].sort((left, right) =>
+    Number(recommendedGameIds.has(right.id)) - Number(recommendedGameIds.has(left.id))
+    || right.match_score - left.match_score
+    || left.session_date.localeCompare(right.session_date),
+  );
 
   const moveMapCarousel = (direction: -1 | 1) => {
     const carousel = mapCarouselRef.current;
@@ -944,6 +967,7 @@ export function CommunityHub({
                 }
                 onSelectCluster={handleSelectCluster}
                 onSelectGame={handleSelectGame}
+                recommendedGameIds={recommendedGameIds}
               />
 
               <svg
@@ -1029,8 +1053,8 @@ export function CommunityHub({
                     {displayedGames.length > 1 && <nav aria-label="Browse selected games"><button type="button" onClick={() => moveMapCarousel(-1)} aria-label="Previous game">←</button><button type="button" onClick={() => moveMapCarousel(1)} aria-label="Next game">→</button></nav>}
                   </header>
                   {displayedGames.length ? <div className="map-game-carousel-track" ref={mapCarouselRef}>
-                    {displayedGames.map((game, index) => <article className="map-game-carousel-card" key={game.id}>
-                      <div><span>{labels[game.sport]} · {index + 1} of {displayedGames.length}</span><strong>{game.group_name}</strong><small>{game.session_date} · {game.start_time.slice(0, 5)}–{game.end_time.slice(0, 5)} · {game.open_slots} spot{game.open_slots === 1 ? "" : "s"}</small></div>
+                    {orderedDisplayedGames.map((game, index) => <article className="map-game-carousel-card" key={game.id}>
+                      <div><span>{recommendedGameIds.has(game.id) ? "★ RECOMMENDED · " : ""}{labels[game.sport]} · {index + 1} of {orderedDisplayedGames.length}</span><strong>{game.group_name}</strong><small>{game.session_date} · {game.start_time.slice(0, 5)}–{game.end_time.slice(0, 5)} · {game.open_slots} spot{game.open_slots === 1 ? "" : "s"}</small></div>
                       <button type="button" onClick={() => void handleGameAction(game)} disabled={requestingGameId === game.id}>{requestingGameId === game.id ? "Working..." : isJoined(game.id) ? "Open game" : isRequested(game.id) ? "View request" : "Join game"}</button>
                     </article>)}
                   </div> : <p className="map-game-carousel-empty">No active games in this circle. Try another circle or broaden the map filters.</p>}
@@ -1062,18 +1086,19 @@ export function CommunityHub({
               <section className="map-game-list" aria-labelledby="nearby-games-title">
                 <div className="map-game-list-heading">
                   <div>
-                    <span className="kicker">{!isGuest && mapQuery.visibility === "friends" ? "FRIEND GAMES NEARBY" : "GAMES NEARBY"}</span>
+                    <span className="kicker">{selectedMapArea ? "SELECTED AREA" : "RECOMMENDED FOR YOU"}</span>
                     <h3 id="nearby-games-title">
-                      {selectedMapArea ? `Games in ${selectedMapArea}` : "Games happening around you"}
+                      {selectedMapArea ? `Games in ${selectedMapArea}` : "Best matches around you"}
                     </h3>
                   </div>
-                  <span className="map-game-count">{displayedGames.length} nearby</span>
+                  <span className="map-game-count">{recommendedGameIds.size} top · {displayedGames.length} nearby</span>
                 </div>
-                {displayedGames.slice(0, 10).map((game) => (
-                  <article className="map-game-row" key={game.id}>
+                {orderedDisplayedGames.slice(0, 10).map((game) => (
+                  <article className={`map-game-row ${recommendedGameIds.has(game.id) ? "recommended" : ""}`} key={game.id}>
                     <div className="map-game-main">
                       <div className="map-game-title-row">
                         <strong>{game.group_name}</strong>
+                        {recommendedGameIds.has(game.id) && <span className="map-game-recommended"><span aria-hidden="true">★</span> Recommended</span>}
                         <span className={`map-game-slots ${game.open_slots > 0 ? "is-available" : "is-full"}`}>
                           {game.open_slots > 0
                             ? `${game.open_slots} ${game.open_slots === 1 ? "spot" : "spots"} open`

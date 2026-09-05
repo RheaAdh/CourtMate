@@ -63,8 +63,13 @@ _fallback_area_coordinates = {
     "brookefield": (12.9665, 77.7168),
     "kadugodi": (13.0068, 77.7585),
     "varthur": (12.9408, 77.7460),
+    "marathahalli": (12.9569, 77.7011),
     "indiranagar": (12.9784, 77.6408),
     "koramangala": (12.9352, 77.6245),
+    "hsr layout": (12.9116, 77.6389),
+    "bellandur": (12.9255, 77.6762),
+    "sarjapur": (12.9279, 77.6271),
+    "kadubeesanahalli": (12.9358, 77.6900),
 }
 _known_localities = tuple(_fallback_area_coordinates)
 
@@ -248,8 +253,9 @@ def _geocode_area(area: str) -> tuple[float, float] | None:
     normalized_area = area.strip().lower()
     if not normalized_area:
         return None
-    if normalized_area in _geocode_cache:
-        return _geocode_cache[normalized_area]
+    cached_coordinates = _geocode_cache.get(normalized_area)
+    if cached_coordinates is not None:
+        return cached_coordinates
     api_key = os.getenv("GOOGLE_MAPS_API_KEY")
     coordinates = None
     if api_key:

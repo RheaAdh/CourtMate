@@ -182,6 +182,45 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(after.status_code, 200)
         self.assertIn(created_game_id, {game["id"] for game in after.json()["nearby_games"]})
 
+    def test_created_sarjapur_game_appears_on_sarjapur_map(self):
+        created = self.client.post(
+            "/v1/groups",
+            json={
+                "query": "Create a squash game near Sarjapur",
+                "group_name": "Sarjapur Squash Gamers",
+                "sport": "squash",
+                "area": "Sarjapur",
+                "session_date": str(date.today() + timedelta(days=2)),
+                "start_time": "19:00",
+                "end_time": "21:00",
+                "visibility": "public",
+            },
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(created.status_code, 200)
+        session = created.json()["session"]
+        self.assertAlmostEqual(session["latitude"], 12.9279, places=4)
+        self.assertAlmostEqual(session["longitude"], 77.6271, places=4)
+
+        # Older games may have been saved before Sarjapur had fallback coordinates.
+        saved_session = repository.get_session(session["id"])
+        repository.save_session(saved_session.model_copy(update={"latitude": None, "longitude": None}))
+        _clear_read_view_cache()
+
+        map_response = self.client.get(
+            "/v1/me/community-map",
+            params={
+                "sport": "squash",
+                "latitude": 12.9279,
+                "longitude": 77.6271,
+                "radius_km": 5,
+                "activity_type": "games",
+            },
+            headers={"X-CourtMate-Player-ID": "p2"},
+        )
+        self.assertEqual(map_response.status_code, 200)
+        self.assertIn(session["id"], {game["id"] for game in map_response.json()["nearby_games"]})
+
     def test_notifications_clear_resolved_join_and_follow_actions(self):
         join = self.client.post("/v1/sessions/s1/join", headers={"X-CourtMate-Player-ID": "p5"})
         self.assertEqual(join.status_code, 200)
