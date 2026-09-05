@@ -326,7 +326,7 @@ function GoogleDensityMap({
             badge.textContent = badgeText;
             content.appendChild(badge);
 
-            if (!isCurrentLocation && badgeText) {
+            if (!isCurrentLocation && badgeText && captionText !== "") {
               const label = document.createElement("div");
               label.style.cssText = `
                 margin-top: 3px;
@@ -415,13 +415,13 @@ function GoogleDensityMap({
           const marker = createMarker(
             { lat: cluster.latitude, lng: cluster.longitude },
             `${hasRecommendation ? "Recommended: " : ""}${cluster.game_count} active games in ${cluster.area}`,
-            hasRecommendation ? "★" : String(cluster.game_count),
+            hasRecommendation ? `★${cluster.game_count}` : String(cluster.game_count),
             isSelected || hasRecommendation ? "#d7f23f" : "#17231f",
             isSelected || hasRecommendation ? "#17231f" : "#ffffff",
             hasRecommendation ? 48 : 44,
             false,
             isSelected,
-            hasRecommendation ? `${cluster.game_count} games · recommended` : undefined,
+            "",
           );
 
           bindMarkerClick(marker, () => selectCluster(cluster));
@@ -446,7 +446,7 @@ function GoogleDensityMap({
             isRecommended ? 36 : 28,
             false,
             false,
-            isRecommended ? "Recommended" : undefined,
+            "",
           );
           bindMarkerClick(marker, () => selectGame(game, [game.id]));
           markersRef.current.push(marker);

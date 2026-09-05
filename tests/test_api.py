@@ -221,6 +221,35 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(map_response.status_code, 200)
         self.assertIn(session["id"], {game["id"] for game in map_response.json()["nearby_games"]})
 
+    def test_community_map_groups_games_from_different_venues_in_one_area_marker(self):
+        second_game = repository.get_session("s1").model_copy(update={
+            "id": "whitefield-second-venue",
+            "organizer_id": "p2",
+            "venue_name": "Another Whitefield Court",
+            "latitude": 12.9710,
+            "longitude": 77.7510,
+            "confirmed_player_ids": ["p2"],
+        })
+        repository.save_session(second_game)
+        _clear_read_view_cache()
+
+        response = self.client.get(
+            "/v1/me/community-map",
+            params={
+                "sport": "pickleball",
+                "latitude": 12.9698,
+                "longitude": 77.7499,
+                "radius_km": 20,
+                "activity_type": "games",
+            },
+            headers={"X-CourtMate-Player-ID": "p1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        whitefield_clusters = [cluster for cluster in response.json()["game_clusters"] if cluster["area"] == "Whitefield"]
+        self.assertEqual(len(whitefield_clusters), 1)
+        self.assertIn("s1", whitefield_clusters[0]["game_ids"])
+        self.assertIn("whitefield-second-venue", whitefield_clusters[0]["game_ids"])
+
     def test_notifications_clear_resolved_join_and_follow_actions(self):
         join = self.client.post("/v1/sessions/s1/join", headers={"X-CourtMate-Player-ID": "p5"})
         self.assertEqual(join.status_code, 200)

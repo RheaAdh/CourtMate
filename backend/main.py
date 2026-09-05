@@ -2354,7 +2354,8 @@ def community_map(
 
     cluster_buckets: dict[str, list[MapNearbyGame]] = {}
     for game in nearby_games:
-        cluster_buckets.setdefault(f"{game.area.casefold()}::{(game.venue_name or game.area).casefold()}", []).append(game)
+        # One locality marker prevents nearby venues from producing overlapping pins.
+        cluster_buckets.setdefault(game.area.casefold(), []).append(game)
     game_clusters = []
     for cluster_key, games in cluster_buckets.items():
         coordinates = [(game.latitude, game.longitude) for game in games if game.latitude is not None and game.longitude is not None]
