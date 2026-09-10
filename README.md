@@ -1,68 +1,550 @@
 # CourtMate
 
-CourtMate is the intelligent group layer for racket-sport organizers. The MVP helps players discover skill-compatible sessions across pickleball, badminton, tennis, padel, squash, and table tennis, while helping organizers replace dropouts without replacing their messaging or court-booking platforms.
+**Find people to play racket sports with, organise a game, and track your progress.**
 
-## Backend MVP
+CourtMate helps players discover nearby games in pickleball, badminton, tennis,
+padel, squash, and table tennis. A **Rally Circle** is a game's group space for
+requests, scheduling, chat, and feedback. **CMR** means CourtMate Rating, a
+sport-specific skill rating on a 1–10 scale.
 
-The first implementation slice is a Python API with:
+## Demo
 
-- Deterministic multi-sport session search by sport, area, time, normalized skill band, and play style
-- Sport-specific player and replacement ranking, with DUPR retained as the pickleball compatibility alias
-- Gemini search decision over a bounded Firestore session snapshot
-- Explicit join requests and no-match group creation
-- Automatic session close-out after the scheduled end time, with organizer completion override
-- Unrated-player handling with explicit provenance
-- Gemini intent parsing through `google-genai` when `GEMINI_API_KEY` is configured
-- A deterministic local parser fallback for development
-- Firestore-backed players, sessions, and feedback, with an explicit in-memory fallback
-- Persistent in-app game notifications for compatible nearby players after a game is created
-- Notification inbox cleanup that removes read history while preserving unread alerts and pending join/follow actions
-- Public player profiles with sport CMR, reliability, follower counts, and follow/unfollow relationships
-- CMR calculated and displayed on the canonical 1-10 scale, with compatibility conversion for historic 1-8 and 0-100 ratings
-- A free-tier deployment profile with bounded Firestore reads and scale-to-zero Cloud Run
-- Post-game feedback with fun/fairness signals, broad player skill levels, and optional team/score context
-- Gemini vision analysis of optional watch-tracker screenshots, with extracted game stats saved as activity proof
-- Tournament desk for racket-sport registration, single-elimination draws, winner advancement, optional scores, and live standings
+[Watch or download the CourtMate demo](docs/CourtMateDemo.mp4) (MP4, approximately 61 MB).
 
-## Run locally
+Start with the video for a visual overview, then follow the evaluation steps below
+to try the application yourself. If your repository viewer does not play the
+video inline, download it and open it in a video player.
+
+[Read the CourtMate technical document](docs/CourtMate%20Tech%20Doc.pdf) (PDF).
+
+## Start here
+
+| What you want to evaluate | Follow this path | What you need |
+| --- | --- | --- |
+| Backend logic and automated tests | [Quick evaluation](#quick-evaluation-without-a-cloud-account) | Python, Git, and internet for dependency installation. No cloud account or API keys. |
+| Complete website with two players | [Browser evaluation](#browser-evaluation-with-google-sign-in) | Node.js plus a configured Firebase project and Google sign-in. |
+| Container packaging | [Docker check](#docker) | Docker running locally. |
+| Cloud deployment or optional AI | [Advanced setup](#advanced-setup) | Google Cloud/Firebase access and feature-specific configuration. |
+
+**Recommended evaluation order:** run the tests, complete the local API
+walkthrough, then try the browser flow if Firebase access is available.
+The local API starts with an empty, temporary database; the walkthrough creates
+its own game. Restarting that server clears its data.
+
+## Contents
+
+- [Demo](#demo)
+- [What the app does](#what-the-app-does)
+- [Quick evaluation without a cloud account](#quick-evaluation-without-a-cloud-account)
+- [Manual API walkthrough](#manual-api-walkthrough)
+- [Browser evaluation with Google sign-in](#browser-evaluation-with-google-sign-in)
+- [Evaluation checklist](#evaluation-checklist)
+- [Troubleshooting](#troubleshooting)
+- [Docker](#docker)
+- [How the project works](#how-the-project-works)
+- [Advanced setup](#advanced-setup)
+
+## What the app does
+
+| Feature | Example |
+| --- | --- |
+| Find games | Search for a casual pickleball game in Whitefield. |
+| Organise a Rally Circle | Create a game, approve join requests, and coordinate a time. |
+| Play together | Chat with confirmed players and track check-ins. |
+| Review a game | Submit feedback and view ratings and reliability. |
+| Connect with players | Follow people and browse profiles and social posts. |
+| Explore the community | View nearby venues, games, and community activity. |
+| Use optional AI features | Analyze wearable screenshots or discuss personal performance. |
+
+Core matching works without Gemini. Google Maps, cloud persistence, image
+storage, and AI features require their own configuration.
+
+## Quick evaluation without a cloud account
+
+Commands below use **Bash on macOS/Linux or WSL on Windows**. Run commands from
+the repository root unless a step says otherwise. Use Python 3.12 to match the
+Docker runtime; Node.js is only needed for browser evaluation.
+
+### 1. Install the backend
+
+Skip the clone command if you already have the repository open.
 
 ```bash
+git clone https://github.com/RheaAdh/CourtMate.git
+cd CourtMate
+
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-cp .env.local.example .env.local
-python -m uvicorn backend.main:app --reload
+python -m pip install -r requirements.txt
 ```
 
-Set `GOOGLE_CLOUD_PROJECT` and authenticate with Application Default Credentials before starting the API:
+Check `python --version` before creating the environment if several Python
+versions are installed. Installation requires internet access; the following
+core evaluation does not require cloud credentials.
+
+### 2. Run the automated tests
+
+```bash
+python -m pytest -q
+```
+
+**Expected result:** pytest finishes with a passing summary and exit code 0.
+Tests use synthetic records and in-memory storage; they do not need a running
+server. The test count can change as the project develops.
+
+To examine a particular area:
+
+```bash
+python -m pytest tests/test_api.py -v
+python -m pytest tests/test_matching.py -v
+python -m pytest -k feedback -v
+```
+
+| Suite | What it evaluates |
+| --- | --- |
+| `tests/test_api.py` | Game requests, lifecycle, feedback, profiles, maps, social activity, notifications, and upload handling. |
+| `tests/test_matching.py` | Sport and skill matching, replacement ranking, rating conversion, and vector-search fallback. |
+| `tests/fixtures.py` | Repeatable example records used by tests. |
+
+There is no configured coverage-percentage gate or browser end-to-end test suite.
+
+### 3. Start the local API
+
+In **Terminal 1**, keep the following process running:
+
+```bash
+source .venv/bin/activate
+
+COURTMATE_DATASTORE=memory \
+COURTMATE_AUTH_REQUIRED=false \
+COURTMATE_USE_VERTEX_AI=false \
+GOOGLE_GENAI_USE_VERTEXAI=false \
+COURTMATE_USE_GEMINI_INTENT=false \
+COURTMATE_GROUNDED_RESPONSE_WITH_GEMINI=false \
+COURTMATE_VECTOR_SEARCH_ENABLED=false \
+GEMINI_API_KEY= GOOGLE_MAPS_API_KEY= \
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+**Expected result:** Uvicorn reports that it is running on
+`http://127.0.0.1:8000`. These per-command settings override matching values in
+an existing `.env`; there is no need to edit cloud configuration for this path.
+
+This local-only mode uses the `X-CourtMate-Player-ID` header to simulate two
+players. It does not test Firebase authentication. Do not use this mode for a
+public deployment.
+
+### 4. Check that it is ready
+
+In **Terminal 2**, open the repository folder and activate the same environment:
+
+```bash
+source .venv/bin/activate
+curl -fsS http://127.0.0.1:8000/health
+```
+
+**Expected response:**
+
+```json
+{"status":"ok","service":"courtmate-api","datastore":"InMemoryRepository"}
+```
+
+For a point-and-click API interface, open
+[Swagger UI](http://127.0.0.1:8000/docs). Expand a route, choose **Try it out**,
+enter its fields and development player header, then choose **Execute**.
+
+## Manual API walkthrough
+
+Keep Terminal 1 running. Run the following steps **in order in Terminal 2**.
+They simulate an organizer (`eval-organizer`) and another player
+(`eval-player`). No real Google accounts or API tokens are needed for this path.
+
+### 1. Create a public game as the organizer
+
+The date is calculated seven days ahead so the example does not expire.
+
+```bash
+EVAL_DATE=$(python -c 'from datetime import date, timedelta; print(date.today() + timedelta(days=7))')
+
+SESSION_ID=$(curl -fsS http://127.0.0.1:8000/v1/groups \
+  -H 'Content-Type: application/json' \
+  -H 'X-CourtMate-Player-ID: eval-organizer' \
+  -d "{\"query\":\"casual pickleball in Whitefield\",\"group_name\":\"Evaluation Rally\",\"sport\":\"pickleball\",\"area\":\"Whitefield\",\"session_date\":\"$EVAL_DATE\",\"start_time\":\"18:00:00\",\"end_time\":\"19:00:00\",\"skill_min\":1,\"skill_max\":10,\"capacity\":4,\"visibility\":\"public\"}" \
+  | python -c 'import json, sys; print(json.load(sys.stdin)["session"]["id"])')
+
+echo "Created game: $SESSION_ID"
+```
+
+**Expected result:** a game ID starting with `g-`. The organizer is the first
+confirmed player. Keep `SESSION_ID` in this terminal for the remaining steps.
+
+### 2. Request to join as the second player
+
+```bash
+REQUEST_ID=$(curl -fsS -X POST \
+  "http://127.0.0.1:8000/v1/sessions/$SESSION_ID/join" \
+  -H 'X-CourtMate-Player-ID: eval-player' \
+  | python -c 'import json, sys; r=json.load(sys.stdin); assert r["status"] == "pending", r; print(r["id"])')
+
+echo "Pending request: $REQUEST_ID"
+```
+
+**Expected result:** a pending request ID. This is a public game between two
+unconnected players, so the organizer must approve the request.
+
+### 3. Approve the request as the organizer
+
+```bash
+curl -fsS -X POST \
+  "http://127.0.0.1:8000/v1/sessions/$SESSION_ID/join-requests/$REQUEST_ID/decision" \
+  -H 'Content-Type: application/json' \
+  -H 'X-CourtMate-Player-ID: eval-organizer' \
+  -d '{"status":"approved"}' | python -m json.tool
+```
+
+**Expected result:** the response contains `"status": "approved"`.
+
+### 4. Send a message as the approved player
+
+```bash
+curl -fsS -X POST \
+  "http://127.0.0.1:8000/v1/sessions/$SESSION_ID/chat" \
+  -H 'Content-Type: application/json' \
+  -H 'X-CourtMate-Player-ID: eval-player' \
+  -d '{"message":"Ready for the evaluation game!"}' | python -m json.tool
+```
+
+**Expected result:** a chat record containing the message and
+`"player_id": "eval-player"`.
+
+### 5. Verify the game roster
+
+```bash
+curl -fsS "http://127.0.0.1:8000/v1/sessions/$SESSION_ID/group" \
+  -H 'X-CourtMate-Player-ID: eval-organizer' \
+  | python -c 'import json, sys; s=json.load(sys.stdin)["session"]; assert {"eval-organizer", "eval-player"} <= set(s["confirmed_player_ids"]); print("PASS: both players are confirmed")'
+```
+
+**Expected result:** `PASS: both players are confirmed`.
+
+You have now tested game creation, joining, approval, chat, and roster updates.
+Press **Ctrl+C in Terminal 1** to stop the API. To repeat with an empty database,
+restart it and rerun the walkthrough from step 1. A separate seed command cannot
+populate a running server's in-memory database.
+
+## Browser evaluation with Google sign-in
+
+Use this path to evaluate the actual website. It requires **Node.js 20.9 or
+newer**, a Firebase project with Google Authentication enabled, Firestore, and
+backend Application Default Credentials. The API-only development headers above
+do not bypass the website's sign-in flow.
+
+### 1. Configure your evaluation project
+
+Create a Firebase Web app and enable the Google sign-in provider. Add
+`localhost` to Firebase Authentication's authorized domains. Create a Firestore
+database and a Storage bucket for image features.
+
+Create local configuration files if they do not already exist:
+
+```bash
+test -f .env || cp .env.example .env
+test -f .env.local || cp .env.local.example .env.local
+```
+
+Edit these values in `.env`:
+
+```dotenv
+COURTMATE_DATASTORE=firestore
+COURTMATE_AUTH_REQUIRED=true
+GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID
+COURTMATE_ALLOWED_ORIGINS=http://localhost:3000
+COURTMATE_USE_VERTEX_AI=false
+GOOGLE_GENAI_USE_VERTEXAI=false
+COURTMATE_USE_GEMINI_INTENT=false
+COURTMATE_VECTOR_SEARCH_ENABLED=false
+GEMINI_API_KEY=
+GOOGLE_MAPS_API_KEY=
+```
+
+Edit `.env.local` with your Firebase Web app values:
+
+```dotenv
+NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+NEXT_PUBLIC_FIREBASE_API_KEY=YOUR_FIREBASE_WEB_API_KEY
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=YOUR_PROJECT_ID.firebaseapp.com
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=YOUR_PROJECT_ID
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=YOUR_FIREBASE_STORAGE_BUCKET
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=YOUR_MESSAGING_SENDER_ID
+NEXT_PUBLIC_FIREBASE_APP_ID=YOUR_FIREBASE_APP_ID
+NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=
+```
+
+Replace every `YOUR_...` value. All six Firebase configuration fields are needed
+by the frontend's configuration check. Keep server credentials out of
+`NEXT_PUBLIC_*` values. Maps and Gemini can stay disabled for the main game flow.
+
+Authenticate the backend to your evaluation project:
 
 ```bash
 gcloud auth application-default login
 ```
 
-The API uses Firestore when `COURTMATE_DATASTORE=firestore`. Set `COURTMATE_DATASTORE=memory` for an offline local run. With `GEMINI_API_KEY`, intent extraction uses the model in `GEMINI_MODEL` (default `gemini-3.6-flash`) through the server-side adapter. Search summaries are deterministic by default so a search does not wait for a second Gemini generation call; set `COURTMATE_GROUNDED_RESPONSE_WITH_GEMINI=true` only if model-written prose is needed. Gemini receives only parsed intent and verified records; Python remains the authority for sport, skill, date, area, time, and open-slot eligibility. If Gemini or Vertex AI embeddings are unavailable, the API falls back to deterministic parsing, retrieval, and decisions.
+The authenticated account needs permission to use the selected Firestore
+database. Image evaluation additionally requires configured bucket permissions.
 
-### Grounded semantic search
+### 2. Start the API and website
 
-Semantic search uses Firestore native vector search and Vertex AI `gemini-embedding-001`. Firestore remains authoritative: embeddings are only sanitized projections used to find candidate IDs, and the API re-reads and deterministically validates every result before returning it. The current frontend contract is unchanged. To enable it locally or on Cloud Run, set `COURTMATE_USE_VERTEX_AI=true`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION=global`, and `GOOGLE_GENAI_USE_VERTEXAI=true`. The Cloud Run service account needs Vertex AI User and Cloud Datastore User access.
+Stop the API-only process first if it still occupies port 8000.
 
-Build or refresh the corpus after seeding data:
+**Terminal 1 — API:**
+
+```bash
+source .venv/bin/activate
+python -m uvicorn backend.main:app --reload --port 8000
+```
+
+**Terminal 2 — website:**
+
+```bash
+npm ci
+npm run dev
+```
+
+Open [CourtMate](http://localhost:3000). Use two separate browser profiles, signed
+in with different Google accounts, to act as **Player A** and **Player B**.
+
+### 3. Follow the evaluation scenario
+
+| Step | Action | Expected result |
+| --- | --- | --- |
+| 1 | Sign in as Player A and complete the sport profile. | Profile is created and remains available after a refresh. |
+| 2 | Create a public pickleball game in Whitefield for a future date with open spaces. | A Rally Circle appears in the organizer's activity. |
+| 3 | Sign in as Player B; choose the same sport, locality, date, and a compatible skill level. | The new game can be found in discovery. |
+| 4 | As Player B, request to join. | A pending request appears for the organizer. |
+| 5 | As Player A, approve the request. | Player B appears in the confirmed roster and their upcoming games. |
+| 6 | Open the Rally Circle as each player and exchange a message. | Both players can see the conversation after refreshing. |
+| 7 | Mark the game done as each confirmed player and submit feedback. | The game moves through awaiting feedback to completed once all confirmed players submit. |
+| 8 | Open profiles, activity, and leaderboards. | Completed activity is reflected; CMR changes depend on the game's rating mode and eligible results. |
+
+Use a public game between accounts that are not mutually connected when testing
+the pending-request path. Private games and mutual connections can follow an
+auto-approval path.
+
+### 4. Run frontend checks
+
+```bash
+npm run lint
+npm run typecheck
+npm run build
+```
+
+**Expected result:** each command exits successfully. These validate lint, types,
+and production compilation; they do not simulate clicks or verify cloud access.
+
+## Evaluation checklist
+
+Record the command/result or take a screenshot for each item you evaluate.
+
+| Check | Evidence to capture |
+| --- | --- |
+| Automated backend tests | Pytest passing summary. |
+| API starts | `/health` JSON showing `status: ok`. |
+| Two-player workflow | Approved request, chat response, and roster PASS message. |
+| Browser flow, if configured | Game creation, approval, and shared chat in two accounts. |
+| Frontend validation | Successful lint, typecheck, and build output. |
+| Docker, if required | Image build output and container health response. |
+| Optional integrations | Label Maps, AI, and cloud-storage checks as tested or not configured. |
+
+No Jenkinsfile or GitHub Actions workflow is checked in. These are manual
+evaluation steps; automatic CI checks and coverage gates should not be assumed.
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| `ModuleNotFoundError` or missing `pytest` | Activate `.venv` and install `requirements.txt` with `python -m pip`. Use `python -m uvicorn` so the API uses that environment. |
+| `Address already in use` | Stop the earlier API or web process before starting another on the same port. |
+| Curl cannot connect | Keep Terminal 1 running and confirm the API reports port 8000. |
+| JSON parsing error during the walkthrough | Inspect the preceding curl error. Check the API logs, then repeat from game creation; do not continue with empty IDs. |
+| HTTP 401 in the API-only walkthrough | Start the API with the exact local evaluation command; a cloud-configured server requires Firebase tokens instead. |
+| Google sign-in is unavailable | Replace all six Firebase web values and restart `npm run dev`. |
+| Google sign-in rejects the domain | Add `localhost` to Firebase Authentication's authorized domains. |
+| Firestore credentials or permission error | Run ADC login and check `GOOGLE_CLOUD_PROJECT` and account permissions, or use the API-only path. |
+| Browser cannot reach the API | Check `NEXT_PUBLIC_API_URL`, the API process, and `COURTMATE_ALLOWED_ORIGINS`. |
+| No games appear | An empty database is expected. Create a future game, match the sport/date/locality, or seed a dedicated demo Firestore project. |
+| Changes disappear after restart | Memory mode is temporary; use Firestore to test persistence. |
+| Map illustration appears instead of a live map | The optional browser Maps key is absent or rejected. Core discovery can still be evaluated. |
+| AI or image features are unavailable | Configure the corresponding model and storage integrations in Advanced setup. |
+| Node/Next.js version error | Check `node --version`; use Node.js 20.9 or newer. |
+
+## Docker
+
+The Dockerfile builds a **single-stage backend image** based on
+`python:3.12-slim`. It installs `requirements.txt`, copies `backend/`, and launches
+Uvicorn on `PORT` (default `8080`). It does not package the Next.js frontend.
+
+| Choice | Current implementation |
+| --- | --- |
+| Dependency caching | Copy requirements before backend source. |
+| Runtime files | Backend package and installed Python dependencies. |
+| Default datastore | Firestore; configure credentials for cloud-backed runs. |
+| Local smoke test | Override datastore to memory and probe `/health`. |
+| Container hardening | No explicit non-root user or Docker `HEALTHCHECK` is configured. |
+
+```bash
+docker build -t courtmate-api:local .
+
+docker run --rm --name courtmate-api \
+  -p 127.0.0.1:8080:8080 \
+  -e COURTMATE_DATASTORE=memory \
+  -e COURTMATE_AUTH_REQUIRED=true \
+  -e COURTMATE_VECTOR_SEARCH_ENABLED=false \
+  courtmate-api:local
+```
+
+In another terminal:
+
+```bash
+curl http://localhost:8080/health
+docker logs courtmate-api
+docker stop courtmate-api
+```
+
+This provides a health smoke test; authenticated flows require Firebase
+configuration. The image has no separate `test` target.
+
+## How the project works
+
+| Part | Purpose | Main files |
+| --- | --- | --- |
+| Next.js frontend | Screens for discovery, Rally Circles, profiles, and feedback. | `app/page.tsx`, `app/group-space.tsx`, `app/community-hub.tsx` |
+| FastAPI backend | Receives API requests and runs application rules. | `backend/main.py`, `backend/models.py` |
+| Authentication | Verifies Firebase ID tokens for signed-in users. | `backend/auth.py`, `firebase.ts` |
+| Matching | Filters and ranks games and replacement players. | `backend/matching.py` |
+| Persistence | Stores data in memory or Firestore. | `backend/repository.py` |
+| Optional AI | Language parsing, images, embeddings, and retrieval. | `backend/gemini.py`, `backend/vector_search.py` |
+| Automated tests | Repeatable API and matching checks. | `tests/test_api.py`, `tests/test_matching.py` |
+
+The browser sends requests to the API. The API checks identity, applies game
+rules, and reads or writes records. Optional AI assists discovery and analysis;
+Python remains responsible for match eligibility.
+
+For the complete API reference, use [Swagger UI](http://127.0.0.1:8000/docs).
+During browser/cloud evaluation, protected API calls require a Firebase ID token;
+the website attaches it automatically.
+
+## Advanced setup
+
+Skip this section for the no-cloud evaluation. Expand only the configuration
+needed for the feature you want to test.
+
+<details>
+<summary>Configuration reference</summary>
+
+### Configuration
+
+Backend values are loaded from `.env`; Next.js uses `.env.local`. Values prefixed
+with `NEXT_PUBLIC_` are browser-visible and must never contain server secrets.
+
+| Variable | Default or template value | Purpose |
+| --- | --- | --- |
+| `COURTMATE_DATASTORE` | Code: `memory`; template/container: `firestore` | Select persistence. |
+| `COURTMATE_AUTH_REQUIRED` | `true` | Require a Firebase bearer token. |
+| `COURTMATE_DEFAULT_AREA` | `Whitefield` | Initial locality for new players. |
+| `COURTMATE_ALLOWED_ORIGINS` | `http://localhost:3000` | Comma-separated frontend origins for CORS. |
+| `COURTMATE_TIMEZONE` | `Asia/Kolkata` | Session scheduling timezone. |
+| `GOOGLE_CLOUD_PROJECT` | Empty in backend template | Project for Firestore, Firebase Admin, and cloud integrations. |
+| `GOOGLE_CLOUD_LOCATION` | `global` | Vertex AI location when configured. |
+| `GEMINI_API_KEY` | Empty | Server-only Gemini API credential. |
+| `GEMINI_MODEL` | Code: `gemini-2.5-flash`; template: `gemini-3.6-flash` | Set explicitly to a model available to your project. |
+| `COURTMATE_USE_GEMINI_INTENT` | `false` | Enable model-based intent parsing when a client is configured. |
+| `COURTMATE_GROUNDED_RESPONSE_WITH_GEMINI` | `false` | Optional model-written grounded responses. |
+| `COURTMATE_USE_VERTEX_AI` / `GOOGLE_GENAI_USE_VERTEXAI` | `false` | Select Vertex AI authentication for model clients. |
+| `COURTMATE_VECTOR_SEARCH_ENABLED` | `true` | Enable optional vector retrieval. |
+| `GEMINI_EMBEDDING_MODEL` / `COURTMATE_VECTOR_DIMENSIONS` | `gemini-embedding-001` / `768` | Embedding model and index dimensions. |
+| `COURTMATE_MAX_SESSION_READS` / `COURTMATE_MAX_PLAYER_READS` | `100` / `500` | Repository read limits. |
+| `COURTMATE_MAX_VECTOR_RESULTS` | `20` | Vector candidate limit. |
+| `GOOGLE_MAPS_API_KEY` | Empty | Server-side locality geocoding. |
+| `COURTMATE_PROFILE_BUCKET` | Configured Firebase bucket, otherwise project-derived bucket | Media storage. |
+| `COURTMATE_SIGNING_SERVICE_ACCOUNT` | Credential-derived when available | Signing identity for profile upload URLs. |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Browser API origin. |
+| `NEXT_PUBLIC_APP_URL` | Hosted URL in template | Web app origin; use localhost for development. |
+| `NEXT_PUBLIC_FIREBASE_*` | Mostly empty | Firebase web configuration, including auth domain and storage bucket. |
+| `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | Empty | Browser Maps JavaScript API key. |
+
+A Gemini key alone does not enable model-based intent parsing: set
+`COURTMATE_USE_GEMINI_INTENT=true` as well. Without Maps geocoding, known locality
+coordinates and textual matching remain available.
+
+</details>
+
+<details>
+<summary>Demo Firestore data, migrations, semantic search, and deployment</summary>
+
+## Demo data and migrations
+
+Firestore starts empty. Create records through the application or populate a
+dedicated demo project using Application Default Credentials:
+
+```bash
+COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID \
+  python -m backend.seed_synthetic_firestore
+```
+
+The seed utility upserts stable synthetic records for players, games, requests,
+chat, feedback, follows, notifications, communities, and social posts. Synthetic
+profiles use initials instead of uploaded photos. It does not create Firebase
+Authentication accounts.
+
+| Option | Purpose |
+| --- | --- |
+| `--replace-social` | Replace synthetic social posts and comments. |
+| `--replace-social --social-only` | Refresh only the synthetic social feed. |
+| `--reset-synthetic` | Delete the script's synthetic records and rebuild its dataset. |
+| `COURTMATE_DEMO_RHEA_UID` | Optionally associate the named demo persona with an existing Firebase UID; use a demo account only. |
+
+For a labelled synthetic CMR trajectory on a demo profile:
+
+```bash
+GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID \
+  python -m backend.seed_profile_trajectory \
+  --player-id YOUR_DEMO_FIREBASE_UID --sport badminton --games 8
+```
+
+Historic rating formats are converted when read. This migration permanently
+rewrites stored ratings to the canonical scale; back up target data first:
+
+```bash
+COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID \
+  python -m backend.migrate_cmr_to_10
+```
+
+## Grounded semantic search
+
+Optional semantic retrieval uses Firestore vector search and Vertex AI
+embeddings. Search documents contain projections of sessions, public players,
+and CourtMate FAQ content. Candidate records are reread and validated by Python
+before being returned.
+
+Enable Vertex AI in backend configuration, grant the runtime service account
+the needed Vertex AI and Firestore permissions, and refresh the corpus:
 
 ```bash
 COURTMATE_DATASTORE=firestore \
-GOOGLE_CLOUD_PROJECT=mttn-portal \
+GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID \
 GOOGLE_CLOUD_LOCATION=global \
 COURTMATE_USE_VERTEX_AI=true \
 GOOGLE_GENAI_USE_VERTEXAI=true \
 python -m backend.rebuild_vector_index
 ```
 
-The command writes sanitized session, tournament, public-player, and CourtMate FAQ projections to `search_documents`. Create the vector index once (and include the project if it is not the active gcloud project):
+Create the corresponding vector index for the default 768 dimensions:
 
 ```bash
 gcloud firestore indexes composite create \
-  --project=mttn-portal \
+  --project=YOUR_PROJECT_ID \
   --database='(default)' \
   --collection-group=search_documents \
   --query-scope=COLLECTION \
@@ -73,198 +555,61 @@ gcloud firestore indexes composite create \
   --field-config=field-path=embedding,vector-config='{"dimension":"768","flat":"{}"}'
 ```
 
-Search falls back to the existing deterministic matcher if Vertex AI, the vector index, or embeddings are unavailable. The index can take a few minutes to become ready.
+If embeddings or the index are unavailable, discovery falls back to deterministic
+matching. Keep index dimensions aligned with `COURTMATE_VECTOR_DIMENSIONS`.
 
-The Tournament Desk is a racket-sport competition MVP. Open `Tournaments`, create a pickleball, badminton, tennis, padel, squash, or table-tennis event, register players, and generate a single-elimination draw. Byes advance automatically; match players or the organizer select who won from the bracket and the winner advances into the next round. Optional scores and per-set scores can still be recorded, and only completed results contribute to the live leaderboard. Tournament data is stored in `tournaments`, `tournament_registrations`, and `tournament_matches` in Firestore.
+## Deployment
 
-For coordinate-aware locality matching, set `GOOGLE_MAPS_API_KEY` with the Google Maps Geocoding API enabled. The key stays server-side; the backend geocodes search localities and profile locality labels, while browser location permission can provide more precise coordinates. If the key is absent, textual locality matching remains available.
+### Vercel frontend
 
-### Google Maps on Vercel
+1. Configure the Next.js project with its `NEXT_PUBLIC_API_URL`,
+   `NEXT_PUBLIC_APP_URL`, and Firebase web configuration.
+2. Set `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` for the interactive map. Enable Maps
+   JavaScript API for that key and restrict it to the app's web domains.
+3. Redeploy after changing public configuration because Next.js embeds these
+   values at build time.
+4. Add the deployed domain to Firebase Authentication's authorized domains.
 
-The interactive Explore map uses the browser-only `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`. Next.js embeds `NEXT_PUBLIC_*` values at build time, so setting only `GOOGLE_MAPS_API_KEY` on Cloud Run or adding the value after deployment will not enable the map in the web app.
+For Google sign-in on the app's own domain, `next.config.ts` proxies Firebase's
+reserved `/__/auth/` and `/__/firebase/` routes. Its upstream currently references
+the existing Firebase project; update it when deploying with another project.
+Set the frontend Firebase auth domain to your web hostname and configure the
+OAuth JavaScript origin as `https://YOUR_WEB_DOMAIN` and redirect URI as
+`https://YOUR_WEB_DOMAIN/__/auth/handler`. Set the OAuth consent-screen app name to
+`CourtMate`.
 
-1. In Vercel, add `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` to the Production environment (and Preview if preview deployments need maps).
-2. In Google Cloud, enable **Maps JavaScript API** and billing for that key.
-3. Restrict the browser key to `https://court-mate-blr.vercel.app/*` (plus any required preview or custom domains). Keep the server-side Geocoding key separate from the browser key when possible.
-4. Redeploy Vercel after saving the variable. The key must be present in the generated browser bundle.
+If Maps configuration is missing or rejected, the UI retains its fallback
+illustration and game listings.
 
-If the key is missing or rejected, CourtMate keeps the density illustration as a fallback and displays an "Interactive map unavailable" status while still listing nearby games below.
+### Cloud Run backend
 
-### Production checklist
-
-Before releasing, configure the browser and API separately. Public `NEXT_PUBLIC_*` values are embedded into the Vercel build and must be safe to expose; server credentials belong only in Cloud Run or its secret manager.
-
-1. In Vercel Production, set `NEXT_PUBLIC_API_URL` to the deployed API origin, the required `NEXT_PUBLIC_FIREBASE_*` web configuration, `NEXT_PUBLIC_APP_URL` to the public web URL, and the restricted `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`. Redeploy after changing any `NEXT_PUBLIC_*` value.
-2. In Cloud Run, set `COURTMATE_ALLOWED_ORIGINS` to the exact production web origin, plus any required preview origins. Configure `GOOGLE_CLOUD_PROJECT`, Firestore access, Firebase Admin credentials, and server-only keys such as `GEMINI_API_KEY` and `GOOGLE_MAPS_API_KEY` as secrets.
-3. Verify `GET /health` on the API, sign in with Google on a real mobile browser, create and request a game, and confirm the Explore map loads with the production browser key.
-4. Run `npm run lint`, `npm run typecheck`, `npm run build`, and `python -m pytest -q` before a production deploy.
-
-## Google sign-in setup
-
-Firebase Authentication Google sign-in is used for identity; the backend verifies the Firebase ID token before reading or writing player, group, or join-request data.
-
-1. In the Firebase console, open project `mttn-portal`, add a Web app, and copy its Firebase configuration.
-2. In Authentication, enable the Google provider and add `localhost` to the authorized domains.
-3. In Storage, create the default bucket, then deploy the profile-image rules from the repository root:
-
-```bash
-firebase use mttn-portal
-firebase deploy --only storage
-```
-
-4. Copy `.env.local.example` to `.env.local` and fill the `NEXT_PUBLIC_FIREBASE_*` values from the Web app configuration, including `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`.
-5. Keep `COURTMATE_AUTH_REQUIRED=true` in `.env`.
-6. Install the updated dependencies and run both services:
-
-```bash
-source .venv/bin/activate
-pip install -r requirements.txt
-python -m uvicorn backend.main:app --reload --port 8000
-
-# another terminal
-npm install
-npm run dev
-```
-
-### CourtMate-branded Google sign-in on Vercel
-
-For the production app to use `court-mate-blr.vercel.app` as its Firebase `authDomain`, Vercel transparently proxies Firebase's reserved helper routes through `next.config.ts`. This keeps the sign-in flow on the CourtMate domain instead of displaying `mttn-portal.firebaseapp.com`.
-
-1. In Vercel, set `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=court-mate-blr.vercel.app` for Production (and Preview if required), then redeploy.
-2. In Firebase Authentication, add `court-mate-blr.vercel.app` to **Authorized domains**.
-3. In Google Cloud OAuth, keep `https://court-mate-blr.vercel.app` under **Authorized JavaScript origins** and use `https://court-mate-blr.vercel.app/__/auth/handler` as the authorized redirect URI.
-4. Set the OAuth consent-screen application name to `CourtMate`. Google may still show the verified hostname alongside the app name; using a custom domain such as `courtmate.in` is required if you want that hostname to omit `vercel.app` too.
-
-To test two people, sign in with Google using two separate browser profiles. One user creates a group; compatible nearby players receive a persistent in-app alert in the notification bell, and can open it to return to matching games. The other player can search for the group and request to join. The creator can click `View requests` in the organizer panel and approve or decline the request. Confirmed members can open the group space to post and reload chat messages, submit post-game feedback using `Beginner`, `Intermediate`, or `Advanced` labels instead of numeric player ratings, optionally record who played on each team and the final score, and view group and locality leaderboards. Click any group member to open their public profile, see sport CMR and reliability, and follow or unfollow them. The `My activity` panel shows `pending`, `approved`, or `declined` requests, upcoming approved games, and all groups created by the signed-in organizer. Approved games can be added to Google Calendar. The notification API exposes `GET /v1/me/notifications`, `POST /v1/me/notifications/{notification_id}/read`, and `DELETE /v1/me/notifications/read`. The Notifications panel refreshes the inbox every 30 seconds; `Clear read` permanently removes read notification history but keeps unread alerts and pending join/follow actions. Native browser or mobile push can be added later with Firebase Cloud Messaging without changing the matching contract. Social APIs expose `GET /v1/players/{player_id}`, `POST /v1/players/{player_id}/follow`, `POST /v1/players/{player_id}/unfollow`, `GET /v1/me/following`, and `GET /v1/me/followers`. The API also exposes `GET /v1/me`, `GET /v1/me/requests`, `GET /v1/me/games`, `GET /v1/me/groups`, `GET /v1/sessions/{session_id}/join-requests`, `GET/POST /v1/sessions/{session_id}/chat`, `POST /v1/sessions/{session_id}/feedback`, `GET /v1/sessions/{session_id}/leaderboard`, and `GET /v1/leaderboards/local` for the authenticated user.
-
-After the scheduled end time, CourtMate marks the session `completed`, removes it from discovery and upcoming games, and makes chat read-only while preserving feedback, tracker screenshots, and leaderboard access. Organizers can close a game immediately with `POST /v1/sessions/{session_id}/complete`. Confirmed players can attach a JPG, PNG, or WebP watch screenshot in the game check-in; Gemini extracts only clearly visible calories, duration, distance, steps, and heart rate values, and stores the structured proof in the `activity_proofs` Firestore collection.
-
-## Test the Firestore flow
-
-Firestore starts empty. Sign in, search for a game, and create the first group. Other signed-in users can then discover the group and request to join it.
-
-To populate a realistic demo dataset, authenticate with Application Default Credentials and run the demo-only seed script:
-
-```bash
-COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
-  python -m backend.seed_synthetic_firestore
-```
-
-The script upserts stable `demo-` records for players, sessions, join requests, chat, private feedback, follows, notifications, community memberships, and social posts. It does not touch Firebase Authentication or unrelated user records. Synthetic people have natural display names and no image URL, so CourtMate renders their initials instead of stock avatars.
-
-To replace only synthetic Explore posts and comments while rebuilding the feed:
-
-```bash
-COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
-  python -m backend.seed_synthetic_firestore --replace-social
-```
-
-`--replace-social` is intentionally opt-in and preserves posts and comments created by genuine users.
-
-To fully refresh the demo state for the current product flows, delete only synthetic CourtMate records and reseed all screens in one command. This preserves unrelated player and application data:
-
-```bash
-COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
-  python -m backend.seed_synthetic_firestore --reset-synthetic
-```
-
-The refreshed dataset includes 35 realistic Bengaluru players, 32 games across all six sports and ten localities, pending and waitlisted requests, two awaiting-feedback games, completed games, common chat, notifications, private feedback, connections, sport CMR histories, leaderboard depth, and eight authored Explore posts with comments, reactions, and shares. The session count intentionally leaves headroom below the production Firestore read cap so genuine and seeded games remain visible together. An integrity audit runs after every full seed and fails if roster/request states conflict, a synthetic avatar is present, Explore lacks personal posts, or a sport is missing from discovery and completed history.
-
-For a faster social-only reset that skips unrelated requests, notifications, and tournament writes, add `--social-only` to the replacement command.
-
-```bash
-COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
-COURTMATE_DEMO_RHEA_UID=YOUR_FIREBASE_AUTH_UID \
-  python -m backend.seed_synthetic_firestore
-```
-
-Without `COURTMATE_DEMO_RHEA_UID`, Rhea is created as the isolated `demo-rhea-adhikari` player. It is safe to rerun because synthetic IDs are stable and writes are upserts.
-
-To add only a labelled synthetic CMR trajectory to an existing demo profile, without replacing its name, image, or preferences, run:
-
-```bash
-GOOGLE_CLOUD_PROJECT=mttn-portal \
-  .venv/bin/python -m backend.seed_profile_trajectory \
-  --player-id YOUR_FIREBASE_UID --sport badminton --games 8
-```
-
-This utility is for demo profiles only. It marks the rating source as `synthetic` and creates 3–12 representative historical points for the profile graph.
-
-Existing player documents created on historic CMR scales are converted safely when read. To permanently rewrite those records in Firestore, run the one-time migration with Application Default Credentials:
-
-```bash
-COURTMATE_DATASTORE=firestore GOOGLE_CLOUD_PROJECT=mttn-portal \
-  python -m backend.migrate_cmr_to_10
-```
-
-Start the API and website in separate terminals:
-
-```bash
-# terminal 1
-source .venv/bin/activate
-python -m uvicorn backend.main:app --reload --port 8000
-
-# terminal 2
-npm run dev
-```
-
-Open `http://localhost:3000`, choose a sport, and describe the game you want. With no existing groups, CourtMate returns a group proposal. Click `Create this group`; the new session is written to Firestore. Existing results use `Request to join`, which writes a pending record to the `join_requests` collection.
-
-Useful checks:
-
-```bash
-curl http://localhost:8000/health
-curl -X POST http://localhost:8000/v1/sessions/search \
-  -H 'content-type: application/json' \
-  -d '{"query":"Find a casual intermediate pickleball game near Whitefield this Sunday morning"}'
-
-curl -X POST http://localhost:8000/v1/groups \
-  -H 'content-type: application/json' \
-  -d '{"query":"Find an advanced competitive game near Indiranagar this Sunday evening"}'
-```
-
-## Example requests
-
-```bash
-curl http://localhost:8000/health
-
-curl -X POST http://localhost:8000/v1/sessions/search \
-  -H 'content-type: application/json' \
-  -d '{"query":"Find a casual intermediate pickleball game near Whitefield this Sunday morning"}'
-```
-
-## Tests
-
-```bash
-python3 -m unittest discover -s tests -v
-```
-
-## Free-tier Google Cloud setup
-
-- Create a Google Cloud project and enable Firestore in Native mode.
-- Enable the Firestore API and grant the Cloud Run service account Firestore User access.
-- Deploy one Cloud Run service in `us-central1` with scale-to-zero and a maximum of one instance for the MVP.
-- Keep Firestore reads bounded with `COURTMATE_MAX_SESSION_READS` and `COURTMATE_MAX_PLAYER_READS`.
-- API responses include `X-Response-Time-Ms`; use it with Cloud Run logs to separate auth, Gemini, vector search, and Firestore latency.
-- Read-only feed, search, and activity requests do not synchronously rebuild CMR ratings or re-index embeddings when a scheduled session changes status.
-- Use the Gemini API key server-side only; do not expose it in the frontend.
-- Keep Pub/Sub and BigQuery optional for the MVP; Cloud Storage is required only for profile pictures.
-
-Example Cloud Run deployment profile:
+Use Firestore Native mode, a dedicated runtime service account, and permissions
+limited to the services the selected features need. Example deployment profile:
 
 ```bash
 gcloud run deploy courtmate-api \
+  --project=YOUR_PROJECT_ID \
   --source . \
   --region us-central1 \
-  --min 0 \
-  --max 1 \
+  --min-instances 0 \
+  --max-instances 1 \
   --memory 512Mi \
   --cpu 1 \
-  --set-env-vars COURTMATE_DATASTORE=firestore,GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID,GOOGLE_CLOUD_LOCATION=global,COURTMATE_USE_VERTEX_AI=true,GOOGLE_GENAI_USE_VERTEXAI=true,COURTMATE_VECTOR_SEARCH_ENABLED=true,COURTMATE_VECTOR_DIMENSIONS=768,COURTMATE_PROFILE_BUCKET=profile-pictures,COURTMATE_SIGNING_SERVICE_ACCOUNT=YOUR_CLOUD_RUN_SERVICE_ACCOUNT,GOOGLE_MAPS_API_KEY=YOUR_MAPS_KEY,COURTMATE_MAX_SESSION_READS=100,COURTMATE_MAX_PLAYER_READS=500,COURTMATE_MAX_VECTOR_RESULTS=20
+  --service-account YOUR_RUNTIME_SERVICE_ACCOUNT \
+  --set-env-vars 'COURTMATE_DATASTORE=firestore,COURTMATE_AUTH_REQUIRED=true,GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID,COURTMATE_ALLOWED_ORIGINS=https://YOUR_WEB_DOMAIN,COURTMATE_MAX_SESSION_READS=100,COURTMATE_MAX_PLAYER_READS=500'
 ```
 
-The pasted Google Cloud free-tier limits are usage limits, not a spend cap. Set a billing budget alert in Cloud Billing and monitor Firestore reads/writes and Cloud Run requests.
+Supply optional Gemini and server Maps credentials through Secret Manager rather
+than literal keys in commands. Configure the media bucket and optional Vertex AI
+settings separately. Browser-direct API access also requires Cloud Run invocation
+access to be configured for that architecture; Firebase authentication remains
+enforced by the app on protected routes.
 
-Profile photos upload through the authenticated API to Firebase Storage, which avoids browser Storage CORS and signed-URL setup; the API saves a tokenized download URL on the player. Profile files use `profiles/{firebase_uid}/...` and are limited to JPG, PNG, or WebP files under 5 MB. Game-post photos use `social-posts/{firebase_uid}/...` and are limited to 8 MB. Set `COURTMATE_PROFILE_BUCKET` when using a dedicated bucket, or the API falls back to `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` and then `{GOOGLE_CLOUD_PROJECT}.firebasestorage.app`. Deploy the included `storage.rules` before enabling browser-based Storage features in a deployed environment.
+Scale-to-zero and read limits help control usage but do not guarantee zero cost.
+Monitor billing, request volume, and Firestore operations. The API exposes
+`X-Response-Time-Ms` and request-duration logs for diagnostics.
 
-If the traceback shows `/opt/homebrew/anaconda3/site-packages`, Uvicorn was started outside the project environment. Activate `.venv` first or run it explicitly with `.venv/bin/python -m uvicorn`.
+After deployment, check health, Google sign-in, game creation and join requests,
+map loading, and media uploads using the deployed web and API origins.
+
+</details>
