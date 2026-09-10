@@ -9,11 +9,10 @@ sport-specific skill rating on a 1–10 scale.
 
 ## Demo
 
-[Watch or download the CourtMate demo](docs/CourtMateDemo.mp4) (MP4, approximately 61 MB).
+[Watch the CourtMate demo on Google Drive](https://drive.google.com/file/d/1AeZK6aqI5kf2KhtlqPSF2UzbttQXqYQC/view?usp=drive_link).
 
 Start with the video for a visual overview, then follow the evaluation steps below
-to try the application yourself. If your repository viewer does not play the
-video inline, download it and open it in a video player.
+to try the application yourself.
 
 [Read the CourtMate technical document](docs/CourtMate%20Tech%20Doc.pdf) (PDF).
 
